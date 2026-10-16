@@ -25,6 +25,7 @@
 // ── System State ──
 extern bool pumpAuto, lightAuto, rgbAuto, fanAuto, breatheAuto;
 extern bool relayState, fanState, blueLedState, breatheLedState;
+extern bool windmillOn;
 extern uint8_t rgbR, rgbG, rgbB;
 extern uint8_t breatheBrightness;
 extern int8_t breatheDirection;

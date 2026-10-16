@@ -19,5 +19,7 @@ const unsigned long SENSOR_INTERVAL     = 1000;
 const unsigned long OLED_INTERVAL       = 2000;
 const unsigned long TOUCH_DEBOUNCE      = 300;
 const unsigned long BREATHE_INTERVAL    = 30;
+const unsigned long WINDMILL_INTERVAL   = 30;    // servo sweep step (activity 6)
+const unsigned long FEED_DURATION       = 2000;  // feed gate open time (activity 10)
 
 

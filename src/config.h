@@ -44,6 +44,8 @@ extern const unsigned long SENSOR_INTERVAL;
 extern const unsigned long OLED_INTERVAL;
 extern const unsigned long TOUCH_DEBOUNCE;
 extern const unsigned long BREATHE_INTERVAL;
+extern const unsigned long WINDMILL_INTERVAL;
+extern const unsigned long FEED_DURATION;
 
 // ── Sensor Filtering ──
 constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Moving average window

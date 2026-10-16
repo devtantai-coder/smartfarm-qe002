@@ -87,7 +87,8 @@ duan123/
 │   ├── webserver.h / webserver.cpp  # Web server và giao diện điều khiển từ điện thoại
 │   ├── wifi.h / wifi.cpp            # Quản lý kết nối và kết nối lại WiFi
 │   ├── logger.h / logger.cpp        # Hệ thống log có mốc thời gian, mã lỗi, debug menu
-│   └── control.h / control.cpp      # Logic tự động (bơm, đèn, RGB, chạm, báo động)
+│   ├── demo.h / demo.cpp            # Chế độ trình diễn lần lượt các hoạt động (HĐ2–HĐ12)
+│   └── control.h / control.cpp      # Logic tự động (bơm, đèn, RGB, chạm, báo động, servo)
 ├── Danh mục tổ chức hoạt động trải nghiệm STEM_STEAM.pdf
 └── Tài liệu.pdf
 ```
@@ -105,12 +106,12 @@ Dựa trên **Danh mục tổ chức hoạt động trải nghiệm STEM_STEAM**
 | Hoạt động 3 | Điều khiển LED | Hiệu ứng đèn thở PWM trên đèn LED xanh GPIO 27 | control.cpp (controlBreathe), actuators.cpp (setLedPwm) |
 | Hoạt động 4 | Điều khiển ánh sáng LED | Nút chạm bật/tắt đèn LED xanh (nhấn lần đầu bật, nhấn lần nữa tắt) | control.cpp (controlTouch) |
 | Hoạt động 5 | Báo động động vật | PIR: có người thì bật đèn, người rời đi thì tắt đèn | control.cpp (controlAlerts) |
-| Hoạt động 6 | Cối xoay gió năng lượng mặt trời | Mô hình quay bằng động cơ nối trực tiếp pin mặt trời qua công tắc vật lý (không nối ESP32) nên không có code điều khiển | - |
+| Hoạt động 6 | Cối xoay gió năng lượng mặt trời | Mô hình gốc quay bằng động cơ nối trực tiếp pin mặt trời; code mô phỏng thêm bằng servo GPIO13 (quay qua lại 0–180°) với nút "Cối xay gió" trên web và endpoint `/windmill` | control.cpp (setWindmill/controlWindmill), webserver.cpp (handleWindmill) |
 | Hoạt động 7 | Phát hiện độ ẩm đất, Tưới nước tự động | Cảm biến đất + bơm tự động; dữ liệu in ra Serial mỗi giây ở mức log DEBUG | sensors.cpp, control.cpp (controlPump), logger.cpp (logSensors) |
 | Hoạt động 8 | Phát hiện mực nước | Cảm biến nước + còi kêu liên tục khi nước cạn; bơm luôn bị chặn khi hết nước (cả chế độ thủ công) | sensors.cpp, control.cpp (controlAlerts, controlPump) |
 | Hoạt động 9 | Đèn tăng trưởng thực vật | Khi tối: LED 1&3 đỏ, LED 2&4 xanh dương; khi sáng: tắt | control.cpp (controlRgb), actuators.cpp (setRgbPlant) |
-| Hoạt động 10 | Cho ăn tự động | Theo tài liệu (lesson8), nội dung là tưới nước tự động theo độ ẩm đất — dùng chung logic với Hoạt động 7 | control.cpp (controlPump) |
-| Hoạt động 11 | Màn hình OLED hiển thị thời tiết | OLED hiển thị nhiệt độ, độ ẩm, ánh sáng (kèm đất, nước, trạng thái bơm) | oled.cpp |
+| Hoạt động 10 | Cho ăn tự động | Theo tài liệu (lesson8), nội dung là tưới nước tự động theo độ ẩm đất — dùng chung logic với Hoạt động 7; code mô phỏng thêm cửa cho ăn bằng servo (mở 2 giây rồi đóng) với nút "Cho ăn" và endpoint `/feed` | control.cpp (startFeed/controlFeed), webserver.cpp (handleFeed) |
+| Hoạt động 11 | Màn hình OLED hiển thị thời tiết | OLED hiển thị nhiệt độ, độ ẩm, ánh sáng, độ ẩm đất, mực nước, **trạng thái thời tiết** (Nắng/Âm u/Mưa/Bình thường), IP WiFi và trạng thái demo | oled.cpp, sensors.cpp (weatherStatus) |
 | Hoạt động 12 | Internet điều khiển vạn vật từ xa | WebServer + API + lệnh `/on` `/off` bật/tắt đèn LED từ xa | webserver.cpp (handleLedOn/handleLedOff) |
 | Hoạt động 13 | Sử dụng smart phone để điều khiển nông trại | App ACEBOTT chính hãng cần chương trình riêng; dự án dùng giao diện web tương đương để điều khiển từ điện thoại | webserver.cpp |
 
@@ -214,9 +215,9 @@ Nhấn nút Upload (➡) hoặc **Sketch → Upload**.
 
 ### Bước 2: Truy cập giao diện web
 Trên điện thoại cùng mạng WiFi, mở trình duyệt, gõ địa chỉ IP. Trang web hiển thị:
-- **Cảm biến thực tế:** Nhiệt độ, độ ẩm không khí, ánh sáng, độ ẩm đất, mức nước, chuyển động, chạm.
-- **Điều khiển thiết bị:** Máy bơm, đèn xanh (Bật/Tắt nhanh + nút Bật/Tắt riêng), màu RGB, servo (cửa).
-- **Chế độ tự động:** Bật/tắt tự động cho bơm, đèn, RGB, quạt, đèn thở.
+- **Cảm biến thực tế:** Nhiệt độ, độ ẩm không khí, ánh sáng, độ ẩm đất, mức nước, chuyển động, chạm, thời tiết (suy ra từ ánh sáng + độ ẩm).
+- **Điều khiển thiết bị:** Máy bơm, đèn xanh (Bật/Tắt nhanh + nút Bật/Tắt riêng), màu RGB, servo (cửa), cối xay gió, cho ăn tự động.
+- **Chế độ tự động:** Bật/tắt tự động cho bơm, đèn, RGB, quạt, đèn thở, kèm nút **Trình diễn hoạt động**.
 
 **Các lệnh API điều khiển từ xa (Hoạt động 12):**
 
@@ -224,14 +225,21 @@ Trên điện thoại cùng mạng WiFi, mở trình duyệt, gõ địa chỉ I
 |------|-----------|
 | `http://<IP>/on` | Bật đèn LED xanh từ xa |
 | `http://<IP>/off` | Tắt đèn LED xanh từ xa |
-| `http://<IP>/api` | Xem dữ liệu cảm biến dạng JSON |
+| `http://<IP>/api` | Xem dữ liệu cảm biến dạng JSON (kèm thời tiết, trạng thái demo) |
+| `http://<IP>/windmill?on=true` | Cho servo quay như cối xay gió (HĐ6); `on=false` để dừng |
+| `http://<IP>/feed` | Mở cửa cho ăn tự động 2 giây rồi đóng lại (HĐ10) |
+| `http://<IP>/demo` | Chạy trình diễn lần lượt các hoạt động HĐ2–HĐ12 (~40 giây) |
 | `http://<IP>/toggle?id=led` | Đảo trạng thái đèn LED (pump/fan/breathe tương tự) |
 | `http://<IP>/auto?id=light&on=true` | Bật/tắt chế độ tự động cho đèn (pump/rgb/fan/breathe tương tự) |
+
+### Trình diễn hoạt động (Demo mode)
+
+Bấm nút **Trình diễn hoạt động** trên web (hoặc gõ `http://<IP>/demo`, hoặc bấm phím `9` trên Serial Monitor) để chạy lần lượt hiệu ứng của từng hoạt động: thắp sáng → đèn thở → chạm bật/tắt → PIR → cối xay gió → tưới tự động → còi báo nước → đèn tăng trưởng → cho ăn → OLED. Trong lúc demo, hệ thống tạm dừng điều khiển tự động để tránh xung đột; màn hình OLED và Serial hiển thị tên bước đang chạy.
 
 > **Lưu ý:** Khi bạn nhấn nút **Bật/Tắt** trên web (hoặc dùng cảm biến chạm, hoặc gõ `/on` `/off`), chế độ **tự động** của thiết bị đó sẽ tự tắt để tránh việc hệ thống tự động bật/tắt "giằng co" với lệnh thủ công của bạn. Muốn quay lại tự động, hãy nhấn nút **Tự động** tương ứng.
 
 ### Bước 3: Theo dõi OLED
-Màn hình OLED hiển thị: Nhiệt độ, độ ẩm, ánh sáng, độ ẩm đất, mức nước, trạng thái máy bơm.
+Màn hình OLED hiển thị 8 dòng: tên hệ thống, trạng thái thời tiết, nhiệt độ + độ ẩm, ánh sáng, độ ẩm đất, mức nước + trạng thái bơm, địa chỉ IP WiFi, và trạng thái cối xay gió/cho ăn/demo.
 
 ---
 
@@ -251,6 +259,8 @@ Màn hình OLED hiển thị: Nhiệt độ, độ ẩm, ánh sáng, độ ẩm 
 | Kiểm tra lỗi DHT11 | Giữ giá trị cũ khi đọc lỗi, đếm số lần lỗi để báo mã 501 | `sensors.cpp: readAllSensors()` |
 | Giới hạn giá trị từ web | Chặn servo 0–180°, màu RGB 0–255, ngưỡng trong khoảng hợp lệ | `webserver.cpp` |
 | Watchdog an toàn | Nạp watchdog trong lúc chờ WiFi, tự khởi động lại nếu chương trình treo | `SmartFarm.ino` |
+| Servo dùng chung an toàn | Cối xay gió, cho ăn và điều khiển servo thủ công tự loại trừ nhau, không tranh chấp servo | `control.cpp: setWindmill(), startFeed()`, `webserver.cpp: handleServo()` |
+| Demo không xung đột | Khi chạy trình diễn, toàn bộ điều khiển tự động tạm dừng; kết thúc demo tự tắt mọi thiết bị | `SmartFarm.ino`, `demo.cpp` |
 
 ---
 

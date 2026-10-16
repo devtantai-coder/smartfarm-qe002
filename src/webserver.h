@@ -10,6 +10,9 @@ void handleBreatheLed();
 void handleLedOn();
 void handleLedOff();
 void handleServo();
+void handleWindmill();
+void handleFeed();
+void handleDemo();
 void handleThreshold();
 
 #endif

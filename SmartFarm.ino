@@ -21,6 +21,7 @@
 #include "src/oled.h"
 #include "src/wifi.h"
 #include "src/webserver.h"
+#include "src/demo.h"
 
 // ── Debug state ──
 static char sSerialCmd = 0;
@@ -37,7 +38,8 @@ static void printDebugMenu() {
   Serial.println(F("\n=== SMART FARM DEBUG MENU ==="));
   Serial.println(F(" 1:Sensors  2:Actuators  3:Control"));
   Serial.println(F(" 4:Web      5:WiFi        6:OLED"));
-  Serial.println(F(" 7:Settings 8:Logger      0:Exit"));
+  Serial.println(F(" 7:Settings 8:Logger      9:Demo"));
+  Serial.println(F(" 0:Exit"));
   Serial.print(F("Chon: "));
 }
 
@@ -144,6 +146,9 @@ void setup() {
   server.on("/breathe", handleBreatheLed);
   server.on("/on", handleLedOn);
   server.on("/off", handleLedOff);
+  server.on("/windmill", handleWindmill);
+  server.on("/feed", handleFeed);
+  server.on("/demo", handleDemo);
   server.on("/threshold", handleThreshold);
   server.on("/favicon.ico", handleFavicon);
   server.begin();
@@ -163,11 +168,13 @@ void loop() {
     if (sSerialCmd == '\n' || sSerialCmd == '\r') {
       // skip
     } else if (!sDebugMode) {
-      if (sSerialCmd >= '0' && sSerialCmd <= '8') {
+      if (sSerialCmd == '9') {
+        startDemo();
+      } else if (sSerialCmd >= '0' && sSerialCmd <= '8') {
         sDebugMode = true;
         handleDebugCmd(sSerialCmd);
       } else {
-        Serial.println(F(">> Invalid. Enter 0-8."));
+        Serial.println(F(">> Invalid. Enter 0-9."));
         printDebugMenu();
       }
     } else {
@@ -195,14 +202,20 @@ void loop() {
     lastSensorRead = now;
   }
 
-  // Automation logic
-  controlPump();
-  controlFan();
-  controlLight();
-  controlRgb();
-  controlBreathe();
-  controlTouch();
-  controlAlerts();
+  // Automation logic (paused while the activity demo is running)
+  if (demoRunning()) {
+    updateDemo();
+  } else {
+    controlPump();
+    controlFan();
+    controlLight();
+    controlRgb();
+    controlBreathe();
+    controlTouch();
+    controlAlerts();
+    controlWindmill();
+    controlFeed();
+  }
 
   // Update OLED
   if (now - lastOledUpdate >= OLED_INTERVAL) {

@@ -3,6 +3,9 @@
 #include "config.h"
 #include "settings.h"
 #include "actuators.h"
+#include "sensors.h"
+#include "control.h"
+#include "demo.h"
 #include "webserver.h"
 
 // ── Root page (stored in flash, no per-request heap copy) ──
@@ -77,6 +80,7 @@ header h1 span{color:var(--primary);font-weight:800}
 <div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-sun"></i> Ánh sáng</div><div class="sensor-value" id="valLight">--</div></div>
 <div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-mound"></i> Độ ẩm đất</div><div class="sensor-value" id="valSoil">--</div></div>
 <div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-tint"></i> Mực nước</div><div class="sensor-value" id="valWater">--</div></div>
+<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-cloud-sun"></i> Thời tiết</div><div class="sensor-value" id="valWeather">--</div></div>
 <div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-person-walking"></i> Chuyển động</div><div class="sensor-value" id="valPir">--</div></div>
 <div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-hand-point-up"></i> Cảm ứng</div><div class="sensor-value" id="valTouch">--</div></div>
 </div>
@@ -133,11 +137,19 @@ header h1 span{color:var(--primary);font-weight:800}
 <div class="badge off" id="badgeBreathe"><i class="fa-solid fa-circle"></i> Tắt</div>
 </div>
 <div class="control-group">
-<h3><i class="fa-solid fa-circle-arrow-right"></i> Servo</h3>
+<h3><i class="fa-solid fa-circle-arrow-right"></i> Servo (cửa)</h3>
 <div class="slider-group">
 <label><span id="servoLabel">0</span> độ</label>
 <input type="range" id="servoSlider" min="0" max="180" value="0" onchange="setServo(this.value)">
 </div>
+</div>
+<div class="control-group">
+<h3><i class="fa-solid fa-wheat-awn"></i> Cối xay gió &amp; Cho ăn</h3>
+<div class="btn-row">
+<button class="btn primary" onclick="toggleWindmill()"><i class="fa-solid fa-rotate"></i> Cối xay gió</button>
+<button class="btn secondary" onclick="feedNow()"><i class="fa-solid fa-bowl-food"></i> Cho ăn</button>
+</div>
+<div class="badge off" id="badgeWindmill"><i class="fa-solid fa-circle"></i> Tắt</div>
 </div>
 </div>
 <div class="control-group" style="grid-column:1/-1">
@@ -153,6 +165,7 @@ header h1 span{color:var(--primary);font-weight:800}
 <button class="btn outline" onclick="setAutoMode('fan',false)"><i class="fa-solid fa-hand"></i> Quạt TC</button>
 <button class="btn outline" onclick="setAutoMode('breathe',true)"><i class="fa-solid fa-heart-pulse"></i> Thở TĐ</button>
 <button class="btn outline" onclick="setAutoMode('breathe',false)"><i class="fa-solid fa-hand"></i> Thở TC</button>
+<button class="btn danger" onclick="runDemo()"><i class="fa-solid fa-clapperboard"></i> Trình diễn hoạt động</button>
 </div>
 <div class="status-bar">
 <div class="status-item"><i class="fa-solid fa-toggle-on"></i> Bơm: <span id="statusPumpAuto">Bật</span></div>
@@ -160,6 +173,7 @@ header h1 span{color:var(--primary);font-weight:800}
 <div class="status-item"><i class="fa-solid fa-toggle-on"></i> RGB: <span id="statusRgbAuto">Bật</span></div>
 <div class="status-item"><i class="fa-solid fa-toggle-on"></i> Quạt: <span id="statusFanAuto">Bật</span></div>
 <div class="status-item"><i class="fa-solid fa-toggle-on"></i> Thở: <span id="statusBreatheAuto">Bật</span></div>
+<div class="status-item"><i class="fa-solid fa-clapperboard"></i> Demo: <span id="statusDemo">Tắt</span></div>
 </div>
 </div>
 </section>
@@ -170,28 +184,36 @@ async function fetchData(){
 try{
 const r=await fetch('/api');
 const d=await r.json();
+window.__sf=d;
 document.getElementById('valTemp').textContent=d.temp?.toFixed(1)??'--';
 document.getElementById('valHum').textContent=d.hum?.toFixed(1)??'--';
 document.getElementById('valLight').textContent=d.light??'--';
 document.getElementById('valSoil').textContent=d.soil??'--';
 document.getElementById('valWater').textContent=d.water??'--';
+const wt=['Bình thường','Nắng','Âm u','Mưa'];
+document.getElementById('valWeather').textContent=wt[d.weather]??'--';
 document.getElementById('valPir').textContent=d.pir?'Có':'Không';
 document.getElementById('valTouch').textContent=d.touch?'Chạm':'Không';
 const p=document.getElementById('badgePump');p.textContent=d.relay?'Bật':'Tắt';p.className='badge '+(d.relay?'on':'off');
 const l=document.getElementById('badgeLed');l.textContent=d.led?'Bật':'Tắt';l.className='badge '+(d.led?'on':'off');
 const f=document.getElementById('badgeFan');f.textContent=d.fan?'Bật':'Tắt';f.className='badge '+(d.fan?'on':'off');
 const b=document.getElementById('badgeBreathe');b.textContent=d.breathe?'Bật':'Tắt';b.className='badge '+(d.breathe?'on':'off');
+const w=document.getElementById('badgeWindmill');w.textContent=d.windmill?'Đang quay':(d.feed?'Đang cho ăn':'Tắt');w.className='badge '+(d.windmill||d.feed?'on':'off');
 document.getElementById('statusPumpAuto').textContent=d.pumpAuto?'Bật':'Tắt';
 document.getElementById('statusLightAuto').textContent=d.lightAuto?'Bật':'Tắt';
 document.getElementById('statusRgbAuto').textContent=d.rgbAuto?'Bật':'Tắt';
 document.getElementById('statusFanAuto').textContent=d.fanAuto?'Bật':'Tắt';
 document.getElementById('statusBreatheAuto').textContent=d.breatheAuto?'Bật':'Tắt';
+document.getElementById('statusDemo').textContent=d.demo?('Đang chạy: '+d.demoStep):'Tắt';
 document.getElementById('badgeRgbAuto').textContent=d.rgbAuto?'Tự động: Bật':'Tự động: Tắt';
 document.getElementById('badgeRgbAuto').className='badge '+(d.rgbAuto?'on':'off');
 }catch(e){console.error(e)}
 }
 async function toggleDevice(id){await fetch('/toggle?id='+id);fetchData()}
 async function ledSet(on){await fetch(on?'/on':'/off');fetchData()}
+async function toggleWindmill(){const s=window.__sf||{};await fetch('/windmill?on='+(s.windmill?'false':'true'));fetchData()}
+async function feedNow(){await fetch('/feed');fetchData()}
+async function runDemo(){if(!confirm('Chạy trình diễn lần lượt các hoạt động (khoảng 40 giây)?'))return;await fetch('/demo');fetchData()}
 async function setAutoMode(id,on){await fetch('/auto?id='+id+'&on='+on);fetchData()}
 async function setRgb(r,g,b){await fetch('/rgb?r='+r+'&g='+g+'&b='+b);fetchData()}
 async function setServo(v){document.getElementById('servoLabel').textContent=v;await fetch('/servo?angle='+v)}
@@ -214,19 +236,24 @@ void handleApi() {
   // Use global filtered values — no raw sensor reads here
   // DHT11 needs 1s between reads; reading here would return stale data
   String json;
-  json.reserve(420);
+  json.reserve(520);
   json += "{";
   json += "\"temp\":" + String(gTemp, 1) + ",";
   json += "\"hum\":" + String(gHum, 1) + ",";
   json += "\"light\":" + String(gLight) + ",";
   json += "\"soil\":" + String(gSoil) + ",";
   json += "\"water\":" + String(gWater) + ",";
+  json += "\"weather\":" + String((int)weatherStatus()) + ",";
   json += "\"pir\":" + String(gPir ? "true" : "false") + ",";
   json += "\"touch\":" + String(gTouch ? "true" : "false") + ",";
   json += "\"relay\":" + String(relayState ? "true" : "false") + ",";
   json += "\"fan\":" + String(fanState ? "true" : "false") + ",";
   json += "\"led\":" + String(blueLedState ? "true" : "false") + ",";
   json += "\"breathe\":" + String(breatheLedState ? "true" : "false") + ",";
+  json += "\"windmill\":" + String(windmillOn ? "true" : "false") + ",";
+  json += "\"feed\":" + String(feedRunning() ? "true" : "false") + ",";
+  json += "\"demo\":" + String(demoRunning() ? "true" : "false") + ",";
+  json += "\"demoStep\":\"" + String(demoRunning() ? demoStepName() : "") + "\",";
   json += "\"pumpAuto\":" + String(pumpAuto ? "true" : "false") + ",";
   json += "\"lightAuto\":" + String(lightAuto ? "true" : "false") + ",";
   json += "\"rgbAuto\":" + String(rgbAuto ? "true" : "false") + ",";
@@ -329,9 +356,30 @@ void handleServo() {
   int angle = server.arg("angle").toInt();
   if (angle < 0) angle = 0;
   if (angle > 180) angle = 180;
+  setWindmill(false);   // manual servo control releases the windmill/feed
   servoAngle = angle;
   servo.write(servoAngle);
   server.send(200, "text/plain", "ok");
+}
+
+// ── Windmill (activity 6): continuous servo sweep ──
+void handleWindmill() {
+  bool on = server.arg("on") == "true";
+  setWindmill(on);
+  server.send(200, "text/plain", on ? "windmill on" : "windmill off");
+}
+
+// ── Feed gate (activity 10): open the bowl for FEED_DURATION ──
+void handleFeed() {
+  startFeed();
+  server.send(200, "text/plain", "feeding");
+}
+
+// ── Activity demo (HD2-HD12) ──
+void handleDemo() {
+  MOD_DEBUG(Webserver, "GET /demo");
+  startDemo();
+  server.send(200, "text/plain", "demo started");
 }
 
 // ── Threshold: update control thresholds from web (clamped to valid range) ──

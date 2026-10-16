@@ -140,3 +140,57 @@ void controlAlerts() {
     setBlueLed(false);
   }
 }
+
+// ── Windmill (activity 6): sweep the servo back and forth like rotating blades ──
+static int sWindmillAngle = 0;
+static int8_t sWindmillDir = 1;
+static unsigned long sWindmillUpdate = 0;
+
+void setWindmill(bool on) {
+  if (windmillOn == on) return;
+  windmillOn = on;
+  if (on) {
+    stopFeed();             // shared servo
+  } else {
+    servo.write(0);
+  }
+  LOG_INFO(on ? "Windmill: ON" : "Windmill: OFF");
+}
+
+void controlWindmill() {
+  if (!windmillOn) return;
+  unsigned long now = millis();
+  if (now - sWindmillUpdate < WINDMILL_INTERVAL) return;
+  sWindmillUpdate = now;
+  sWindmillAngle += sWindmillDir * 6;
+  if (sWindmillAngle >= 180) { sWindmillAngle = 180; sWindmillDir = -1; }
+  if (sWindmillAngle <= 0)   { sWindmillAngle = 0;   sWindmillDir = 1;  }
+  servo.write(sWindmillAngle);
+}
+
+// ── Feed gate (activity 10): servo opens the bowl for FEED_DURATION then closes ──
+static bool sFeedActive = false;
+static unsigned long sFeedStart = 0;
+
+void startFeed() {
+  setWindmill(false);       // shared servo
+  sFeedActive = true;
+  sFeedStart = millis();
+  servo.write(90);          // gate open
+  LOG_INFO("Feed: gate open");
+}
+
+void stopFeed() {
+  sFeedActive = false;
+}
+
+void controlFeed() {
+  if (!sFeedActive) return;
+  if (millis() - sFeedStart >= FEED_DURATION) {
+    sFeedActive = false;
+    servo.write(0);         // gate closed
+    LOG_INFO("Feed: gate closed");
+  }
+}
+
+bool feedRunning() { return sFeedActive; }

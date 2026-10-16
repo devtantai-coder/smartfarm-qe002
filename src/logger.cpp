@@ -106,13 +106,14 @@ void debugControl() {
   Serial.printf("Soil: %.0f-%.0f  Water:%.0f\n", soilThresholdLow, soilThresholdHigh, waterThresholdLow);
   Serial.printf("Light:%d  Temp:%.0f-%.0f\n", lightThreshold, tempThresholdLow, tempThresholdHigh);
   Serial.printf("Auto: P:%d L:%d R:%d F:%d B:%d\n", pumpAuto, lightAuto, rgbAuto, fanAuto, breatheAuto);
+  Serial.printf("Windmill:%d Servo:%d\n", windmillOn, servoAngle);
 }
 
 // ── Debug: Webserver ──
 void debugWebserver() {
   Serial.println(F("\n--- WEBSERVER ---"));
   Serial.printf("WiFi:%s  IP:%s\n", WiFi.status()==WL_CONNECTED?"OK":"FAIL", WiFi.localIP().toString().c_str());
-  Serial.println(F("Routes: / /api /toggle /auto /rgb /breathe /on /off /servo /threshold"));
+  Serial.println(F("Routes: / /api /toggle /auto /rgb /breathe /on /off /windmill /feed /demo /servo /threshold"));
 }
 
 // ── Debug: WiFi ──

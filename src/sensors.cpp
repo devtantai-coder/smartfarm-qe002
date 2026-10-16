@@ -81,3 +81,13 @@ void readAllSensors() {
   gPir   = readPIR();
   gTouch = readTouch();
 }
+
+// ── Simple weather guess from light + humidity (activity 11) ──
+Weather weatherStatus() {
+  bool bright = gLight > (lightThreshold + 50);
+  bool dark = gLight < (lightThreshold - 50);
+  bool humid = gHum > 80.0f;
+  if (bright) return humid ? WEATHER_CLOUDY : WEATHER_SUNNY;
+  if (dark)   return humid ? WEATHER_RAIN : WEATHER_CLOUDY;
+  return WEATHER_NORMAL;
+}
