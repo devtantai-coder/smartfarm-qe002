@@ -13,6 +13,7 @@ float tempThresholdHigh = 30.0f;
 float tempThresholdLow  = 25.0f;
 
 // ── Timing ──
+const unsigned long WIFI_CONNECT_TIMEOUT = 30000;
 const unsigned long WIFI_CHECK_INTERVAL = 10000;
 const unsigned long SENSOR_INTERVAL     = 1000;
 const unsigned long OLED_INTERVAL       = 2000;
@@ -20,5 +21,4 @@ const unsigned long BUZZER_INTERVAL     = 3000;
 const unsigned long TOUCH_DEBOUNCE      = 300;
 const unsigned long BREATHE_INTERVAL    = 30;
 
-// ── Filtering ──
-const uint8_t SENSOR_FILTER_SIZE = 5;
+

@@ -1,53 +1,69 @@
 #include "logger.h"
 #include "globals.h"
+#include "sensors.h"
+#include "actuators.h"
 
 // ── Module debug flags ──
 bool dbgSensors = false, dbgActuators = false, dbgControl = false;
 bool dbgWebserver = false, dbgWifi = false, dbgOled = false;
 bool dbgSettings = false, dbgLogger = false, dbgRgb = false;
 
-static LogLevel sMinLevel = LOG_INFO;
-static bool sInit = false;
+// Minimum level printed (LOG_DEBUG shows everything)
+LogLevel gMinLogLevel = LOG_INFO;
+
+static bool sLogInit = false;
 
 static const char* levelTag(LogLevel l) {
   switch (l) {
-    case LOG_DEBUG: return "DBG";
-    case LOG_INFO:  return "INF";
-    case LOG_WARNING: return "WRN";
-    case LOG_ERROR: return "ERR";
-    case LOG_FATAL: return "FTL";
-    default: return "???";
+    case LOG_DEBUG:   return "DEBUG";
+    case LOG_INFO:    return "INFO ";
+    case LOG_WARNING: return "WARN ";
+    case LOG_ERROR:   return "ERROR";
+    case LOG_FATAL:   return "FATAL";
+    default:          return "?????";
   }
 }
 
-void logMessage(LogLevel level, const char* func, int line, const char* msg) {
-  if (level < sMinLevel) return;
-  if (!sInit) {
-    Serial.println(F("\n=== SMART FARM LOGGER ==="));
-    sInit = true;
-  }
-  Serial.print('[');
-  Serial.print(levelTag(level));
-  Serial.print(F("] "));
+static void ensureInit() {
+  if (sLogInit) return;
+  sLogInit = true;
+  Serial.println(F("\n=== SMART FARM LOGGER ==="));
+}
+
+// [HH:MM:SS.mmm] [LEVEL] func:line
+static void printHeader(LogLevel level, const char* func, int line) {
+  unsigned long ms = millis();
+  unsigned long sec = ms / 1000;
+  char stamp[40];
+  snprintf(stamp, sizeof(stamp), "[%02lu:%02lu:%02lu.%03lu] [%s] ",
+           (sec / 3600) % 100, (sec / 60) % 60, sec % 60, ms % 1000,
+           levelTag(level));
+  Serial.print(stamp);
   Serial.print(func);
   Serial.print(':');
   Serial.print(line);
-  Serial.print(F(" > "));
+}
+
+void logMessage(LogLevel level, const char* func, int line, const char* msg) {
+  if (level < gMinLogLevel) return;
+  ensureInit();
+  printHeader(level, func, line);
+  Serial.print(F(" -> "));
   Serial.println(msg);
 }
 
 void logError(LogLevel level, const char* func, int line, int code, const char* msg) {
-  logMessage(level, func, line, msg);
-  Serial.print(F("   [CODE:"));
-  Serial.print(code);
-  Serial.println(']');
+  if (level < gMinLogLevel) return;  // fixes code being printed below min level
+  ensureInit();
+  printHeader(level, func, line);
+  Serial.printf(" [MA LOI: %d] -> %s\n", code, msg);
 }
 
 // ── Debug: Sensors ──
 void debugSensors() {
   Serial.println(F("\n--- SENSORS ---"));
   readAllSensors();
-  Serial.printf("T:%.1f°C  H:%.1f%%\n", gTemp, gHum);
+  Serial.printf("T:%.1fC  H:%.1f%%\n", gTemp, gHum);
   Serial.printf("Light:%d  Soil:%d  Water:%d\n", gLight, gSoil, gWater);
   Serial.printf("PIR:%d  Touch:%d  Health:%d\n", gPir, gTouch, sensorHealthy);
 }
@@ -87,7 +103,7 @@ void debugControl() {
 void debugWebserver() {
   Serial.println(F("\n--- WEBSERVER ---"));
   Serial.printf("WiFi:%s  IP:%s\n", WiFi.status()==WL_CONNECTED?"OK":"FAIL", WiFi.localIP().toString().c_str());
-  Serial.println(F("Routes: / /api /toggle /auto /rgb /servo /breathe"));
+  Serial.println(F("Routes: / /api /toggle /auto /rgb /servo /breathe /threshold"));
 }
 
 // ── Debug: WiFi ──
@@ -112,7 +128,6 @@ void debugOled() {
   display.setCursor(0,16); display.print(F("Line 1"));
   display.setCursor(0,32); display.print(F("Line 2"));
   display.setCursor(0,48); display.print(F("Line 3"));
-  display.setCursor(0,60); display.print(F("Done"));
   display.display();
   Serial.println(F("OLED test pattern sent."));
 }

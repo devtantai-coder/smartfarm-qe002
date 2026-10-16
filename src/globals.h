@@ -1,12 +1,25 @@
 #ifndef GLOBALS_H
 #define GLOBALS_H
 
+#include <Arduino.h>
+#include <WiFi.h>
+#include <Wire.h>
 #include <DHT.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_NeoPixel.h>
 #include <ESP32Servo.h>
 #include <WebServer.h>
 #include <Preferences.h>
+
+// ── ESP32 core version compatibility (2.x and 3.x) ──
+#if __has_include(<esp_arduino_version.h>)
+#include <esp_arduino_version.h>
+#endif
+#ifndef ESP_ARDUINO_VERSION_MAJOR
+#define ESP_ARDUINO_VERSION_MAJOR 2
+#endif
+
+#include "config.h"
 #include "logger.h"
 
 // ── System State ──

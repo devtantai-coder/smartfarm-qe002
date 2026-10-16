@@ -5,6 +5,9 @@
 
 enum LogLevel { LOG_DEBUG, LOG_INFO, LOG_WARNING, LOG_ERROR, LOG_FATAL };
 
+// Minimum level printed on Serial (change gMinLogLevel in logger.cpp)
+extern LogLevel gMinLogLevel;
+
 // Per-module debug flags
 extern bool dbgSensors, dbgActuators, dbgControl;
 extern bool dbgWebserver, dbgWifi, dbgOled;

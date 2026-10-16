@@ -1,6 +1,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <Arduino.h>
+
 // ── WiFi ──
 extern const char *ssid;
 extern const char *password;
@@ -16,7 +18,7 @@ extern const char *password;
 #define FAN_PIN          14
 #define BLUE_LED_PIN     27
 #define BREATHE_LED_PIN  12
-#define BREATHE_LED_CHANNEL 0
+#define BREATHE_LED_CHANNEL 15   // high-speed LEDC channel (core 2.x); avoids servo timer conflict
 #define TOUCH_PIN        39
 #define PIR_PIN          33
 #define LDR_PIN          34
@@ -37,6 +39,7 @@ extern float tempThresholdHigh;
 extern float tempThresholdLow;
 
 // ── Timing (ms) ──
+extern const unsigned long WIFI_CONNECT_TIMEOUT;
 extern const unsigned long WIFI_CHECK_INTERVAL;
 extern const unsigned long SENSOR_INTERVAL;
 extern const unsigned long OLED_INTERVAL;
@@ -45,6 +48,6 @@ extern const unsigned long TOUCH_DEBOUNCE;
 extern const unsigned long BREATHE_INTERVAL;
 
 // ── Sensor Filtering ──
-extern const uint8_t SENSOR_FILTER_SIZE;  // Moving average window
+constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Moving average window
 
 #endif

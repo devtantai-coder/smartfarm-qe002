@@ -1,7 +1,8 @@
 /*
  * SmartFarm.ino - QE002 ACEBOTT IoT Smart Farm
  * Entry point: setup() + loop()
- * Optimized: non-blocking, watchdog, modular debug
+ * Non-blocking, watchdog-protected, modular debug
+ * Compatible with esp32 Arduino core 2.x and 3.x
  */
 
 #include <Arduino.h>
@@ -25,8 +26,12 @@
 static char sSerialCmd = 0;
 static bool sDebugMode = false;
 
-// ── Watchdog timeout (seconds) ──
-static constexpr uint32_t WDT_TIMEOUT = 30;
+// ── Watchdog timeout (ms) ──
+static constexpr uint32_t WDT_TIMEOUT_MS = 30000;
+
+static void handleFavicon() {
+  server.send(204, "text/plain", "");
+}
 
 static void printDebugMenu() {
   Serial.println(F("\n=== SMART FARM DEBUG MENU ==="));
@@ -56,8 +61,17 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // Watchdog
-  esp_task_wdt_init(WDT_TIMEOUT, true);
+  // Watchdog (core 2.x / 3.x compatible init)
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  esp_task_wdt_config_t wdtCfg = {};
+  wdtCfg.timeout_ms = WDT_TIMEOUT_MS;
+  wdtCfg.idle_core_mask = 0;
+  wdtCfg.trigger_panic = true;
+  esp_task_wdt_deinit();
+  esp_task_wdt_init(&wdtCfg);
+#else
+  esp_task_wdt_init(WDT_TIMEOUT_MS / 1000, true);
+#endif
   esp_task_wdt_add(NULL);
 
   LOG_INFO("Smart Farm starting...");
@@ -75,10 +89,14 @@ void setup() {
   digitalWrite(BLUE_LED_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
 
-  // PWM for breathe LED
+  // PWM for breathe LED (core 2.x / 3.x compatible init)
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(BREATHE_LED_PIN, 1000, 8);
+#else
   ledcSetup(BREATHE_LED_CHANNEL, 1000, 8);
   ledcAttachPin(BREATHE_LED_PIN, BREATHE_LED_CHANNEL);
-  ledcWrite(BREATHE_LED_CHANNEL, 0);
+#endif
+  setBreathePwm(0);
 
   // Peripherals
   dht.begin();
@@ -98,22 +116,25 @@ void setup() {
   // Load settings from flash
   loadSettings();
   LOG_INFO("Settings loaded");
+  if (breatheAuto) setBreatheLed(true);
 
-  // WiFi
+  // WiFi: short blocking wait (watchdog is fed), then manageWiFi() retries
+  WiFi.setSleep(false);
   WiFi.begin(ssid, password);
   LOG_INFO("Connecting WiFi...");
   unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT) {
+    esp_task_wdt_reset();
+    delay(250);
     Serial.print('.');
-    if (millis() - start > 30000) {
-      LOG_ERROR_CODE(102, "WiFi timeout");
-      break;
-    }
   }
   Serial.println();
-  Serial.print(F("IP: "));
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print(F("IP: "));
+    Serial.println(WiFi.localIP());
+  } else {
+    LOG_ERROR_CODE(102, "WiFi timeout - retrying in background");
+  }
 
   // Web server routes
   server.on("/", handleRoot);
@@ -124,6 +145,7 @@ void setup() {
   server.on("/servo", handleServo);
   server.on("/breathe", handleBreatheLed);
   server.on("/threshold", handleThreshold);
+  server.on("/favicon.ico", handleFavicon);
   server.begin();
 
   LOG_INFO("System ready");
@@ -162,7 +184,11 @@ void loop() {
 
   unsigned long now = millis();
 
-  // Read sensors periodically
+  // Fast digital inputs: touch/PIR must react faster than the 1s sensor cycle
+  gTouch = readTouch();
+  gPir = readPIR();
+
+  // Read sensors periodically (DHT11 needs >= 1s between reads)
   if (now - lastSensorRead >= SENSOR_INTERVAL) {
     readAllSensors();
     lastSensorRead = now;

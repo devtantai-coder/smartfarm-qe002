@@ -5,6 +5,7 @@ void setRelay(bool on);
 void setFan(bool on);
 void setBlueLed(bool on);
 void setBreatheLed(bool on);
+void setBreathePwm(uint8_t value);
 void setRgb(uint8_t r, uint8_t g, uint8_t b);
 void setRgbAuto(bool on);
 void setPumpAuto(bool on);

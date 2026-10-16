@@ -5,11 +5,8 @@
 #include "actuators.h"
 #include "webserver.h"
 
-// ── Root: HTML page ──
-void handleRoot() {
-  MOD_DEBUG(Webserver, "GET /");
-
-  String html = R"rawliteral(
+// ── Root page (stored in flash, no per-request heap copy) ──
+static const char ROOT_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -73,98 +70,98 @@ header h1 span{color:var(--primary);font-weight:800}
 </header>
 
 <section class="card">
-<h2><i class="fa-solid fa-chart-mixed"></i> Cam bien</h2>
+<h2><i class="fa-solid fa-chart-mixed"></i> Cảm biến</h2>
 <div id="sensorData">
-<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-temperature-half"></i> Nhiet do</div><div class="sensor-value" id="valTemp">--</div><div class="sensor-unit">&deg;C</div></div>
-<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-water"></i> Do am KK</div><div class="sensor-value" id="valHum">--</div><div class="sensor-unit">%</div></div>
-<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-sun"></i> Anh sang</div><div class="sensor-value" id="valLight">--</div></div>
-<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-mound"></i> Do am dat</div><div class="sensor-value" id="valSoil">--</div></div>
-<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-tint"></i> Muc nuoc</div><div class="sensor-value" id="valWater">--</div></div>
-<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-person-walking"></i> Chuyen dong</div><div class="sensor-value" id="valPir">--</div></div>
-<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-hand-point-up"></i> Cam ung</div><div class="sensor-value" id="valTouch">--</div></div>
+<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-temperature-half"></i> Nhiệt độ</div><div class="sensor-value" id="valTemp">--</div><div class="sensor-unit">&deg;C</div></div>
+<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-water"></i> Độ ẩm KK</div><div class="sensor-value" id="valHum">--</div><div class="sensor-unit">%</div></div>
+<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-sun"></i> Ánh sáng</div><div class="sensor-value" id="valLight">--</div></div>
+<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-mound"></i> Độ ẩm đất</div><div class="sensor-value" id="valSoil">--</div></div>
+<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-tint"></i> Mực nước</div><div class="sensor-value" id="valWater">--</div></div>
+<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-person-walking"></i> Chuyển động</div><div class="sensor-value" id="valPir">--</div></div>
+<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-hand-point-up"></i> Cảm ứng</div><div class="sensor-value" id="valTouch">--</div></div>
 </div>
 </section>
 
 <section class="card">
-<h2><i class="fa-solid fa-sliders"></i> Dieu khien</h2>
+<h2><i class="fa-solid fa-sliders"></i> Điều khiển</h2>
 <div class="controls">
 <div class="control-group">
-<h3><i class="fa-solid fa-water"></i> May bom</h3>
+<h3><i class="fa-solid fa-water"></i> Máy bơm</h3>
 <div class="btn-row">
-<button class="btn primary" onclick="toggleDevice('pump')"><i class="fa-solid fa-power-off"></i> Bat/Tat</button>
-<button class="btn secondary" onclick="setAutoMode('pump',true)">Tu dong</button>
-<button class="btn outline" onclick="setAutoMode('pump',false)">Thu cong</button>
+<button class="btn primary" onclick="toggleDevice('pump')"><i class="fa-solid fa-power-off"></i> Bật/Tắt</button>
+<button class="btn secondary" onclick="setAutoMode('pump',true)">Tự động</button>
+<button class="btn outline" onclick="setAutoMode('pump',false)">Thủ công</button>
 </div>
-<div class="badge off" id="badgePump"><i class="fa-solid fa-circle"></i> Tat</div>
+<div class="badge off" id="badgePump"><i class="fa-solid fa-circle"></i> Tắt</div>
 </div>
 <div class="control-group">
-<h3><i class="fa-solid fa-lightbulb"></i> Den xanh</h3>
+<h3><i class="fa-solid fa-lightbulb"></i> Đèn xanh</h3>
 <div class="btn-row">
-<button class="btn primary" onclick="toggleDevice('led')"><i class="fa-solid fa-power-off"></i> Bat/Tat</button>
+<button class="btn primary" onclick="toggleDevice('led')"><i class="fa-solid fa-power-off"></i> Bật/Tắt</button>
 </div>
-<div class="badge off" id="badgeLed"><i class="fa-solid fa-circle"></i> Tat</div>
+<div class="badge off" id="badgeLed"><i class="fa-solid fa-circle"></i> Tắt</div>
 </div>
 <div class="control-group">
-<h3><i class="fa-solid fa-fan"></i> Quat</h3>
+<h3><i class="fa-solid fa-fan"></i> Quạt</h3>
 <div class="btn-row">
-<button class="btn primary" onclick="toggleDevice('fan')"><i class="fa-solid fa-power-off"></i> Bat/Tat</button>
-<button class="btn secondary" onclick="setAutoMode('fan',true)">Tu dong</button>
-<button class="btn outline" onclick="setAutoMode('fan',false)">Thu cong</button>
+<button class="btn primary" onclick="toggleDevice('fan')"><i class="fa-solid fa-power-off"></i> Bật/Tắt</button>
+<button class="btn secondary" onclick="setAutoMode('fan',true)">Tự động</button>
+<button class="btn outline" onclick="setAutoMode('fan',false)">Thủ công</button>
 </div>
-<div class="badge off" id="badgeFan"><i class="fa-solid fa-circle"></i> Tat</div>
+<div class="badge off" id="badgeFan"><i class="fa-solid fa-circle"></i> Tắt</div>
 </div>
 <div class="control-group">
 <h3><i class="fa-solid fa-palette"></i> RGB</h3>
 <div class="btn-row">
-<button class="btn danger" onclick="setRgb(255,0,0)"><i class="fa-solid fa-circle"></i> Do</button>
-<button class="btn primary" onclick="setRgb(0,255,0)"><i class="fa-solid fa-circle"></i> Xanh la</button>
-<button class="btn secondary" onclick="setRgb(0,0,255)"><i class="fa-solid fa-circle"></i> Xanh duong</button>
-<button class="btn outline" onclick="setRgb(255,255,255)"><i class="fa-solid fa-circle"></i> Trang</button>
-<button class="btn danger" onclick="setRgb(0,0,0)"><i class="fa-solid fa-circle-stop"></i> Tat</button>
+<button class="btn danger" onclick="setRgb(255,0,0)"><i class="fa-solid fa-circle"></i> Đỏ</button>
+<button class="btn primary" onclick="setRgb(0,255,0)"><i class="fa-solid fa-circle"></i> Xanh lá</button>
+<button class="btn secondary" onclick="setRgb(0,0,255)"><i class="fa-solid fa-circle"></i> Xanh dương</button>
+<button class="btn outline" onclick="setRgb(255,255,255)"><i class="fa-solid fa-circle"></i> Trắng</button>
+<button class="btn danger" onclick="setRgb(0,0,0)"><i class="fa-solid fa-circle-stop"></i> Tắt</button>
 </div>
-<div class="badge on" id="badgeRgbAuto"><i class="fa-solid fa-wand-magic-sparkles"></i> Tu dong: Bat</div>
+<div class="badge on" id="badgeRgbAuto"><i class="fa-solid fa-wand-magic-sparkles"></i> Tự động: Bật</div>
 </div>
 <div class="control-group">
-<h3><i class="fa-solid fa-heart-pulse"></i> Den thoi</h3>
+<h3><i class="fa-solid fa-heart-pulse"></i> Đèn thở</h3>
 <div class="btn-row">
-<button class="btn primary" onclick="toggleDevice('breathe')"><i class="fa-solid fa-power-off"></i> Bat/Tat</button>
-<button class="btn secondary" onclick="setAutoMode('breathe',true)">Tu dong</button>
-<button class="btn outline" onclick="setAutoMode('breathe',false)">Thu cong</button>
+<button class="btn primary" onclick="toggleDevice('breathe')"><i class="fa-solid fa-power-off"></i> Bật/Tắt</button>
+<button class="btn secondary" onclick="setAutoMode('breathe',true)">Tự động</button>
+<button class="btn outline" onclick="setAutoMode('breathe',false)">Thủ công</button>
 </div>
-<div class="badge off" id="badgeBreathe"><i class="fa-solid fa-circle"></i> Tat</div>
+<div class="badge off" id="badgeBreathe"><i class="fa-solid fa-circle"></i> Tắt</div>
 </div>
 <div class="control-group">
 <h3><i class="fa-solid fa-circle-arrow-right"></i> Servo</h3>
 <div class="slider-group">
-<label><span id="servoLabel">0</span> do</label>
+<label><span id="servoLabel">0</span> độ</label>
 <input type="range" id="servoSlider" min="0" max="180" value="0" onchange="setServo(this.value)">
 </div>
 </div>
 </div>
 <div class="control-group" style="grid-column:1/-1">
-<h3><i class="fa-solid fa-robot"></i> Che do tu dong</h3>
+<h3><i class="fa-solid fa-robot"></i> Chế độ tự động</h3>
 <div class="btn-row">
-<button class="btn outline" onclick="setAutoMode('pump',true)"><i class="fa-solid fa-tint"></i> Bom TD</button>
-<button class="btn outline" onclick="setAutoMode('pump',false)"><i class="fa-solid fa-hand"></i> Bom TC</button>
-<button class="btn outline" onclick="setAutoMode('light',true)"><i class="fa-solid fa-lightbulb"></i> Den TD</button>
-<button class="btn outline" onclick="setAutoMode('light',false)"><i class="fa-solid fa-hand"></i> Den TC</button>
-<button class="btn outline" onclick="setAutoMode('rgb',true)"><i class="fa-solid fa-palette"></i> RGB TD</button>
+<button class="btn outline" onclick="setAutoMode('pump',true)"><i class="fa-solid fa-tint"></i> Bơm TĐ</button>
+<button class="btn outline" onclick="setAutoMode('pump',false)"><i class="fa-solid fa-hand"></i> Bơm TC</button>
+<button class="btn outline" onclick="setAutoMode('light',true)"><i class="fa-solid fa-lightbulb"></i> Đèn TĐ</button>
+<button class="btn outline" onclick="setAutoMode('light',false)"><i class="fa-solid fa-hand"></i> Đèn TC</button>
+<button class="btn outline" onclick="setAutoMode('rgb',true)"><i class="fa-solid fa-palette"></i> RGB TĐ</button>
 <button class="btn outline" onclick="setAutoMode('rgb',false)"><i class="fa-solid fa-hand"></i> RGB TC</button>
-<button class="btn outline" onclick="setAutoMode('fan',true)"><i class="fa-solid fa-fan"></i> Quat TD</button>
-<button class="btn outline" onclick="setAutoMode('fan',false)"><i class="fa-solid fa-hand"></i> Quat TC</button>
-<button class="btn outline" onclick="setAutoMode('breathe',true)"><i class="fa-solid fa-heart-pulse"></i> Thoi TD</button>
-<button class="btn outline" onclick="setAutoMode('breathe',false)"><i class="fa-solid fa-hand"></i> Thoi TC</button>
+<button class="btn outline" onclick="setAutoMode('fan',true)"><i class="fa-solid fa-fan"></i> Quạt TĐ</button>
+<button class="btn outline" onclick="setAutoMode('fan',false)"><i class="fa-solid fa-hand"></i> Quạt TC</button>
+<button class="btn outline" onclick="setAutoMode('breathe',true)"><i class="fa-solid fa-heart-pulse"></i> Thở TĐ</button>
+<button class="btn outline" onclick="setAutoMode('breathe',false)"><i class="fa-solid fa-hand"></i> Thở TC</button>
 </div>
 <div class="status-bar">
-<div class="status-item"><i class="fa-solid fa-toggle-on"></i> Bom: <span id="statusPumpAuto">Bat</span></div>
-<div class="status-item"><i class="fa-solid fa-toggle-on"></i> Den: <span id="statusLightAuto">Bat</span></div>
-<div class="status-item"><i class="fa-solid fa-toggle-on"></i> RGB: <span id="statusRgbAuto">Bat</span></div>
-<div class="status-item"><i class="fa-solid fa-toggle-on"></i> Quat: <span id="statusFanAuto">Bat</span></div>
-<div class="status-item"><i class="fa-solid fa-toggle-on"></i> Thoi: <span id="statusBreatheAuto">Bat</span></div>
+<div class="status-item"><i class="fa-solid fa-toggle-on"></i> Bơm: <span id="statusPumpAuto">Bật</span></div>
+<div class="status-item"><i class="fa-solid fa-toggle-on"></i> Đèn: <span id="statusLightAuto">Bật</span></div>
+<div class="status-item"><i class="fa-solid fa-toggle-on"></i> RGB: <span id="statusRgbAuto">Bật</span></div>
+<div class="status-item"><i class="fa-solid fa-toggle-on"></i> Quạt: <span id="statusFanAuto">Bật</span></div>
+<div class="status-item"><i class="fa-solid fa-toggle-on"></i> Thở: <span id="statusBreatheAuto">Bật</span></div>
 </div>
 </div>
 </section>
-<div class="refresh">Cap nhat moi 2 giay &bull; Smart Farm QE002 ACEBOTT</div>
+<div class="refresh">Cập nhật mỗi 2 giây &bull; Smart Farm QE002 ACEBOTT</div>
 </div>
 <script>
 async function fetchData(){
@@ -176,18 +173,18 @@ document.getElementById('valHum').textContent=d.hum?.toFixed(1)??'--';
 document.getElementById('valLight').textContent=d.light??'--';
 document.getElementById('valSoil').textContent=d.soil??'--';
 document.getElementById('valWater').textContent=d.water??'--';
-document.getElementById('valPir').textContent=d.pir?'Co':'Khong';
-document.getElementById('valTouch').textContent=d.touch?'Cham':'Khong';
-const p=document.getElementById('badgePump');p.textContent=d.relay?'Bat':'Tat';p.className='badge '+(d.relay?'on':'off');
-const l=document.getElementById('badgeLed');l.textContent=d.led?'Bat':'Tat';l.className='badge '+(d.led?'on':'off');
-const f=document.getElementById('badgeFan');f.textContent=d.fan?'Bat':'Tat';f.className='badge '+(d.fan?'on':'off');
-const b=document.getElementById('badgeBreathe');b.textContent=d.breathe?'Bat':'Tat';b.className='badge '+(d.breathe?'on':'off');
-document.getElementById('statusPumpAuto').textContent=d.pumpAuto?'Bat':'Tat';
-document.getElementById('statusLightAuto').textContent=d.lightAuto?'Bat':'Tat';
-document.getElementById('statusRgbAuto').textContent=d.rgbAuto?'Bat':'Tat';
-document.getElementById('statusFanAuto').textContent=d.fanAuto?'Bat':'Tat';
-document.getElementById('statusBreatheAuto').textContent=d.breatheAuto?'Bat':'Tat';
-document.getElementById('badgeRgbAuto').textContent=d.rgbAuto?'Tu dong: Bat':'Tu dong: Tat';
+document.getElementById('valPir').textContent=d.pir?'Có':'Không';
+document.getElementById('valTouch').textContent=d.touch?'Chạm':'Không';
+const p=document.getElementById('badgePump');p.textContent=d.relay?'Bật':'Tắt';p.className='badge '+(d.relay?'on':'off');
+const l=document.getElementById('badgeLed');l.textContent=d.led?'Bật':'Tắt';l.className='badge '+(d.led?'on':'off');
+const f=document.getElementById('badgeFan');f.textContent=d.fan?'Bật':'Tắt';f.className='badge '+(d.fan?'on':'off');
+const b=document.getElementById('badgeBreathe');b.textContent=d.breathe?'Bật':'Tắt';b.className='badge '+(d.breathe?'on':'off');
+document.getElementById('statusPumpAuto').textContent=d.pumpAuto?'Bật':'Tắt';
+document.getElementById('statusLightAuto').textContent=d.lightAuto?'Bật':'Tắt';
+document.getElementById('statusRgbAuto').textContent=d.rgbAuto?'Bật':'Tắt';
+document.getElementById('statusFanAuto').textContent=d.fanAuto?'Bật':'Tắt';
+document.getElementById('statusBreatheAuto').textContent=d.breatheAuto?'Bật':'Tắt';
+document.getElementById('badgeRgbAuto').textContent=d.rgbAuto?'Tự động: Bật':'Tự động: Tắt';
 document.getElementById('badgeRgbAuto').className='badge '+(d.rgbAuto?'on':'off');
 }catch(e){console.error(e)}
 }
@@ -202,7 +199,9 @@ fetchData();
 </html>
 )rawliteral";
 
-  server.send(200, "text/html", html);
+void handleRoot() {
+  MOD_DEBUG(Webserver, "GET /");
+  server.send_P(200, "text/html", ROOT_HTML);
 }
 
 // ── API: JSON sensor data (uses filtered globals, no raw sensor reads) ──
@@ -211,7 +210,9 @@ void handleApi() {
 
   // Use global filtered values — no raw sensor reads here
   // DHT11 needs 1s between reads; reading here would return stale data
-  String json = "{";
+  String json;
+  json.reserve(420);
+  json += "{";
   json += "\"temp\":" + String(gTemp, 1) + ",";
   json += "\"hum\":" + String(gHum, 1) + ",";
   json += "\"light\":" + String(gLight) + ",";
@@ -233,13 +234,33 @@ void handleApi() {
   server.send(200, "application/json", json);
 }
 
-// ── Toggle device ──
+static uint8_t clampByte(long v) {
+  if (v < 0) return 0;
+  if (v > 255) return 255;
+  return (uint8_t)v;
+}
+
+// ── Toggle device (manual action disables the matching auto mode) ──
 void handleToggle() {
   String id = server.arg("id");
-  if (id == "pump") setRelay(!relayState);
-  else if (id == "led") setBlueLed(!blueLedState);
-  else if (id == "fan") setFan(!fanState);
-  else if (id == "breathe") setBreatheLed(!breatheLedState);
+  if (id == "pump") {
+    setPumpAuto(false);
+    setRelay(!relayState);
+  } else if (id == "led") {
+    setLightAuto(false);
+    setBlueLed(!blueLedState);
+  } else if (id == "fan") {
+    setFanAuto(false);
+    setFan(!fanState);
+  } else if (id == "breathe") {
+    bool want = !breatheLedState;
+    setBreatheAuto(false);
+    setBreatheLed(want);
+  } else {
+    server.send(400, "text/plain", "unknown id");
+    return;
+  }
+  saveSettings();
   server.send(200, "text/plain", "ok");
 }
 
@@ -251,16 +272,22 @@ void handleAuto() {
   else if (id == "light") setLightAuto(on);
   else if (id == "rgb") setRgbAuto(on);
   else if (id == "fan") setFanAuto(on);
-  else if (id == "breathe") setBreatheAuto(on);
+  else if (id == "breathe") {
+    setBreatheAuto(on);
+    setBreatheLed(on);
+  } else {
+    server.send(400, "text/plain", "unknown id");
+    return;
+  }
   saveSettings();
   server.send(200, "text/plain", "ok");
 }
 
 // ── RGB color ──
 void handleRgb() {
-  uint8_t r = server.arg("r").toInt();
-  uint8_t g = server.arg("g").toInt();
-  uint8_t b = server.arg("b").toInt();
+  uint8_t r = clampByte(server.arg("r").toInt());
+  uint8_t g = clampByte(server.arg("g").toInt());
+  uint8_t b = clampByte(server.arg("b").toInt());
   setRgbAuto(false);
   setRgb(r, g, b);
   saveSettings();
@@ -269,26 +296,40 @@ void handleRgb() {
 
 // ── Breathe LED ──
 void handleBreatheLed() {
-  setBreatheLed(!breatheLedState);
+  bool want = !breatheLedState;
+  setBreatheAuto(false);
+  setBreatheLed(want);
+  saveSettings();
   server.send(200, "text/plain", "ok");
 }
 
 // ── Servo ──
 void handleServo() {
   int angle = server.arg("angle").toInt();
+  if (angle < 0) angle = 0;
+  if (angle > 180) angle = 180;
   servoAngle = angle;
   servo.write(servoAngle);
   server.send(200, "text/plain", "ok");
 }
 
-// ── Threshold: update control thresholds from web ──
+// ── Threshold: update control thresholds from web (clamped to valid range) ──
 void handleThreshold() {
-  if (server.hasArg("soilLow"))  soilThresholdLow  = server.arg("soilLow").toFloat();
-  if (server.hasArg("soilHigh")) soilThresholdHigh = server.arg("soilHigh").toFloat();
-  if (server.hasArg("waterLow")) waterThresholdLow = server.arg("waterLow").toFloat();
-  if (server.hasArg("light"))    lightThreshold    = server.arg("light").toInt();
-  if (server.hasArg("tempHigh")) tempThresholdHigh = server.arg("tempHigh").toFloat();
-  if (server.hasArg("tempLow"))  tempThresholdLow  = server.arg("tempLow").toFloat();
+  bool changed = false;
+  if (server.hasArg("soilLow"))  { soilThresholdLow  = constrain(server.arg("soilLow").toFloat(),  0.0f, 4095.0f); changed = true; }
+  if (server.hasArg("soilHigh")) { soilThresholdHigh = constrain(server.arg("soilHigh").toFloat(), 0.0f, 4095.0f); changed = true; }
+  if (server.hasArg("waterLow")) { waterThresholdLow = constrain(server.arg("waterLow").toFloat(), 0.0f, 4095.0f); changed = true; }
+  if (server.hasArg("light"))    { lightThreshold    = constrain(server.arg("light").toInt(),      0,    4095);   changed = true; }
+  if (server.hasArg("tempHigh")) { tempThresholdHigh = constrain(server.arg("tempHigh").toFloat(), 0.0f, 60.0f);   changed = true; }
+  if (server.hasArg("tempLow"))  { tempThresholdLow  = constrain(server.arg("tempLow").toFloat(),  0.0f, 60.0f);   changed = true; }
+
+  if (!changed) {
+    server.send(400, "text/plain", "no params");
+    return;
+  }
+  if (soilThresholdHigh <= soilThresholdLow) {
+    soilThresholdHigh = constrain(soilThresholdLow + 50.0f, 0.0f, 4095.0f);
+  }
   saveSettings();
   LOG_INFO("Thresholds updated from web");
   server.send(200, "text/plain", "ok");

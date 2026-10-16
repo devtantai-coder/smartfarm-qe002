@@ -1,6 +1,6 @@
 # Smart Farm QE002 ACEBOTT - Hướng dẫn sử dụng chi tiết
 
-Dự án vườn nông trồng thông minh (IoT Smart Farm) sử dụng mạch ESP32, viết bằng ngôn ngữ C++ trên Arduino IDE. Toàn bộ chú thích và giao diện web bằng **tiếng Việt có dấu**, dễ hiểu ngay cả với người chưa biết lập trình.
+Dự án vườn nông trồng thông minh (IoT Smart Farm) sử dụng mạch ESP32, viết bằng ngôn ngữ C++ trên Arduino IDE. Giao diện web và toàn bộ tài liệu hướng dẫn bằng **tiếng Việt có dấu**, dễ hiểu ngay cả với người chưa biết lập trình (chú thích trong code viết ngắn gọn bằng tiếng Anh).
 
 Nội dung hướng dẫn này được phát triển dựa trên **Tài liệu chính thức bộ kit IoT Smart Farm** và **Danh mục tổ chức hoạt động trải nghiệm STEM_STEAM** của ACEBOTT.
 
@@ -42,6 +42,7 @@ Dựa trên tài liệu "Bước 19: Sơ đồ đấu dây" và "Bước 20: Hư
 - GPIO 34, 35, 36 là kênh ADC1, an toàn dùng cùng lúc với WiFi.
 - GPIO 39 là input-only, không có pull-up nội bộ. Nút chạm cần điện trở pull-down phần cứng.
 - Servo SG90: dây đỏ→V, dây nâu→G, dây vàng→chân số 13.
+- GPIO 14 (quạt) và GPIO 12 (đèn thở PWM) là các chân **mở rộng** của dự án, không có trong sơ đồ gốc của kit.
 
 ---
 
@@ -83,6 +84,7 @@ duan123/
 │   ├── oled.h / oled.cpp            # Hiển thị màn hình OLED
 │   ├── webserver.h / webserver.cpp  # Web server và giao diện điều khiển từ điện thoại
 │   ├── wifi.h / wifi.cpp            # Quản lý kết nối và kết nối lại WiFi
+│   ├── logger.h / logger.cpp        # Hệ thống log có mốc thời gian, mã lỗi, debug menu
 │   └── control.h / control.cpp      # Logic tự động (bơm, đèn, RGB, chạm, báo động)
 ├── Danh mục tổ chức hoạt động trải nghiệm STEM_STEAM.pdf
 └── Tài liệu.pdf
@@ -167,6 +169,8 @@ Sau đó **đăng xuất và đăng nhập lại** máy để quyền có hiệu
    ```
 3. Vào **Tools → Board → Boards Manager**, tìm `esp32`, cài đặt **esp32 by Espressif Systems**
 
+> **Tương thích:** Code tự động nhận biết phiên bản Arduino-ESP32 core 2.x hoặc 3.x (watchdog và PWM LEDC được khởi tạo theo đúng API của từng core), nên bạn có thể dùng bản core mới nhất.
+
 ### Bước 2: Cài đặt thư viện
 Vào **Sketch → Include Library → Manage Libraries**, cài đặt:
 - DHT sensor library (Adafruit)
@@ -210,7 +214,9 @@ Nhấn nút Upload (➡) hoặc **Sketch → Upload**.
 Trên điện thoại cùng mạng WiFi, mở trình duyệt, gõ địa chỉ IP. Trang web hiển thị:
 - **Cảm biến thực tế:** Nhiệt độ, độ ẩm không khí, ánh sáng, độ ẩm đất, mức nước, chuyển động, chạm.
 - **Điều khiển thiết bị:** Máy bơm, đèn xanh, màu RGB, servo (cửa).
-- **Chế độ tự động:** Bật/tắt tự động cho bơm, đèn, RGB.
+- **Chế độ tự động:** Bật/tắt tự động cho bơm, đèn, RGB, quạt, đèn thở.
+
+> **Lưu ý:** Khi bạn nhấn nút **Bật/Tắt** trên web (hoặc dùng cảm biến chạm), chế độ **tự động** của thiết bị đó sẽ tự tắt để tránh việc hệ thống tự động bật/tắt "giằng co" với lệnh thủ công của bạn. Muốn quay lại tự động, hãy nhấn nút **Tự động** tương ứng.
 
 ### Bước 3: Theo dõi OLED
 Màn hình OLED hiển thị: Nhiệt độ, độ ẩm, ánh sáng, độ ẩm đất, mức nước, trạng thái máy bơm.
@@ -222,11 +228,16 @@ Màn hình OLED hiển thị: Nhiệt độ, độ ẩm, ánh sáng, độ ẩm 
 | Tính năng | Mô tả | Vị trí code |
 |-----------|-------|-------------|
 | Kiểm tra nước trước khi bơm | Không bật máy bơm nếu nước cạn (bảo vệ bơm) | `control.cpp: controlPump()` |
-| Hysterese độ ẩm đất | Tránh bơm nhấp nhật khi đất dao động quanh ngưỡng | `control.cpp: controlPump()` |
-| Chống dội nút chạm | Đợi 300ms giữa hai lần nhấn nút | `control.cpp: controlTouch()` |
-| Tự kết nối lại WiFi | Kết nối lại nếu mất mạng | `wifi.cpp: manageWiFi()` |
+| Hysterese độ ẩm đất | Tránh bơm nhấp nháy khi đất dao động quanh ngưỡng | `control.cpp: controlPump()` |
+| Chống dội + phát hiện sườn nút chạm | Mỗi lần chạm chỉ đảo bơm đúng 1 lần và tự chuyển sang thủ công | `control.cpp: controlTouch()` |
+| Điều khiển thủ công tắt tự động | Bấm Bật/Tắt trên web sẽ tự tắt chế độ tự động của thiết bị đó | `webserver.cpp: handleToggle()` |
+| Còi báo theo trạng thái | Nước cạn kêu liên tục, chuyển động kêu ngắt quãng; chỉ ghi log 1 lần mỗi sự kiện (không spam Serial) | `control.cpp: controlAlerts()` |
+| Bộ đệm trung bình động 5 mẫu | Lọc nhiễu cho toàn bộ cảm biến | `sensors.cpp` |
+| Tự kết nối lại WiFi | Thử lại ở mọi trạng thái mất mạng, không lặp log gây nhiễu | `wifi.cpp: manageWiFi()` |
 | Lưu cài đặt vào flash | Không mất cài đặt khi mất điện | `settings.cpp` |
-| Kiểm tra lỗi DHT11 | Gán 0 nếu đọc bị lỗi isnan | `sensors.cpp: readAllSensors()` |
+| Kiểm tra lỗi DHT11 | Giữ giá trị cũ khi đọc lỗi, đếm số lần lỗi để báo mã 501 | `sensors.cpp: readAllSensors()` |
+| Giới hạn giá trị từ web | Chặn servo 0–180°, màu RGB 0–255, ngưỡng trong khoảng hợp lệ | `webserver.cpp` |
+| Watchdog an toàn | Nạp watchdog trong lúc chờ WiFi, tự khởi động lại nếu chương trình treo | `SmartFarm.ino` |
 
 ---
 
@@ -247,36 +258,38 @@ Dự án sử dụng hệ thống logger riêng (`src/logger.h`, `src/logger.cpp
 ### Định dạng log
 
 ```
-[00:00:05.123] [INFO ] setup:56 -> Da tai cai dat tu bo nho flash
-[00:00:06.456] [ERROR] setup:78 [MA LOI: 101] -> OLED khong phat hien duoc - kiem tra day SDA/SCL va dia chi I2C
+[00:00:05.123] [INFO ] setup:132 -> Settings loaded
+[00:00:06.456] [ERROR] setup:106 [MA LOI: 101] -> OLED not found
 ```
 
 Thông tin trong mỗi dòng log:
-- **Thời gian:** Thời gian chạy từ khi ESP32 bật (giây.miligiây)
-- **Cấp độ:** Mức độ nghiêm trọng của thông tin
+- **Thời gian:** Thời gian chạy từ khi ESP32 bật (giờ:phút:giây.miligiây)
+- **Cấp độ:** Mức độ nghiêm trọng của thông tin (đệm 5 ký tự cho thẳng cột)
 - **Hàm:Số dòng:** Tên hàm và số dòng trong file source (dễ tìm vào code)
-- **Nội dung:** Thông báo chi tiết bằng tiếng Việt
+- **Nội dung:** Thông báo chi tiết (tiếng Anh ngắn gọn)
 
 ### Bảng mã lỗi
 
 | Mã lỗi | Ý nghĩa | Cách khắc phục |
 |--------|---------|----------------|
 | 101 | OLED không phát hiện được | Kiểm tra dây SDA (GPIO21), SCL (GPIO22) và địa chỉ I2C (0x3C) |
-| 102 | Không thể kết nối WiFi qua 30 giây | Kiểm tra tên/mật khẩu WiFi trong `src/config.cpp`, tín hiệu WiFi |
+| 102 | Không thể kết nối WiFi qua 30 giây | Kiểm tra tên/mật khẩu WiFi trong `src/config.cpp`, tín hiệu WiFi; hệ thống vẫn tự thử lại nền |
 | 201 | Nước cạn, tắt máy bơm để bảo vệ thiết bị | Thêm nước vào thùng, kiểm tra cảm biến mức nước (GPIO 36) |
 | 202 | Đất khô, bật máy bơm tưới | Thông báo bình thường, không cần can thiệp |
 | 203 | Đất đủ ẩm, tắt máy bơm | Thông báo bình thường, không cần can thiệp |
 | 301 | Có chuyển động phát hiện | Thông báo bình thường từ cảm biến PIR (GPIO 33) |
 | 302 | Nước cạn, kéo còi báo động liên tục | Thêm nước vào thùng ngay |
+| 401 | Mất WiFi, đang kết nối lại | Kiểm tra modem/tín hiệu; hệ thống tự thử lại mỗi 10 giây (chỉ ghi log 1 lần mỗi lần mất mạng) |
+| 501 | Cảm biến DHT11 lỗi liên tục | Kiểm tra dây tín hiệu GPIO 23, nguồn 3.3V của DHT11 hoặc thay cảm biến |
 
 ### Cách sử dụng logger trong code
 
 ```cpp
-LOG_INFO("He thong san sang hoat dong");          // Thông tin bình thường
-LOG_WARN("Cam bien DHT11 doc loi");             // Cảnh báo
-LOG_ERROR("May bom khong phan hoi");             // Lỗi
-LOG_ERROR_CODE(LOG_ERROR, 101, "OLED khong phat hien duoc"); // Lỗi kèm mã
-LOG_DEBUG("Gia tri cam bien: %d", gSoil);       // Chỉ hiển thị nếu cấp độ >= DEBUG
+LOG_INFO("Pump: ON");                             // Thông tin bình thường
+LOG_WARN("WiFi signal weak");                     // Cảnh báo
+LOG_ERROR("Sensor timeout");                      // Lỗi
+LOG_ERROR_CODE(201, "Low water, pump OFF");       // Lỗi kèm mã
+LOG_DEBUG("Extra detail only at DEBUG level");    // Chỉ hiển thị nếu cấp độ >= DEBUG
 ```
 
 Để thay đổi cấp độ log tối thiểu hiển thị, sửa biến `gMinLogLevel` trong `src/logger.cpp`:
@@ -301,7 +314,7 @@ LOG_DEBUG("Gia tri cam bien: %d", gSoil);       // Chỉ hiển thị nếu cấ
 
 ---
 
-## 13. Mở rộng nâng cao (từ tài liệu)
+## 14. Mở rộng nâng cao (từ tài liệu)
 
 - Tích hợp AI dự đoán bệnh cây
 - Hệ thống cảnh báo qua điện thoại (push notification)
@@ -311,7 +324,7 @@ LOG_DEBUG("Gia tri cam bien: %d", gSoil);       // Chỉ hiển thị nếu cấ
 
 ---
 
-## 14. Tác giả và bản quyền
+## 15. Tác giả và bản quyền
 
 Dự án được xây dựng cho bộ starter kit **QE002 ACEBOTT IOT Smart Farm**. Code được viết và tối ưu hóa để chạy trên Arduino IDE với mạch ESP32, toàn bộ tài liệu bằng tiếng Việt có dấu. Tham khảo từ tài liệu chính thức của ACEBOTT.
 

@@ -29,8 +29,8 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   display.print(F("Soil: "));
   display.print(soil);
 
-  // Row 4: Water + Pump state
-  display.setCursor(0, 60);
+  // Row 4: Water + Pump state (y=56: 8px text fits exactly with 64px screen)
+  display.setCursor(0, 56);
   display.print(F("H2O:"));
   display.print(water);
   display.print(F(" P:"));
