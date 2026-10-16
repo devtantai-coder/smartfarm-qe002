@@ -2650,11 +2650,4593 @@ biên dịch **code thật** (`SmartFarm.ino` + `src/*.cpp`). Nhờ vậy:
 5. Góc servo luôn trong 0…180; không có lượt ghi PWM/NeoPixel nào sai chỉ số.
 6. Khi đèn tắt hẳn, PWM phải bằng 0 (không kẹt mức sáng cũ).
 
+Từng dòng của chính bộ test được giải thích chi tiết ở **PHẦN 14** (`test_main.cpp`),
+**PHẦN 15** (thư mục `test/mocks`) và **PHẦN 16** (`test/run_tests.sh`).
+
 ---
 
-## PHẦN 14 — Bảng mã lỗi và thuật ngữ
+## PHẦN 14 — test/test_main.cpp (giải thích từng dòng)
 
-### 14.1. Bảng mã lỗi (in ra dạng `[MA LOI: xxx]`)
+`test/test_main.cpp` là bộ kiểm thử (test) tự động của firmware Smart Farm QE002, chạy được ngay trên máy tính (host/PC) mà không cần cắm kit ESP32. Bí quyết nằm ở thư mục `test/mocks/`: các hàm phần cứng như `digitalWrite()`, `analogRead()`, `millis()`, `ledcWrite()`... được thay bằng bản giả lập (mock — "đồ giả") ghi lại mọi giá trị để test kiểm tra. Nhờ vậy firmware thật (`SmartFarm.ino` + `src/*.cpp`) vẫn được biên dịch nguyên vẹn, còn bộ test chỉ cần "giả vờ" cắm cảm biến, đèn, relay rồi soi kết quả.
+
+### 14.1. Khung xương bộ test và các hàm phụ trợ (dòng 1–170)
+
+#### Comment đầu file (dòng 1–12)
+
+```cpp
+// Bộ test chạy trên host chuyên sâu cho firmware Smart Farm QE002.
+//
+// Bộ test biên dịch firmware THẬT (SmartFarm.ino + src/*.cpp) dựa trên các
+// mock phần cứng điều khiển được trong test/mocks/ và thực hiện:
+//   - unit test cho từng module logic điều khiển
+//   - integration test qua setup()/loop() thật và các HTTP handler
+//   - deep test: JSON contract nghiêm ngặt, giá trị biên, millis() wrap,
+//     an toàn giữa bước của demo, bộ đếm throttle WiFi, hành vi debug-mode,
+//     lưu settings bền qua một chu kỳ nguồn mô phỏng, và một lượt
+//     fuzz/soak có seed kiểm tra các safety invariant sau mỗi loop().
+//
+// Cách build & chạy:  ./test/run_tests.sh   (xem test/README.md)
+```
+
+- Dòng 1: giới thiệu mục đích file — bộ test "chuyên sâu" chạy trên host (máy tính), không chạy trên kit.
+- Dòng 2: dòng trống trong comment, dùng để ngắt các đoạn cho dễ đọc.
+- Dòng 3–4: điểm cốt lõi — bộ test **biên dịch firmware thật** chứ không chép lại logic; phần cứng được thay bằng mock điều khiển được trong `test/mocks/`.
+- Dòng 5: `unit test` — test từng module logic riêng lẻ (cảm biến, điều khiển, demo...).
+- Dòng 6: `integration test` — test ghép: gọi thẳng `setup()`/`loop()` thật và các hàm xử lý HTTP thật.
+- Dòng 7–10: liệt kê các nhóm "deep test" (test sâu): kiểm tra hợp đồng JSON (cấu trúc dữ liệu API trả về), giá trị biên, hiện tượng `millis()` tràn số, an toàn khi demo chuyển bước, bộ đếm chống spam WiFi, hành vi chế độ debug, cài đặt lưu bền qua một chu kỳ tắt/mở nguồn mô phỏng, và fuzz/soak (chạy lâu, dữ liệu ngẫu nhiên) để kiểm tra các bất biến an toàn sau mỗi `loop()`.
+- Dòng 11: dòng trống.
+- Dòng 12: hướng dẫn cách build (biên dịch) và chạy: `./test/run_tests.sh`, chi tiết xem `test/README.md`.
+
+#### Các `#include` và khai báo entry point (dòng 13–33)
+
+```cpp
+#include <cstdio>
+#include <cmath>
+#include <cstring>
+#include <cstdlib>
+#include <string>
+#include <vector>
+#include <set>
+#include <random>
+
+#include "mock.h"
+#include "globals.h"
+#include "sensors.h"
+#include "actuators.h"
+#include "control.h"
+#include "demo.h"
+#include "settings.h"
+#include "oled.h"
+
+// Các entry point thật của firmware (SmartFarm.ino)
+void setup();
+void loop();
+```
+
+- Dòng 13–20: nhóm thư viện chuẩn của C++ (dấu `<...>` nghĩa là thư viện hệ thống):
+  - Dòng 13 `cstdio`: cho `printf` — in thông báo PASS/FAIL ra màn hình.
+  - Dòng 14 `cmath`: cho `fabs` (trị tuyệt đối số thực) phục vụ macro so sánh gần đúng.
+  - Dòng 15 `cstring`: cho `strstr` (tìm chuỗi con), `strcmp` (so sánh chuỗi), `strlen` (độ dài chuỗi).
+  - Dòng 16 `cstdlib`: các hàm tiện ích C (đổi chuỗi thành số, thoát chương trình...).
+  - Dòng 17 `string`: lớp `std::string` tiện dụng khi ghép/so sánh chuỗi trong test.
+  - Dòng 18 `vector`: mảng động `std::vector` để chứa danh sách kết quả, tham số...
+  - Dòng 19 `set`: tập hợp `std::set` (mỗi phần tử chỉ xuất hiện một lần) thường dùng để kiểm tra trùng lặp.
+  - Dòng 20 `random`: bộ sinh số ngẫu nhiên cho phần fuzz/soak với seed (hạt giống) cố định để tái lập được kết quả.
+- Dòng 22–29: nhóm header của chính dự án (dấu `"..."` nghĩa là file trong repo):
+  - Dòng 22 `mock.h`: khai báo toàn bộ hàm/biến mock phần cứng — trái tim của bộ test.
+  - Dòng 23 `globals.h`: các biến trạng thái toàn cục của firmware mà test cần đọc/ghi trực tiếp.
+  - Dòng 24–29: các module chức năng thật — cảm biến, cơ cấu chấp hành (relay, LED...), điều khiển tự động, demo, lưu cài đặt, màn hình OLED.
+- Dòng 31: comment nói rõ hai hàm bên dưới là entry point thật của firmware, nằm trong `SmartFarm.ino`.
+- Dòng 32–33: **khai báo trước** (prototype) `setup()` và `loop()`. Trong Arduino, hai hàm này nằm trong file `.ino` — không có file header nào khai báo chúng. Muốn `test_main.cpp` gọi được `setup()`/`loop()` thật thì phải tự khai báo hai prototype này; còn phần thân hàm do `SmartFarm.ino` cung cấp lúc liên kết (link) chương trình. Nhờ vậy test chạy đúng chu trình khởi động và vòng lặp như trên kit.
+
+#### Biến đếm và 4 macro kiểm tra (dòng 35–63)
+
+```cpp
+static int gChecks = 0, gFails = 0;
+```
+
+- Dòng 35: hai biến đếm dùng chung cho cả file. `static` ở đây nghĩa là chỉ file này nhìn thấy (không xung đột với file khác). Chữ `g` là quy ước đặt tên cho biến toàn cục (global). `gChecks` đếm tổng số lần kiểm tra đã chạy, `gFails` đếm số lần kiểm tra thất bại. Cuối chương trình, hàm `main()` (ở phần sau của file) sẽ đọc hai số này để quyết định PASS/FAIL toàn bộ.
+
+```cpp
+#define CHECK(cond) do { \
+  gChecks++; \
+  if (!(cond)) { gFails++; printf("  FAIL line %d: %s\n", __LINE__, #cond); } \
+} while (0)
+
+#define CHECK_EQ(a, b) do { \
+  gChecks++; \
+  if ((long)(a) != (long)(b)) { \
+    gFails++; printf("  FAIL line %d: %s (%ld) != %s (%ld)\n", \
+                     __LINE__, #a, (long)(a), #b, (long)(b)); \
+  } \
+} while (0)
+
+#define CHECK_NEAR(a, b, eps) do { \
+  gChecks++; \
+  if (fabs((double)(a) - (double)(b)) > (eps)) { \
+    gFails++; printf("  FAIL line %d: %s (%.2f) != %s (%.2f)\n", \
+                     __LINE__, #a, (double)(a), #b, (double)(b)); \
+  } \
+} while (0)
+
+#define CHECK_STR(a, b) do { \
+  gChecks++; \
+  if (strcmp((a), (b)) != 0) { \
+    gFails++; printf("  FAIL line %d: \"%s\" != \"%s\"\n", __LINE__, (a), (b)); \
+  } \
+} while (0)
+```
+
+- Dòng 37–40 — `CHECK(cond)`: macro cơ bản nhất. Macro là "đoạn mã được dán tự động" vào chỗ gọi trước khi biên dịch; ở đây nó làm 3 việc: (1) tăng `gChecks` vì vừa có thêm một phép kiểm tra; (2) nếu điều kiện `cond` **sai** thì tăng `gFails` và in dòng `FAIL`; (3) in kèm `__LINE__` — một macro có sẵn của trình biên dịch, tự thay bằng **số dòng hiện tại** nơi lời gọi `CHECK` nằm, giúp biết ngay test hỏng ở đâu; và `#cond` — toán tử "stringize" (`#` đứng trước tham số macro), biến chính biểu thức điều kiện thành **chuỗi ký tự** để in ra nguyên văn bạn đã kiểm tra cái gì.
+- Dòng 37 & 40 — `do { ... } while (0)`: kỹ thuật gói nhiều câu lệnh vào **một câu lệnh duy nhất**. Nếu không có nó, đoạn `if (x) CHECK(y); else ...` sẽ bị hiểu sai (phần `else` dính vào `if` bên trong macro). `while (0)` nghĩa là vòng lặp chạy đúng **một lần** rồi thoát — chỉ để đủ cú pháp, không phải lặp thật. Dấu `\` cuối mỗi dòng là "nối dòng": macro viết trên nhiều dòng nhưng trình biên dịch đọc như một dòng.
+- Dòng 42–48 — `CHECK_EQ(a, b)`: như `CHECK` nhưng dành cho **so sánh bằng**. Điểm đáng chú ý là `(long)(a)` và `(long)(b)`: ép cả hai vế về kiểu số nguyên `long` trước khi so. Vì sao? Vì trong firmware các giá trị có nhiều kiểu khác nhau (`bool`, `int`, `uint32_t`, `char`...); ép chung về `long` để tránh cảnh báo "so sánh khác dấu" (signed/unsigned) và tránh kết quả so sánh kỳ lạ khi trộn kiểu. Khi sai, `%ld` in ra **giá trị thật** của hai vế cạnh tên biểu thức (`#a`, `#b`), ví dụ `FAIL line 250: relayState (0) != 1 (1)`.
+- Dòng 50–56 — `CHECK_NEAR(a, b, eps)`: dành cho **số thực** (nhiệt độ, độ ẩm...). Máy tính lưu số thực có sai số nhỏ, nên không so bằng trực tiếp mà kiểm tra `|a − b| > eps` thì mới fail. `fabs((double)(a) - (double)(b))` là trị tuyệt đối của hiệu, ép cả hai về `double` cho chính xác. `eps` (epsilon) là "sai số cho phép" — test tự chọn, ví dụ 0.05. Khi in dùng `%.2f` (2 chữ số thập phân).
+- Dòng 58–63 — `CHECK_STR(a, b)`: dành cho **chuỗi C** (`const char*`). Không dùng `==` (vì `==` chỉ so địa chỉ ô nhớ, không so nội dung) mà dùng `strcmp`: hàm này trả về 0 khi hai chuỗi **giống hệt nhau**, khác 0 khi khác. Vì vậy điều kiện fail là `strcmp(...) != 0`. Khi in, giá trị được bọc trong dấu ngoặc kép để thấy rõ khoảng trắng/ký tự lạ.
+- Tóm tắt cách dùng: số nguyên/nhị phân dùng `CHECK_EQ`; số thực dùng `CHECK_NEAR`; chuỗi dùng `CHECK_STR`; và `CHECK` cho mọi điều kiện logic khác (`>`, `<`, đã gọi hàm chưa...).
+
+#### Các hàm phụ trợ (dòng 65–170)
+
+```cpp
+// ==============================================
+//  Các hàm phụ trợ
+// ==============================================
+
+static bool has(const char *hay, const char *needle) {
+  return hay && needle && strstr(hay, needle) != nullptr;
+}
+```
+
+- Dòng 65–67: khối comment trang trí, đánh dấu bắt đầu vùng "hàm phụ trợ" (helper) — các tiện ích nhỏ dùng cho nhiều test.
+- Dòng 69: `has` = "có chứa không", kiểu trả về `bool` (đúng/sai), `static` để chỉ dùng trong file. Tên tham số vay từ thành ngữ "tìm cây kim trong đống cỏ khô": `hay` (đống cỏ) là chuỗi bị tìm, `needle` (cây kim) là chuỗi cần tìm. Dấu `*` nghĩa là con trỏ — trỏ tới chuỗi ký tự.
+- Dòng 70: trả về true nếu: `hay` khác null (không rỗng/không trỏ hư) **và** `needle` khác null **và** `strstr(hay, needle)` tìm thấy (trả về khác `nullptr`). Phép `&&` dừng sớm từng vế nên `strstr` chỉ chạy khi cả hai chuỗi hợp lệ — tránh crash. Hàm này hầu như luôn dùng để kiểm tra chuỗi JSON có chứa một trường nào đó.
+
+```cpp
+static int countOccurrences(const char *hay, const char *needle) {
+  if (!hay || !needle || !*needle) return 0;
+  int n = 0;
+  for (const char *p = hay; (p = strstr(p, needle)) != nullptr; p += strlen(needle)) n++;
+  return n;
+}
+```
+
+- Dòng 73: đếm số lần `needle` xuất hiện trong `hay`.
+- Dòng 74: "gác cổng" — nếu thiếu chuỗi hoặc `needle` rỗng (`*needle` là ký tự đầu tiên, bằng 0 nghĩa là chuỗi rỗng) thì trả 0. Phải chặn `needle` rỗng vì `strstr` với chuỗi rỗng sẽ luôn tìm thấy và vòng lặp chạy vô tận.
+- Dòng 75: `n` là biến đếm, bắt đầu từ 0.
+- Dòng 76: một dòng `for` gói cả vòng lặp: con trỏ `p` bắt đầu ở đầu chuỗi `hay`; mỗi lượt gọi `strstr(p, needle)` — nếu tìm thấy, `p` nhảy tới vị trí đó và điều kiện đúng (khác `nullptr`), thân vòng lặp tăng `n`; hết thân, `p += strlen(needle)` nhảy **qua khỏi** chuỗi vừa tìm để lần sau tìm tiếp phần còn lại (nhờ vậy không đếm chồng cùng một vị trí). Vòng lặp dừng khi không còn tìm thấy.
+- Dòng 77: trả về số lần đếm được. Dùng để kiểm tra ví dụ trường `"relay"` xuất hiện đúng **1 lần** trong JSON.
+
+```cpp
+static uint32_t currentLedPwm() {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  return mockPwm[BLUE_LED_PIN];
+#else
+  return mockPwm[LED_PWM_CHANNEL];
+#endif
+}
+```
+
+- Dòng 80: hàm trả về giá trị PWM (độ sáng) hiện tại của LED xanh dương, kiểu `uint32_t` (số nguyên không dấu 32 bit).
+- Dòng 81: `#if ESP_ARDUINO_VERSION_MAJOR >= 3` — đây là **biên dịch có điều kiện** (không phải `if` chạy lúc runtime): trình biên dịch xem phiên bản core ESP32 Arduino đang dùng. Từ core **v3**, API PWM `ledc` thay đổi: điều khiển theo **chân** thay vì theo **kênh**.
+- Dòng 82: nhánh core v3 — đọc `mockPwm[BLUE_LED_PIN]`, tức mock ghi giá trị PWM theo chân LED xanh.
+- Dòng 83: `#else` — các core cũ hơn (2.x).
+- Dòng 84: nhánh cũ — đọc `mockPwm[LED_PWM_CHANNEL]`, tức theo kênh LEDC.
+- Dòng 85: `#endif` kết thúc khối điều kiện. Nhờ vậy cùng một bộ test chạy đúng trên cả hai môi trường build.
+
+```cpp
+static void checkRelayPin(bool on) {
+#if RELAY_ACTIVE_LOW
+  CHECK_EQ(mockPinLevel[RELAY_PIN], on ? LOW : HIGH);
+#else
+  CHECK_EQ(mockPinLevel[RELAY_PIN], on ? HIGH : LOW);
+#endif
+}
+```
+
+- Dòng 88: kiểm tra chân điều khiển relay có đúng trạng thái mong muốn `on` (bật/tắt) không. `void` nghĩa là không trả về gì.
+- Dòng 89: `#if RELAY_ACTIVE_LOW` — relay của board có thể là loại "kích mức thấp" (active-low): bật khi chân ở 0V. Cờ này do `config.h` định nghĩa.
+- Dòng 90: nếu active-low: bật (`on = true`) thì chân phải là `LOW`, tắt thì `HIGH`. Đây là phép đảo logic quen thuộc của relay.
+- Dòng 91–93: `#else`/`#endif` — nếu relay "kích mức cao" (active-high) thì ngược lại: bật ⇒ `HIGH`, tắt ⇒ `LOW`. Dùng `CHECK_EQ` để so với `mockPinLevel[RELAY_PIN]` — mảng mock ghi lại mức chân từ lần `digitalWrite` cuối.
+
+```cpp
+static void checkBuzzer(bool on) {
+#if BUZZER_PASSIVE
+  if (on) CHECK(mockBuzzerToneHz > 0);
+  else    CHECK_EQ(mockBuzzerToneHz, 0);
+#else
+  CHECK_EQ(mockPinLevel[BUZZER_PIN], on ? HIGH : LOW);
+#endif
+}
+```
+
+- Dòng 96: kiểm tra còi báo đang bật/tắt đúng như mong muốn.
+- Dòng 97: `#if BUZZER_PASSIVE` — board có thể dùng **còi thụ động** (passive): loại còi cần tín hiệu tần số (hàm `tone()`) mới kêu, kêu to nhỏ theo tần số.
+- Dòng 98: nếu muốn bật: `mockBuzzerToneHz` (tần số tone ghi lại được) phải **lớn hơn 0** — có phát tần số nghĩa là đang kêu.
+- Dòng 99: nếu muốn tắt: tần số phải bằng 0 (im lặng). Dùng `CHECK_EQ` cho trường hợp này.
+- Dòng 100–102: `#else` — nếu là **còi chủ động** (active): chỉ có bật/tắt bằng mức chân, nên kiểm tra `mockPinLevel[BUZZER_PIN]` là `HIGH`/`LOW` tương ứng.
+
+```cpp
+static void resetState() {
+  mockReset();
+  soilThresholdLow = 400; soilThresholdHigh = 700; waterThresholdLow = 200;
+  lightThreshold = 500; tempThresholdHigh = 30; tempThresholdLow = 25;
+  pumpAuto = lightAuto = rgbAuto = fanAuto = true;
+  breatheAuto = false;
+  relayState = fanState = blueLedState = breatheLedState = false;
+  windmillOn = false;
+  rgbR = rgbG = rgbB = 0;
+  breatheBrightness = 0;
+  breatheDirection = 1;
+  servoAngle = 0;
+  gTemp = 22; gHum = 50; gLight = 300; gSoil = 500; gWater = 800;
+  gPir = false; gTouch = false;
+  lastWifiCheck = lastSensorRead = lastOledUpdate = 0;
+  lastBuzzer = lastTouch = lastBreatheUpdate = 0;
+  sensorFailCount = 0;
+  sensorHealthy = true;
+}
+```
+
+- Dòng 105: `resetState` = "đưa phần mềm về trạng thái xuất phát" trước mỗi test. Vì mọi test dùng chung biến toàn cục của firmware, nếu không reset thì kết quả test trước sẽ **rò rỉ** sang test sau, gây lỗi "ma".
+- Dòng 106: `mockReset()` — xóa sạch toàn bộ thế giới mock: mức chân, giá trị ADC, tần số còi, đồng hồ `millis()` giả... coi như vừa cấp nguồn lại.
+- Dòng 107–108: trả 6 ngưỡng về mặc định (đất 400–700, nước 200, ánh sáng 500, nhiệt 25–30). Các test có thể đã từng đổi ngưỡng qua HTTP (`/threshold`) nên phải trả lại gốc.
+- Dòng 109: bật lại 4 chế độ tự động: bơm, đèn, RGB, quạt (gán nối tiếp `a = b = c = ... = true`).
+- Dòng 110: `breatheAuto = false` — đèn thở là tính năng "tùy chọn bật", mặc định tắt giống firmware thật.
+- Dòng 111: tắt 4 trạng thái thiết bị đang chạy: relay (bơm), quạt, LED xanh, đèn thở.
+- Dòng 112: tắt cối xay gió.
+- Dòng 113: màu RGB về 0 (tắt màu).
+- Dòng 114–115: độ sáng đèn thở về 0 và chiều tăng/giảm về 1 (tăng dần) — đèn thở hoạt động theo chu kỳ tăng/giảm độ sáng.
+- Dòng 116: góc servo về 0 độ.
+- Dòng 117: đặt số liệu cảm biến toàn cục về mức "an toàn ở giữa": nhiệt độ 22°C, độ ẩm 50%, ánh sáng 300, đất 500, nước 800 — đều không kích hoạt báo động, để mỗi test tự chọn kịch bản cần.
+- Dòng 118: tắt công tắc chuyển động PIR và cảm ứng chạm.
+- Dòng 119–120: đưa các **mốc thời gian** `millis()` về 0: lần kiểm tra WiFi, lần đọc cảm biến, lần cập nhật OLED, lần kêu còi, lần chạm, lần cập nhật đèn thở. Nhờ đó các bộ đếm throttle (giới hạn tần suất) trong firmware hoạt động lại ngay từ đầu thay vì tưởng "vừa chạy xong".
+- Dòng 121: xóa bộ đếm số lần đọc cảm biến thất bại.
+- Dòng 122: đánh dấu cảm biến khỏe mạnh trở lại.
+- Tóm lại dòng 105–123: một nút "reset toàn bộ" — điểm khởi đầu công bằng cho mọi test.
+
+```cpp
+// Mô phỏng đúng phần điều khiển trong loop() của SmartFarm.ino (không có HTTP/OLED)
+static void simLoop() {
+  unsigned long now = mockMillis();
+  gTouch = readTouch();
+  gPir = readPIR();
+  if (now - lastSensorRead >= SENSOR_INTERVAL) {
+    readAllSensors();
+    lastSensorRead = now;
+  }
+  if (gWater < (int)waterThresholdLow && relayState) setRelay(false);
+  if (demoRunning()) {
+    updateDemo();
+    controlBreathe();
+  } else {
+    controlPump(); controlFan(); controlLight(); controlRgb(); controlBreathe();
+    controlTouch(); controlAlerts(); controlWindmill(); controlFeed();
+  }
+}
+```
+
+- Dòng 125: comment nói rõ `simLoop` chép lại đúng phần điều khiển của `loop()` thật nhưng **bỏ** phần HTTP/OLED — dùng cho các test không quan tâm mạng và màn hình.
+- Dòng 127: lấy đồng hồ giả `mockMillis()` (thay cho `millis()` thật) để đo thời gian mô phỏng.
+- Dòng 128–129: đọc ngay cảm biến chạm và PIR mỗi vòng, đúng như firmware (hai cảm biến này không cần bộ lọc trung bình).
+- Dòng 130–133: nếu đã qua `SENSOR_INTERVAL` kể từ lần đọc trước (`now - lastSensorRead >= SENSOR_INTERVAL`) thì gọi `readAllSensors()` — đọc cảm biến DHT/ADC có lọc trung bình — rồi chốt lại mốc thời gian. Đây là throttling: không đọc cảm biến quá dày.
+- Dòng 134: bất biến an toàn: nếu mức nước thấp hơn ngưỡng (`gWater < (int)waterThresholdLow`, ép về `int` vì ngưỡng là `float`) **và** bơm đang bật thì tắt bơm ngay — chống bơm chạy khô.
+- Dòng 135–137: nếu demo đang chạy, chỉ gọi `updateDemo()` và `controlBreathe()` — các bộ điều khiển tự động khác bị tạm khóa để không giành quyền điều khiển thiết bị với demo.
+- Dòng 138–141: chế độ thường — gọi lần lượt toàn bộ các bộ điều khiển tự động đúng thứ tự như trong `loop()` thật: bơm, quạt, đèn, RGB, đèn thở, chạm, cảnh báo (còi), cối xay gió, cho ăn.
+
+```cpp
+static int invoke(const char *path,
+                  const char *a1 = nullptr, const char *v1 = nullptr,
+                  const char *a2 = nullptr, const char *v2 = nullptr,
+                  const char *a3 = nullptr, const char *v3 = nullptr) {
+  if (a1) mockServerSetArg(a1, v1);
+  if (a2) mockServerSetArg(a2, v2);
+  if (a3) mockServerSetArg(a3, v3);
+  bool found = mockServerInvoke(path);
+  CHECK(found);
+  return mockServerLastCode();
+}
+```
+
+- Dòng 144–147: hàm gọi một "request HTTP giả" tới firmware. Tham số: `path` là đường dẫn (ví dụ `/api`), rồi tối đa 3 cặp `(tên, giá trị)` tham số query dạng `?ten=giatri`. Các giá trị mặc định `= nullptr` nghĩa là **không truyền** nếu bỏ qua — nhờ vậy lúc gọi chỉ cần khai báo những tham số mình dùng.
+- Dòng 148–150: với mỗi cặp có tên (`a1`, `a2`, `a3` khác null), nạp vào mock server để hàm xử lý `server.arg("ten")` đọc được y như trên thiết bị thật.
+- Dòng 151: `mockServerInvoke(path)` gọi hàm xử lý web thật (handleApi, handleToggle...) tương ứng đường dẫn; trả về `true` nếu tìm thấy route, `false` nếu không.
+- Dòng 152: `CHECK(found)` — nếu route không tồn tại thì test fail ngay lập tức, giúp phát hiện lỗi gõ sai đường dẫn.
+- Dòng 153: trả về **mã HTTP** mà handler đã đặt (200 OK, 400 lỗi tham số...) để test so sánh bằng `CHECK_EQ(invoke(...), 200)`.
+
+```cpp
+static void runLoop(unsigned long simMs, unsigned long stepMs = 10) {
+  unsigned long start = mockMillis();
+  while (mockMillis() - start < simMs) {
+    mockAdvance(stepMs);
+    loop();
+  }
+}
+```
+
+- Dòng 156: chạy thử `loop()` thật trong một khoảng **thời gian mô phỏng** `simMs` (mili-giây), mỗi bước nhảy đồng hồ `stepMs` mili-giây (mặc định 10ms — xấp xỉ một vòng lặp thật).
+- Dòng 157: ghi lại mốc bắt đầu.
+- Dòng 158: lặp chừng nào thời gian mô phỏng trôi qua chưa đủ `simMs`.
+- Dòng 159–160: đẩy đồng hồ giả thêm `stepMs` (`mockAdvance`) rồi gọi `loop()` thật đúng một lần.
+- Ý nghĩa: nhờ đồng hồ giả, "chạy 1 giờ" chỉ tốn vài giây thực, và kết quả luôn tái lập được (không phụ thuộc tốc độ máy).
+
+```cpp
+static void primeSensors(int water) {
+  mockDhtTemp = 26.0f; mockDhtHum = 60.0f;
+  mockAdc[LDR_PIN] = 1000; mockAdc[SOIL_PIN] = 600;
+  mockAdc[WATER_PIN] = INVERT_WATER ? 4095 - water : water;
+  for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
+  lastSensorRead = mockMillis();
+}
+```
+
+- Dòng 164: `primeSensors` = "mồi" cảm biến trước khi test chạy, để bộ lọc trung bình trượt có sẵn dữ liệu ổn định ngay từ những vòng đầu. Tham số `water` là giá trị mức nước muốn giả lập.
+- Dòng 165: đặt DHT11 giả: 26.0°C, độ ẩm 60%. Hậu tố `f` nghĩa là số thực (`float`).
+- Dòng 166: đặt ADC giả: ánh sáng (LDR) = 1000, độ ẩm đất = 600.
+- Dòng 167: đặt ADC nước. Nếu `INVERT_WATER` bật (cảm biến nước kiểu đảo: nước càng nhiều trị càng nhỏ) thì lấy `4095 - water` để đảo ngược; ngược lại dùng thẳng `water`. 4095 là giá trị ADC 12 bit lớn nhất của ESP32.
+- Dòng 168: gọi `readAllSensors()` đúng `SENSOR_FILTER_SIZE` lần — số phần tử của bộ lọc trung bình — để bộ lọc đầy toàn giá trị mới. Nếu chỉ gọi 1 lần, giá trị trung bình vẫn lẫn dữ liệu cũ/0 và test sẽ đọc ra số sai lệch.
+- Dòng 169: chốt `lastSensorRead = mockMillis()` — coi như vừa đọc cảm biến xong, để `simLoop` không đọc lại ngay lập tức mà chờ đủ chu kỳ.
+
+#### Cách đọc một test
+
+Các phần tiếp theo (14.2–14.12) mô tả từng hàm test, nhưng chỉ cần nắm **4 macro**: `CHECK` (điều kiện đúng), `CHECK_EQ` (hai số bằng nhau), `CHECK_NEAR` (hai số thực gần nhau), `CHECK_STR` (hai chuỗi giống nhau). Mọi test đều theo cùng một mô-típ 3 bước: **chuẩn bị** — gọi `resetState()` rồi chỉnh các biến mock (`mockAdc`, `mockDhtTemp`, `mockPinLevel`...) hoặc gọi `invoke`/`primeSensors`; **gọi hàm thật** — hàm điều khiển thật, `simLoop()`, `runLoop()` hay HTTP handler thật; **kiểm tra kết quả** — một loạt `CHECK*` so kết quả với mong đợi. Chỉ dòng nào in `FAIL` mới là có lỗi; `main()` cuối cùng tổng kết `gChecks`/`gFails` để báo PASS/FAIL toàn bộ.
+
+### 14.2. T1–T12 — unit test cảm biến, bơm, quạt, đèn, chạm, RGB, còi, cơ cấu (dòng 176–457)
+
+Mười hai test dưới đây (T1–T12) gọi trực tiếp các hàm điều khiển **thật** trong `src/sensors.cpp`, `src/control.cpp`, `src/actuators.cpp` rồi kiểm tra kết quả qua các biến mock phần cứng (`test/mocks/mock.h`). Mỗi test bắt đầu bằng `resetState()` (dòng 105–123 của `test_main.cpp`) để trả mọi ngưỡng, cờ chế độ và ngân hàng ADC/millis về mặc định, nhờ đó các test độc lập với nhau. Bốn macro `CHECK`, `CHECK_EQ`, `CHECK_NEAR`, `CHECK_STR` đã được giải thích ở mục 14.1 — ở đây chỉ nói ngắn gọn mỗi dòng kiểm tra điều gì.
+
+#### T1 — testSensorsAverage() (dòng 177–199)
+
+**Mục đích:** Kiểm tra bộ lọc trung bình động (moving average) 5 mẫu của cảm biến ánh sáng/đất/nước, nhiệt độ, độ ẩm, và hướng chuẩn hoá tín hiệu theo cờ `INVERT_*`. Test phải chạy đúng cho cả board thường lẫn board đọc ngược.
+
+```cpp
+static void testSensorsAverage() {
+  printf("T1  sensors: moving average + direction flags\n");
+  resetState();
+  mockDhtTemp = 26.5f; mockDhtHum = 61.0f;
+  mockAdc[LDR_PIN] = 3000; mockAdc[SOIL_PIN] = 600; mockAdc[WATER_PIN] = 900;
+  for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
+
+  auto dir = [](int raw, int invert) { return invert ? 4095 - raw : raw; };
+  CHECK_EQ(gLight, dir(3000, INVERT_LIGHT));
+  CHECK_EQ(gSoil, dir(600, INVERT_SOIL));
+  CHECK_EQ(gWater, dir(900, INVERT_WATER));
+  CHECK_NEAR(gTemp, 26.5, 0.05);
+  CHECK_NEAR(gHum, 61.0, 0.05);
+
+  mockAdc[LDR_PIN] = 2000;
+  for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
+  CHECK_EQ(gLight, dir(2000, INVERT_LIGHT));
+
+  mockAdc[LDR_PIN] = 1000;
+  readAllSensors();
+  int expected = (4 * dir(2000, INVERT_LIGHT) + dir(1000, INVERT_LIGHT)) / 5;
+  CHECK_EQ(gLight, expected);
+}
+```
+
+- Dòng 178: in tên test ra console — bộ test dùng `printf` thủ công (không dùng framework), mỗi test tự in mã T1…T14.
+- Dòng 179: `resetState()` xoá toàn bộ mock (ADC = 0, millis = 0) và trả ngưỡng/chế độ auto về mặc định.
+- Dòng 180: nạp DHT11 giả 26.5 °C và 61 %RH.
+- Dòng 181: nạp ADC giả: LDR = 3000 (sáng mạnh), đất = 600, nước = 900. Với build thường (`INVERT_*` = 0), số càng lớn nghĩa là càng sáng / càng ẩm / càng đầy nước.
+- Dòng 182: gọi `readAllSensors()` (hàm thật trong `src/sensors.cpp:41`) đúng `SENSOR_FILTER_SIZE` = 5 lần → cửa sổ trung bình đầy, 5 mẫu giống nhau nên trung bình bằng chính giá trị nạp.
+- Dòng 184: lambda `dir(raw, invert)` mô phỏng `normalizeAdc()` của firmware (`src/sensors.cpp:31-33`): nếu cờ `INVERT_*` = 1 thì đảo thành `4095 - raw`. Nhờ đó một test chạy đúng cho cả build `core3` thường lẫn build `core2-invert`.
+- Dòng 185–187: kiểm tra `gLight`/`gSoil`/`gWater` khớp hướng chuẩn hoá. Build thường kỳ vọng 3000/600/900; build invert kỳ vọng 1095/3495/3195.
+- Dòng 188–189: kiểm tra nhiệt độ/độ ẩm trung bình đúng 26.5/61.0 với dung sai 0.05.
+- Dòng 191–193: đổi LDR = 2000 rồi nạp đầy cửa sổ 5 mẫu mới → giá trị lọc cập nhật thành 2000 (cửa sổ bị thay hoàn toàn).
+- Dòng 195–196: đặt LDR = 1000 nhưng chỉ gọi `readAllSensors()` 1 lần → cửa sổ vòng giờ giữ 4 mẫu 2000 cũ + 1 mẫu 1000 mới.
+- Dòng 197: công thức trung bình kỳ vọng `(4 * 2000 + 1000) / 5 = 1800` (build thường); build invert là `(4 * 2095 + 3095) / 5 = 2295`.
+- Dòng 198: khẳng định `gLight` đúng bằng trung bình động — chứng minh cửa sổ thay dần từng mẫu chứ không nhảy ngay theo giá trị mới (chống nhiễu).
+
+#### T2 — testDhtFailover() (dòng 202–227)
+
+**Mục đích:** Kiểm tra cơ chế chịu lỗi khi DHT11 trả về `NAN` (lỗi checksum/không giao tiếp): dùng lại giá trị tốt cuối cùng, và chỉ đánh dấu cảm biến hỏng sau nhiều lần lỗi liên tiếp.
+
+```cpp
+static void testDhtFailover() {
+  printf("T2  sensors: DHT11 NaN failover\n");
+  resetState();
+  mockDhtTemp = 26.0f; mockDhtHum = 55.0f;
+  for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
+  CHECK_NEAR(gTemp, 26.0, 0.05);
+
+  mockDhtTemp = NAN;
+  readAllSensors();
+  CHECK_NEAR(gTemp, 26.0, 0.05);
+  for (int i = 0; i < 6; i++) readAllSensors();
+  CHECK(!sensorHealthy);
+
+  mockDhtTemp = 24.0f; mockDhtHum = 50.0f;
+  for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
+  CHECK(sensorHealthy);
+  CHECK_NEAR(gTemp, 24.0, 0.05);
+
+  // Độ ẩm NaN dùng lại giá trị lọc tốt cuối cùng (giống nhiệt độ)
+  mockDhtTemp = 27.0f; mockDhtHum = NAN;
+  readAllSensors();
+  CHECK_NEAR(gHum, 50.0, 0.5);
+  CHECK(sensorHealthy);        // một NaN độ ẩm đơn lẻ không đánh dấu cảm biến lỗi
+  mockDhtHum = 50.0f;
+  readAllSensors();
+}
+```
+
+- Dòng 203–206: nạp DHT giả 26.0 °C / 55 %RH rồi đọc đủ 5 lần cho cửa sổ đầy.
+- Dòng 207: xác nhận nhiệt độ lọc đúng 26.0 khi DHT hoạt động bình thường.
+- Dòng 209–210: cho DHT trả `NAN` (số "không phải số" — dấu hiệu đọc lỗi) rồi đọc 1 lần.
+- Dòng 211: nhiệt độ vẫn 26.0 — firmware thay NaN bằng giá trị tốt cuối cùng trong bộ đệm (`src/sensors.cpp:50-56`), nên một lần lỗi không kéo giá trị xuống.
+- Dòng 212–213: đọc lỗi thêm 6 lần → bộ đếm `sensorFailCount` vượt mốc 5 → firmware gắn cờ `sensorHealthy = false` (báo cảm biến hỏng). Test kiểm tra cờ này.
+- Dòng 215–217: DHT hồi phục (24.0 °C / 50 %RH), đọc đủ 5 mẫu → cờ `sensorHealthy` tự bật lại `true` khi đọc thành công.
+- Dòng 218: nhiệt độ ra đúng 24.0 — giá trị lỗi cũ đã bị đẩy ra khỏi cửa sổ trung bình.
+- Dòng 220–223: chỉ độ ẩm `NAN`: firmware dùng lại 50 % tốt cuối (`src/sensors.cpp:57-59`) nên `gHum` ≈ 50 (dung sai 0.5).
+- Dòng 224: một NaN độ ẩm đơn lẻ **không** đánh dấu cảm biến hỏng — chỉ nhiệt độ lỗi tích luỹ mới tính vào `sensorFailCount`.
+- Dòng 225–226: trả DHT về bình thường và đọc thêm 1 lần để dọn trạng thái sạch cho test sau.
+
+#### T3 — testPumpHysteresis() (dòng 230–254)
+
+**Mục đích:** Kiểm tra điều khiển bơm theo độ ẩm đất có trễ (hysteresis: bật dưới ngưỡng thấp, tắt trên ngưỡng cao — vùng giữa giữ nguyên trạng thái), và chống cấu hình ngưỡng bị đảo gây nhấp nháy relay.
+
+```cpp
+static void testPumpHysteresis() {
+  printf("T3  pump: soil hysteresis\n");
+  resetState();
+  gWater = 900;
+  gSoil = 300;
+  controlPump();
+  CHECK(relayState);
+  checkRelayPin(true);
+  gSoil = 500;                 // giữa các ngưỡng: không đổi
+  controlPump();
+  CHECK(relayState);
+  gSoil = 800;
+  controlPump();
+  CHECK(!relayState);
+  checkRelayPin(false);
+
+  // Ngưỡng đảo không được làm relay bật/tắt liên tục
+  resetState();
+  soilThresholdLow = 700; soilThresholdHigh = 400;
+  gSoil = 500; gWater = 900;
+  controlPump();
+  CHECK(!relayState);
+  controlPump();
+  CHECK(!relayState);
+}
+```
+
+- Dòng 233–235: nước đủ (900 > ngưỡng 200), đất khô 300 < ngưỡng thấp 400 → `controlPump()` bật bơm (nhánh `src/control.cpp:31-33`).
+- Dòng 236: xác nhận cờ `relayState` = bật.
+- Dòng 237: `checkRelayPin(true)` (helper dòng 88–94) kiểm tra mức điện thật trên chân relay khớp cực tính của build — active-high mong `HIGH`, build `passive-lowrelay` mong `LOW`.
+- Dòng 238–240: đất 500 nằm giữa 400 và 700 (vùng trễ) → `controlPump()` không đổi gì, bơm vẫn chạy. Đây là mục đích chính của hysteresis: chống bật/tắt liên tục khi giá trị dao động quanh một ngưỡng.
+- Dòng 241–243: đất 800 > ngưỡng cao 700 → tắt bơm.
+- Dòng 244: xác nhận chân relay đã xuống mức tắt.
+- Dòng 246–249: cố tình đặt ngưỡng bị đảo (`soilThresholdLow` = 700 > `soilThresholdHigh` = 400) — cấu hình sai nếu không chặn sẽ làm relay đóng/ngắt vô hạn.
+- Dòng 250–253: `controlPump()` phát hiện `soilThresholdHigh <= soilThresholdLow` (`src/control.cpp:28`) và thoát ngay, nên qua 2 lần gọi bơm vẫn giữ tắt. Khẳng định bất biến an toàn.
+
+#### T4 — testPumpLowWaterSafety() (dòng 257–272)
+
+**Mục đích:** Kiểm tra an toàn hết nước: nước dưới ngưỡng thì bơm **luôn** bị tắt, kể cả khi người dùng đang bật bơm thủ công — chạy bơm khô sẽ hỏng bơm.
+
+```cpp
+static void testPumpLowWaterSafety() {
+  printf("T4  pump: low-water safety\n");
+  resetState();
+  pumpAuto = false;
+  setRelay(true);
+  CHECK(relayState);
+  gWater = 100;
+  controlPump();
+  CHECK(!relayState);
+
+  pumpAuto = true;
+  gSoil = 100;                 // rất khô nhưng không có nước
+  gWater = 100;
+  controlPump();
+  CHECK(!relayState);
+}
+```
+
+- Dòng 259–262: `resetState()` rồi tắt chế độ tự động (`pumpAuto = false`) và bật bơm bằng tay `setRelay(true)` — xác nhận bơm đang chạy.
+- Dòng 263–265: hạ mức nước xuống 100 < ngưỡng 200 → `controlPump()` ưu tiên an toàn, tắt bơm ngay cả trong chế độ thủ công (`src/control.cpp:17-23`).
+- Dòng 267–271: bật lại auto, đất rất khô (100 < 400) đáng lẽ phải bật bơm, nhưng nước vẫn 100 → vẫn bắt buộc tắt. Qua đó thấy hai lớp bảo vệ: chế độ thủ công và nhu cầu tưới đều phải nhường điều kiện "có nước".
+
+#### T5 — testFanHysteresis() (dòng 275–290)
+
+**Mục đích:** Kiểm tra quạt chạy theo nhiệt độ có trễ (bật trên ngưỡng cao, tắt dưới ngưỡng thấp) và bỏ qua khi ngưỡng bị đảo.
+
+```cpp
+static void testFanHysteresis() {
+  printf("T5  fan: temperature hysteresis\n");
+  resetState();
+  gTemp = 31; controlFan(); CHECK(fanState);
+  gTemp = 27; controlFan(); CHECK(fanState);
+  gTemp = 24; controlFan(); CHECK(!fanState);
+
+  // Ngưỡng đảo không được làm relay bật/tắt liên tục
+  resetState();
+  tempThresholdHigh = 25; tempThresholdLow = 30;
+  gTemp = 27;
+  controlFan();
+  CHECK(!fanState);
+  controlFan();
+  CHECK(!fanState);
+}
+```
+
+- Dòng 278: 31 °C > ngưỡng cao 30 → `controlFan()` bật quạt (`src/control.cpp:47-48`).
+- Dòng 279: 27 °C nằm giữa 25–30 (vùng trễ) → quạt giữ nguyên đang bật, không tắt vội.
+- Dòng 280: 24 °C < ngưỡng thấp 25 → tắt quạt.
+- Dòng 282–284: `resetState()` rồi đảo ngưỡng (`tempThresholdHigh` = 25 < `tempThresholdLow` = 30) — cấu hình sai.
+- Dòng 285–289: `controlFan()` thoát sớm vì `tempThresholdHigh <= tempThresholdLow` (`src/control.cpp:45`) → quạt vẫn tắt qua 2 lần gọi, chống dao động relay.
+
+#### T6 — testLightPirAlerts() (dòng 293–313)
+
+**Mục đích:** Kiểm tra đèn xanh dương tự động theo ánh sáng (ngưỡng ±50), quy tắc PIR được ưu tiên hơn đèn auto, và cảnh báo chuyển động bật/tắt đèn đúng chủ sở hữu.
+
+```cpp
+static void testLightPirAlerts() {
+  printf("T6  light auto / PIR / alerts\n");
+  resetState();
+  gLight = 400;                // tối
+  controlLight();
+  CHECK(blueLedState);
+  gLight = 600;                // sáng
+  controlLight();
+  CHECK(!blueLedState);
+
+  gPir = true;                 // PIR nắm LED: đèn auto phải nhường
+  gLight = 400;
+  controlLight();
+  CHECK(!blueLedState);
+
+  controlAlerts();             // PIR bật đèn
+  CHECK(blueLedState);
+  gPir = false;
+  controlAlerts();             // và tắt khi hết chuyển động
+  CHECK(!blueLedState);
+}
+```
+
+- Dòng 295–298: `resetState()` đặt `lightThreshold` = 500; ánh sáng 400 < 450 (= 500 − 50) → `controlLight()` bật LED (`src/control.cpp:59-60`).
+- Dòng 299–301: ánh sáng 600 > 550 (= 500 + 50) → tắt LED. Hai ngưỡng cách nhau ±50 tạo vùng trễ quanh `lightThreshold`.
+- Dòng 303–306: đặt `gPir = true` (có người chuyển động) → `controlLight()` bỏ qua hoàn toàn (`src/control.cpp:58`) để nhường quyền cho PIR; dù trời tối, đèn auto vẫn không bật ở bước này.
+- Dòng 308–309: `controlAlerts()` là nơi PIR thực sự bật đèn; cờ `sPirLitLed` ghi nhớ "LED này do PIR bật" → đèn sáng.
+- Dòng 310–312: hết chuyển động (`gPir = false`) → `controlAlerts()` chỉ tắt đèn nếu chính PIR là thứ đã bật nó (không tắt đèn do người dùng/auto bật). LED tắt.
+
+#### T7 — testBreatheAndLedModes() (dòng 316–344)
+
+**Mục đích:** Kiểm tra hiệu ứng "thở" của LED (PWM tăng/giảm mượt mỗi 30 ms) và quy tắc phân xử giữa chế độ thở với lệnh sáng đều; đồng thời kiểm tra đường ghi PWM trực tiếp.
+
+```cpp
+static void testBreatheAndLedModes() {
+  printf("T7  LED: steady/breathe modes + PWM dispatch\n");
+  resetState();
+  setBreatheLed(true);
+  CHECK(breatheLedState);
+  CHECK(!blueLedState);
+  CHECK_EQ(currentLedPwm(), 0);
+
+  uint32_t first = 0, peak = 0;
+  for (int i = 0; i < 400; i++) {
+    mockAdvance(BREATHE_INTERVAL);
+    controlBreathe();
+    uint32_t p = currentLedPwm();
+    if (p && !first) first = p;
+    if (p > peak) peak = p;
+  }
+  CHECK_EQ(first, 5);
+  CHECK_EQ(peak, 255);
+
+  setBlueLed(true);            // lệnh sáng đều thắng breathing
+  CHECK(!breatheLedState);
+  CHECK(blueLedState);
+  CHECK_EQ(currentLedPwm(), 255);
+  setBlueLed(false);
+  CHECK_EQ(currentLedPwm(), 0);
+
+  setLedPwm(123);
+  CHECK_EQ(currentLedPwm(), 123);
+}
+```
+
+- Dòng 318–320: `resetState()` rồi `setBreatheLed(true)` → cờ `breatheLedState` bật.
+- Dòng 321: chế độ thở và đèn sáng liên tục loại trừ nhau → `blueLedState` phải `false`.
+- Dòng 322: `currentLedPwm()` (helper dòng 80–86) đọc giá trị PWM cuối cùng đã ghi vào mock; vừa bật thở độ sáng còn 0 nên PWM = 0 (chưa ghi PWM ngay).
+- Dòng 324–331: vòng lặp 400 lần: mỗi lần tua đồng hồ giả `mockAdvance(BREATHE_INTERVAL)` = 30 ms rồi gọi `controlBreathe()`. Firmware tăng/giảm độ sáng 5 đơn vị mỗi 30 ms (`src/control.cpp:96`). Biến `first` lưu giá trị PWM khác 0 đầu tiên, `peak` lưu giá trị lớn nhất.
+- Dòng 332: bước sáng đầu tiên phải là 5 → xác nhận tốc độ tăng PWM đúng 5 mỗi nhịp 30 ms.
+- Dòng 333: đỉnh phải chạm 255 → xác nhận chu kỳ thở lên tới trần PWM 8 bit rồi mới đảo chiều.
+- Dòng 335–338: `setBlueLed(true)` trong lúc đang thở: lệnh sáng đều "thắng", tắt cờ thở và ghi PWM 255 ngay (`src/actuators.cpp:43-49`).
+- Dòng 339–340: tắt đèn sáng đều → PWM về 0.
+- Dòng 342–343: `setLedPwm(123)` ghi thẳng giá trị PWM vào phần cứng; đọc lại đúng 123 → xác nhận đường điều khiển PWM không bị kẹp hay nhầm giá trị.
+
+#### T8 — testTouchToggle() (dòng 347–369)
+
+**Mục đích:** Kiểm tra nút chạm đảo trạng thái LED theo sườn nhấn (không lặp khi giữ), có chống dội (debounce) 300 ms, và thao tác thủ công tự tắt chế độ auto.
+
+```cpp
+static void testTouchToggle() {
+  printf("T8  touch: edge toggle + debounce\n");
+  resetState();
+  mockAdvance(5000);
+  gTouch = true;
+  controlTouch();
+  CHECK(blueLedState);
+  controlTouch();              // giữ: không lặp lại
+  CHECK(blueLedState);
+  gTouch = false;
+  controlTouch();
+  gTouch = true;
+  mockAdvance(TOUCH_DEBOUNCE - 100);
+  controlTouch();              // trong thời gian debounce: lần nhấn bị nuốt
+  CHECK(blueLedState);
+  gTouch = false;
+  controlTouch();              // nhả
+  mockAdvance(200);            // lúc này đã qua cửa sổ debounce
+  gTouch = true;
+  controlTouch();              // tắt
+  CHECK(!blueLedState);
+  CHECK(!lightAuto);           // thao tác thủ công đã tắt auto
+}
+```
+
+- Dòng 350: tua đồng hồ giả 5000 ms để bộ đếm chống dội `lastTouch` (0) chắc chắn đã hết hạn.
+- Dòng 351–353: giả lập nhấn chạm (`gTouch = true`) → `controlTouch()` nhận sườn lên, khoảng cách > 300 ms nên đảo LED (bật) và tắt `lightAuto` (thao tác tay nhường chế độ auto, `src/control.cpp:109-124`).
+- Dòng 354–355: vẫn giữ nhấn và gọi lại → không có sườn mới nên LED không đảo lần hai (chống lặp khi giữ tay).
+- Dòng 356–357: nhả tay — firmware ghi nhớ trạng thái trước đó là "đang nhấn".
+- Dòng 358–361: nhấn lại chỉ sau 200 ms (< `TOUCH_DEBOUNCE` 300 ms) → lần nhấn bị "nuốt" (bỏ qua), LED vẫn sáng.
+- Dòng 362–364: nhả lần nữa rồi tua thêm 200 ms → tổng từ lần nhấn hợp lệ trước đã quá 300 ms.
+- Dòng 365–367: nhấn hợp lệ → đảo LED lần hai (tắt).
+- Dòng 368: `lightAuto` đã bị tắt từ lần nhấn đầu và giữ nguyên `false`.
+
+#### T9 — testRgbPlant() (dòng 372–395)
+
+**Mục đích:** Kiểm tra đèn RGB trồng cây (LED chẵn đỏ, LED lẻ xanh dương) bật khi trời tối, tắt khi trời sáng, và màu thủ công không bị "kẹt" khi chế độ auto bật lại.
+
+```cpp
+static void testRgbPlant() {
+  printf("T9  RGB: plant pattern (activity 9)\n");
+  resetState();
+  setRgb(10, 20, 30);
+  CHECK_EQ(mockPixel[3], (10 << 16) | (20 << 8) | 30);
+
+  gLight = 400;                // tối -> kiểu đèn cho cây
+  controlRgb();
+  CHECK_EQ(mockPixel[0], 0xFF0000);
+  CHECK_EQ(mockPixel[1], 0x0000FF);
+  CHECK_EQ(mockPixel[2], 0xFF0000);
+  CHECK_EQ(mockPixel[3], 0x0000FF);
+  CHECK_EQ(rgbR, 255); CHECK_EQ(rgbG, 0); CHECK_EQ(rgbB, 255);
+
+  gLight = 600;                // sáng -> tắt
+  controlRgb();
+  for (int i = 0; i < RGB_COUNT; i++) CHECK_EQ(mockPixel[i], 0);
+  CHECK_EQ(rgbR, 0); CHECK_EQ(rgbB, 0);
+
+  setRgb(10, 20, 30);          // màu thủ công, rồi tối lại
+  gLight = 400;
+  controlRgb();
+  CHECK_EQ(mockPixel[0], 0xFF0000);
+}
+```
+
+- Dòng 374–376: `setRgb(10, 20, 30)` ghi màu cho cả 4 LED NeoPixel; kiểm tra LED thứ 4 (index 3, tương ứng `RGB_COUNT` = 4) mang đúng màu gói `(R << 16) | (G << 8) | B` = 0x0A141E.
+- Dòng 378–379: trời tối 400 < 450 → `controlRgb()` bật kiểu đèn trồng cây (`src/control.cpp:75-76`).
+- Dòng 380–383: pattern cây: LED index chẵn (0, 2) đỏ `0xFF0000`, index lẻ (1, 3) xanh dương `0x0000FF` (`src/actuators.cpp:93-101`).
+- Dòng 384: `rgbR` = 255, `rgbG` = 0, `rgbB` = 255 — "chữ ký" của pattern cây, để `controlRgb()` nhận biết bằng cách so sánh (`src/control.cpp:73`) thay vì lưu cờ riêng.
+- Dòng 386–388: trời sáng 600 > 550 → `controlRgb()` tắt toàn bộ 4 LED (màu 0).
+- Dòng 389: hai biến trạng thái RGB về 0 tương ứng.
+- Dòng 391–394: đặt màu thủ công (10, 20, 30) rồi cho trời tối lại → `controlRgb()` thấy chưa phải pattern cây (`!plantOn`) nên ghi đè bằng pattern đèn trồng cây — màu thủ công không bị bỏ quên khỏi chế độ auto.
+
+#### T10 — testBuzzerAlarm() (dòng 398–408)
+
+**Mục đích:** Kiểm tra còi báo động kêu khi nước dưới ngưỡng và tắt khi mức nước hồi phục.
+
+```cpp
+static void testBuzzerAlarm() {
+  printf("T10 buzzer: low-water alarm\n");
+  resetState();
+  checkBuzzer(false);
+  gWater = 100;
+  controlAlerts();
+  checkBuzzer(true);
+  gWater = 800;
+  controlAlerts();
+  checkBuzzer(false);
+}
+```
+
+- Dòng 400–401: `resetState()` (nước mặc định 800) rồi `checkBuzzer(false)` — helper dòng 96–103 xác nhận còi đang tắt: build buzzer chủ động kiểm mức chân `BUZZER_PIN`, build buzzer thụ động kiểm tần số tone = 0.
+- Dòng 402–404: nước 100 < ngưỡng 200 → `controlAlerts()` bật còi cảnh báo hết nước (`src/control.cpp:128-134`); cảnh báo nước có ưu tiên trước cảnh báo chuyển động.
+- Dòng 405–407: nâng nước lên 800 → nhánh "đã hết cảnh báo" tắt còi. Cơ chế cạnh lên/xuống chỉ log một lần, không kêu/spam liên tục.
+
+#### T11 — testWindmillSweep() (dòng 411–429)
+
+**Mục đích:** Kiểm tra servo cối xay gió quét qua lại trong biên cho phép (không vượt giới hạn cơ khí) và trở về góc nghỉ khi tắt.
+
+```cpp
+static void testWindmillSweep() {
+  printf("T11 windmill: servo sweep\n");
+  resetState();
+  setWindmill(true);
+  CHECK(windmillOn);
+  int minA = 999, maxA = -1;
+  for (int i = 0; i < 120; i++) {
+    mockAdvance(WINDMILL_INTERVAL);
+    controlWindmill();
+    if (mockServoAngle < minA) minA = mockServoAngle;
+    if (mockServoAngle > maxA) maxA = mockServoAngle;
+  }
+  CHECK(minA >= WINDMILL_MIN_ANGLE);
+  CHECK(maxA <= WINDMILL_MAX_ANGLE);
+  CHECK_EQ(maxA, WINDMILL_MAX_ANGLE);
+  CHECK(minA < maxA);
+  setWindmill(false);
+  CHECK_EQ(mockServoAngle, WINDMILL_MIN_ANGLE);
+}
+```
+
+- Dòng 413–415: `resetState()` rồi `setWindmill(true)` → cờ `windmillOn` bật (`src/control.cpp:165-174`).
+- Dòng 416: khởi tạo `minA`/`maxA` bằng giá trị "giả" (999/−1) để vòng lặp tự cập nhật theo góc thật.
+- Dòng 417–421: 120 lần, mỗi lần tua 30 ms rồi gọi `controlWindmill()`; mỗi bước servo quét 6° (`src/control.cpp:181`). Test ghi lại góc nhỏ nhất và lớn nhất từng thấy trên mock.
+- Dòng 423–424: góc không vượt biên hai phía nhờ clamp trong firmware (`src/control.cpp:182-183`) → cơ cấu không bị kẹt hoặc vượt giới hạn cơ khí.
+- Dòng 425: phải chạm đúng biên trên 180 → xác nhận quét hết biên độ thiết kế.
+- Dòng 426: `minA < maxA` → servo thật sự quét qua lại chứ không đứng yên một góc.
+- Dòng 427–428: tắt cối xay gió → servo được đưa về góc nghỉ `WINDMILL_MIN_ANGLE` = 0 (`src/control.cpp:171`).
+
+#### T12 — testFeedGate() (dòng 432–455)
+
+**Mục đích:** Kiểm tra cửa máng ăn mở đúng `FEED_DURATION` (2000 ms) rồi tự đóng, và phân xử servo dùng chung giữa cửa cho ăn với cối xay gió.
+
+```cpp
+static void testFeedGate() {
+  printf("T12 feed: gate timing + shared servo\n");
+  resetState();
+  startFeed();
+  CHECK(feedRunning());
+  CHECK_EQ(mockServoAngle, FEED_OPEN_ANGLE);
+  mockAdvance(FEED_DURATION - 1);
+  controlFeed();
+  CHECK(feedRunning());
+  mockAdvance(1);
+  controlFeed();
+  CHECK(!feedRunning());
+  CHECK_EQ(mockServoAngle, FEED_CLOSE_ANGLE);
+
+  setWindmill(true);
+  startFeed();                 // cho ăn chiếm servo dùng chung
+  CHECK(feedRunning());
+  CHECK(!windmillOn);
+  CHECK_EQ(mockServoAngle, FEED_OPEN_ANGLE);
+  setWindmill(true);           // cối xay gió lấy lại
+  CHECK(!feedRunning());
+  CHECK(windmillOn);
+  setWindmill(false);
+}
+```
+
+- Dòng 434–437: `startFeed()` mở cửa: cờ feed bật, servo tới `FEED_OPEN_ANGLE` = 90° ngay lập tức.
+- Dòng 438–440: tua 1999 ms (`FEED_DURATION − 1`) rồi `controlFeed()` → cửa còn mở. Đây là kiểm tra biên dưới: chưa đủ 2000 ms thì chưa được đóng.
+- Dòng 441–444: tua thêm đúng 1 ms → tổng 2000 ms = `FEED_DURATION` → `controlFeed()` đóng cửa, servo về `FEED_CLOSE_ANGLE` = 0° (`src/control.cpp:205-208`). Kiểm tra đúng mốc thời gian.
+- Dòng 446–450: bật cối xay gió rồi `startFeed()` — hai cơ cấu dùng chung một servo; `startFeed()` gọi `setWindmill(false)` (`src/control.cpp:192`) → cối xay gió nhường (`windmillOn` = false), cửa mở (servo 90°).
+- Dòng 451–453: bật lại cối xay gió → `setWindmill(true)` gọi `stopFeed()` (`src/control.cpp:169`) → cửa đóng về mặt logic ngay (không cần chờ hết 2 giây) và cối xay gió lấy lại quyền điều khiển servo.
+- Dòng 454: tắt cối xay gió để trả trạng thái sạch cho test kế tiếp.
+
+### 14.3. T13–T15 và D1–D3 — thời tiết, settings, trình diễn, biên, tính bất biến, mốc thời gian (dòng 458–707)
+
+Sáu test trong mục này dùng lại các tiện ích chung đã giới thiệu ở 14.1: `resetState()` (gọi `mockReset()` rồi đưa toàn bộ biến toàn cục về mặc định), `mockAdvance(ms)` (đẩy đồng hồ ảo `millis()` thêm `ms`), `primeSensors()`, `simLoop()`, `checkRelayPin()`/`checkBuzzer()` và `currentLedPwm()`. Bốn macro `CHECK` đã được giải thích ở 14.1 nên không nhắc lại. Các hằng số thời gian lấy từ `src/config.cpp`: `TOUCH_DEBOUNCE = 300`, `BREATHE_INTERVAL = 30`, `WINDMILL_INTERVAL = 30`, `FEED_DURATION = 2000` (ms); các ngưỡng mặc định: `soilThresholdLow = 400`, `soilThresholdHigh = 700`, `waterThresholdLow = 200`, `lightThreshold = 500`, `tempThresholdHigh = 30`, `tempThresholdLow = 25`.
+
+#### T13 — testWeather() (chú thích dòng 457; thân hàm 458–466)
+
+**Mục đích:** Kiểm tra hàm đoán thời tiết `weatherStatus()` (hoạt động 11) phối hợp ánh sáng `gLight` và độ ẩm `gHum` để trả về đúng một trong bốn nhãn `WEATHER_NORMAL/SUNNY/CLOUDY/RAIN`.
+
+```cpp
+// T13: đoán thời tiết (hoạt động 11)
+static void testWeather() {
+  printf("T13 weather: light + humidity guess\n");
+  resetState();
+  gLight = 800; gHum = 50; CHECK_EQ(weatherStatus(), WEATHER_SUNNY);
+  gHum = 90;               CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
+  gLight = 200; gHum = 90; CHECK_EQ(weatherStatus(), WEATHER_RAIN);
+  gHum = 50;               CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
+  gLight = 500;            CHECK_EQ(weatherStatus(), WEATHER_NORMAL);
+}
+```
+
+- Dòng 458: khai báo hàm test.
+- Dòng 459: in tên test ra màn hình.
+- Dòng 460: `resetState()` đưa mọi thứ về mặc định; riêng ở đây cần nhớ `lightThreshold = 500` vì `weatherStatus()` (sensors.cpp:93) so `gLight` với hai mốc 500 ± 50: "sáng" = `gLight > 550`, "tối" = `gLight < 450`, "ẩm" = `gHum > 80.0`.
+- Dòng 461: `gLight = 800` (sáng, vì 800 > 550) và `gHum = 50` (không ẩm) → `WEATHER_SUNNY` (enum = 1). `CHECK_EQ` so số nguyên enum nên nếu sai sẽ in ra giá trị số 0..3.
+- Dòng 462: giữ nguyên độ sáng, đổi `gHum = 90` (> 80, ẩm) → `WEATHER_CLOUDY` (2). Một mình độ ẩm đổi cũng đủ đổi nhãn.
+- Dòng 463: `gLight = 200` (tối, vì 200 < 450), vẫn ẩm → `WEATHER_RAIN` (3).
+- Dòng 464: `gHum = 50` hết ẩm, vẫn tối → `WEATHER_CLOUDY` (2).
+- Dòng 465: `gLight = 500` rơi vào dải chết 450..550 (không sáng, không tối) → `WEATHER_NORMAL` (0), bất kể độ ẩm (lúc này `gHum = 50`).
+- Dòng 466: đóng hàm.
+
+#### T14 — testSettingsRoundtrip() (chú thích dòng 468; thân hàm 469–489)
+
+**Mục đích:** Chứng minh `saveSettings()` rồi `loadSettings()` khôi phục đủ 6 ngưỡng số và 5 cờ chế độ tự động đúng như đã lưu — tức một "vòng tròn" lưu/đọc qua flash giả hoạt động hoàn hảo.
+
+```cpp
+// T14: lưu/đọc settings vòng tròn
+static void testSettingsRoundtrip() {
+  printf("T14 settings: save/load roundtrip\n");
+  resetState();
+  soilThresholdLow = 111; soilThresholdHigh = 222; waterThresholdLow = 133;
+  lightThreshold = 654; tempThresholdHigh = 35.5f; tempThresholdLow = 21.5f;
+  pumpAuto = false; lightAuto = false; rgbAuto = true; fanAuto = false; breatheAuto = true;
+  saveSettings();
+
+  soilThresholdLow = 0; soilThresholdHigh = 0; waterThresholdLow = 0;
+  lightThreshold = 0; tempThresholdHigh = 0; tempThresholdLow = 0;
+  pumpAuto = true; lightAuto = true; rgbAuto = false; fanAuto = true; breatheAuto = false;
+  loadSettings();
+
+  CHECK_NEAR(soilThresholdLow, 111, 0.01);
+  CHECK_NEAR(soilThresholdHigh, 222, 0.01);
+  CHECK_NEAR(waterThresholdLow, 133, 0.01);
+  CHECK_EQ(lightThreshold, 654);
+  CHECK_NEAR(tempThresholdHigh, 35.5, 0.01);
+  CHECK_NEAR(tempThresholdLow, 21.5, 0.01);
+  CHECK(!pumpAuto); CHECK(!lightAuto); CHECK(rgbAuto); CHECK(!fanAuto); CHECK(breatheAuto);
+}
+```
+
+- Dòng 469: khai báo hàm test.
+- Dòng 470: in tên test.
+- Dòng 471: `resetState()` gọi `mockReset()`, trong đó có `memset(sPrefs, ...)` — xoá sạch vùng "flash" giả của mock Preferences, nên test bắt đầu từ trạng thái trắng.
+- Dòng 472–473: gán bộ giá trị cố ý khác hẳn mặc định (111/222/133/654/35.5/21.5 so với 400/700/200/500/30/25). Nhờ vậy, nếu `loadSettings()` thất bại và rơi về giá trị mặc định, các `CHECK` bên dưới sẽ lộ ngay con số mặc định.
+- Dòng 474: đặt các cờ auto theo tổ hợp riêng (`pumpAuto=false`, `lightAuto=false`, `rgbAuto=true`, `fanAuto=false`, `breatheAuto=true`) — đủ cả true lẫn false để kiểm tra cả hai chiều.
+- Dòng 475: gọi `saveSettings()` thật: nó mở `preferences`, ghi 11 khoá (`putFloat` 5 ngưỡng, `putInt` cho `lightThreshold`, `putBool` 5 cờ) rồi đóng lại. Mock Preferences chuyển các lời gọi này thành cặp khoá–giá trị trong mảng `sPrefs`.
+- Dòng 477–479: ghi đè mọi ngưỡng về 0 và đảo toàn bộ cờ so với lúc lưu. Bước này quan trọng: nếu bỏ qua, các `CHECK` có thể "may mắn" đúng nhờ giá trị còn sót trong biến, chứ không chứng minh được gì.
+- Dòng 480: `loadSettings()` đọc lại từ "flash" giả. Lưu ý nó dùng giá trị mặc định cho khoá thiếu (`getFloat("soilLow", 400.0f)`…), nên nếu `saveSettings()` ghi hụt khoá nào thì `CHECK` tương ứng sẽ báo giá trị mặc định.
+- Dòng 482–484: `CHECK_NEAR` với sai số 0.01 cho 3 ngưỡng đất/nước — chúng lưu dạng float nên cần so gần đúng; 111, 222, 133 phải quay về nguyên vẹn.
+- Dòng 485: `lightThreshold` là `int` nên dùng `CHECK_EQ`, yêu cầu đúng 654 (mock lưu float 654.0 rồi `getInt` cắt về int).
+- Dòng 486–487: hai ngưỡng nhiệt độ cũng là float, sai số 0.01, yêu cầu đúng 35.5 và 21.5.
+- Dòng 488: kiểm tra đủ 5 cờ: `pumpAuto` và `lightAuto` phải false, `rgbAuto` true, `fanAuto` false, `breatheAuto` true — chứng minh kiểu bool được bảo toàn (mock lưu 0/1, `getBool` coi khác 0 là true).
+- Dòng 489: đóng hàm.
+
+#### T15 — testDemoFullRun() (chú thích dòng 491; thân hàm 492–542)
+
+**Mục đích:** Chạy trọn một lượt trình diễn `startDemo()`/`updateDemo()` (các hoạt động 2–12) qua `simLoop()`, kiểm tra đủ các bước quan trọng diễn ra và sau khi demo kết thúc mọi cơ cấu phải được trả về trạng thái an toàn; chạy tiếp kịch bản hết nước để chắc chắn bước bơm bị bỏ qua.
+
+```cpp
+// T15: chạy demo đầy đủ (hoạt động 2-12)
+static void testDemoFullRun() {
+  printf("T15 demo: full sequence\n");
+  resetState();
+  primeSensors(900);
+  CHECK(gWater > (int)waterThresholdLow);
+
+  startDemo();
+  CHECK(demoRunning());
+  bool sawRelay = false, inBreatheStep = false;
+  uint32_t breatheMin = 9999, breatheMax = 0;
+  unsigned long cap = mockMillis() + 120000;
+  while (demoRunning() && mockMillis() < cap) {
+    mockAdvance(10);
+    simLoop();
+    if (relayState) sawRelay = true;
+    if (strstr(demoStepName(), "Den tho")) {
+      inBreatheStep = true;
+      uint32_t p = currentLedPwm();
+      if (p > breatheMax) breatheMax = p;
+      if (p < breatheMin) breatheMin = p;
+    }
+  }
+  CHECK(!demoRunning());
+  CHECK(sawRelay);                       // HD7 bơm khi có nước
+  CHECK(inBreatheStep);                  // bước HD3 đã chạy
+  CHECK(breatheMax > 0);                 // và LED thực sự breathing
+  CHECK(breatheMin < breatheMax);
+  CHECK(!relayState);
+  CHECK(!blueLedState);
+  CHECK(!breatheLedState);
+  CHECK_EQ(mockServoAngle, WINDMILL_MIN_ANGLE);
+  CHECK_EQ(currentLedPwm(), 0);
+  checkBuzzer(false);
+  CHECK_EQ(mockPixel[0], 0);
+
+  // Hết nước: bước bơm phải bị bỏ qua suốt lượt chạy
+  resetState();
+  primeSensors(100);
+  CHECK(gWater < (int)waterThresholdLow);
+  startDemo();
+  sawRelay = false;
+  cap = mockMillis() + 120000;
+  while (demoRunning() && mockMillis() < cap) {
+    mockAdvance(10);
+    simLoop();
+    if (relayState) sawRelay = true;
+  }
+  CHECK(!demoRunning());
+  CHECK(!sawRelay);
+  checkBuzzer(false);
+}
+```
+
+- Dòng 492: khai báo hàm test.
+- Dòng 493: in tên test.
+- Dòng 494: `resetState()` — nền sạch, `breatheAuto = false` (quan trọng cho phần kiểm tra trạng thái cuối demo).
+- Dòng 495: `primeSensors(900)` nạp DHT 26.0 °C / 60 %, ADC LDR = 1000, SOIL = 600, WATER = 900 (tự đảo theo `INVERT_WATER`), rồi đọc `SENSOR_FILTER_SIZE` lần cho bộ lọc trung bình đầy và đồng bộ `lastSensorRead`.
+- Dòng 496: `CHECK(gWater > (int)waterThresholdLow)` — nước 900 > 200, điều kiện để bước bơm HD7 thực sự được phép chạy.
+- Dòng 498: `startDemo()` — code thật dừng cối xay gió/cửa cho ăn, đặt `sRunning = true`, bước 0 (HD2) và thực thi hành động vào của bước.
+- Dòng 499: `CHECK(demoRunning())` — demo đã chuyển sang trạng thái chạy.
+- Dòng 500: hai cờ theo dõi: `sawRelay` (đã từng thấy bơm chạy chưa) và `inBreatheStep` (đã bước vào bước thở chưa).
+- Dòng 501: `breatheMin` khởi tạo 9999, `breatheMax` khởi tạo 0 để ghi nhận khoảng PWM của hiệu ứng thở.
+- Dòng 502: `cap = mockMillis() + 120000` — mốc chặn 120 000 ms mô phỏng; nếu demo bị "kẹt" không kết thúc, vòng lặp vẫn thoát và các `CHECK` sau sẽ báo lỗi thay vì treo test.
+- Dòng 503–513: vòng lặp cho tới khi demo xong hoặc quá hạn:
+  - Dòng 504: `mockAdvance(10)` — đẩy đồng hồ ảo thêm 10 ms (demo dùng `millis()` nên thời gian phải được đẩy mới có tiến triển).
+  - Dòng 505: `simLoop()` — mô phỏng đúng phần điều khiển mỗi vòng của `loop()`: đọc chạm/PIR, đọc cảm biến mỗi `SENSOR_INTERVAL` (1000 ms), cắt bơm khi hết nước, và vì demo đang chạy nên gọi `updateDemo()` + `controlBreathe()`.
+  - Dòng 506: nếu `relayState` bật ở bất kỳ thời điểm nào → đánh dấu `sawRelay` (chứng minh bước HD7 đã thực sự đóng relay).
+  - Dòng 507–512: khi tên bước hiện tại chứa "Den tho" (bước HD3, tên không dấu "HD3: Den tho PWM"), bật cờ `inBreatheStep` và cập nhật `breatheMin`/`breatheMax` từ `currentLedPwm()`.
+- Dòng 514: `CHECK(!demoRunning())` — demo đã tự kết thúc trong hạn 120 s, tức state machine của `updateDemo()` chạy hết 15 bước.
+- Dòng 515: `CHECK(sawRelay)` — có nước nên bước HD7 đã bật bơm thật.
+- Dòng 516: `CHECK(inBreatheStep)` — bước HD3 (đèn thở PWM) đã chạy.
+- Dòng 517: `CHECK(breatheMax > 0)` — PWM thở từng lớn hơn 0, tức LED thực sự sáng.
+- Dòng 518: `CHECK(breatheMin < breatheMax)` — PWM biến thiên (không phải hằng số), đúng bản chất hiệu ứng thở tăng/giảm dần.
+- Dòng 519: `CHECK(!relayState)` — bơm đã tắt (bước HD7 có hành động ra `DA_PUMP_OFF`, và phần dọn cuối demo cũng `setRelay(false)`).
+- Dòng 520: `CHECK(!blueLedState)` — LED xanh đã tắt trong phần dọn cuối demo.
+- Dòng 521: `CHECK(!breatheLedState)` — chế độ thở cũng đã tắt; vì `breatheAuto = false` nên không được bật lại.
+- Dòng 522: servo phải về đúng `WINDMILL_MIN_ANGLE` (0) — không để cánh gió/cửa cho ăn kẹt ở góc giữa.
+- Dòng 523: `CHECK_EQ(currentLedPwm(), 0)` — PWM LED về 0, không còn dòng điện dư.
+- Dòng 524: `checkBuzzer(false)` — còi tắt (bước HD8 bật còi đã được tắt khi kết thúc bước).
+- Dòng 525: `CHECK_EQ(mockPixel[0], 0)` — dải LED RGB đã tắt về màu đen.
+- Dòng 527: chú thích mở kịch bản thứ hai: hết nước.
+- Dòng 528–530: `resetState()`, `primeSensors(100)` (nước cạn), `CHECK(gWater < (int)waterThresholdLow)` — xác nhận 100 < 200, tức điều kiện an toàn đã đúng.
+- Dòng 531: `startDemo()` — chạy lại toàn bộ trình diễn.
+- Dòng 532–533: đặt lại `sawRelay = false` và đặt hạn mới 120 000 ms.
+- Dòng 534–538: vòng lặp tương tự, chỉ theo dõi `relayState`. Bên trong `demoAction()` (demo.cpp:59), hành động `DA_PUMP_ON` kiểm tra `gWater >= waterThresholdLow` trước khi `setRelay(true)`, ngược lại chỉ ghi cảnh báo — nên relay phải không bao giờ bật.
+- Dòng 539: `CHECK(!demoRunning())` — demo vẫn kết thúc bình thường dù bước bơm bị bỏ qua.
+- Dòng 540: `CHECK(!sawRelay)` — điểm cốt lõi: suốt lượt chạy demo hết nước, relay không hề bật một lần nào (không chạy bơm khô, bảo vệ bơm).
+- Dòng 541: `checkBuzzer(false)` — sau demo còi phải im (bước HD8 bật rồi tự tắt khi hết bước).
+- Dòng 542: đóng hàm.
+
+#### D1 — testBoundaries() (chú thích dòng 544; thân hàm 545–590)
+
+**Mục đích:** Kiểm tra từng ngưỡng điều khiển tại **đúng giá trị biên**: giá trị bằng ngưỡng phải xử sự khác giá trị lệch một đơn vị, đúng theo các phép so sánh nghiêm ngặt (`<`, `>`) trong code thật. Đây là các test bắt lỗi "off-by-one" — nếu code viết nhầm `<=`/`>=`, bơm/quạt/đèn sẽ đóng ngắt ngay tại ranh giới và gây nhấp nháy.
+
+```cpp
+// D1: biên ngưỡng chính xác
+static void testBoundaries() {
+  printf("D1  boundary: exact threshold comparisons\n");
+
+  // Bơm: so sánh nghiêm ngặt < / >
+  resetState();
+  gWater = 900;
+  gSoil = 400; controlPump(); CHECK(!relayState);            // == low: không khởi động
+  gSoil = 399; controlPump(); CHECK(relayState);             // < low: khởi động
+  gSoil = 700; controlPump(); CHECK(relayState);             // == high: vẫn bật
+  gSoil = 701; controlPump(); CHECK(!relayState);            // > high: dừng
+  gWater = 200; gSoil = 399; controlPump(); CHECK(relayState);  // == waterLow: được phép
+  gWater = 199; controlPump(); CHECK(!relayState);           // < waterLow: bị chặn
+
+  // Quạt: nghiêm ngặt > / <
+  resetState();
+  gTemp = 30;    controlFan(); CHECK(!fanState);             // == high: không khởi động
+  gTemp = 30.01f; controlFan(); CHECK(fanState);             // > high: khởi động
+  gTemp = 25;    controlFan(); CHECK(fanState);              // == low: vẫn bật
+  gTemp = 24.99f; controlFan(); CHECK(!fanState);            // < low: dừng
+
+  // Đèn: ngưỡng +/- 50 với so sánh nghiêm ngặt
+  resetState();
+  gLight = 450; controlLight(); CHECK(!blueLedState);        // == t-50: không bật
+  gLight = 449; controlLight(); CHECK(blueLedState);         // < t-50: bật
+  gLight = 550; controlLight(); CHECK(blueLedState);         // == t+50: vẫn bật
+  gLight = 551; controlLight(); CHECK(!blueLedState);        // > t+50: tắt
+
+  // Thời tiết: cùng dải +/- 50 và độ ẩm > 80
+  resetState();
+  gHum = 50;
+  gLight = 550; CHECK_EQ(weatherStatus(), WEATHER_NORMAL);
+  gLight = 551; CHECK_EQ(weatherStatus(), WEATHER_SUNNY);
+  gLight = 450; CHECK_EQ(weatherStatus(), WEATHER_NORMAL);
+  gLight = 449; CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
+  gHum = 80;    CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);   // == 80 không tính là ẩm
+  gHum = 81;    CHECK_EQ(weatherStatus(), WEATHER_RAIN);
+  gLight = 551; CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
+  gHum = 50.5f; CHECK_EQ(weatherStatus(), WEATHER_SUNNY);
+
+  // Còi: nghiêm ngặt < waterLow
+  resetState();
+  gPir = false;
+  gWater = 200; controlAlerts(); checkBuzzer(false);
+  gWater = 199; controlAlerts(); checkBuzzer(true);
+  gWater = 200; controlAlerts(); checkBuzzer(false);
+}
+```
+
+- Dòng 545–546: khai báo hàm test và in tên test.
+- Dòng 548: chú thích nhóm bơm — code thật (`controlPump()`, control.cpp:31/34) bật khi `gSoil < low` và tắt khi `gSoil > high`, đều là so sánh nghiêm ngặt.
+- Dòng 549–550: `resetState()`; `gWater = 900` (đủ nước để không kích hoạt nhánh an toàn).
+- Dòng 551: `gSoil = 400` **đúng bằng** `soilThresholdLow` → `CHECK(!relayState)`: chưa được bật vì cần nhỏ hơn thật sự.
+- Dòng 552: `gSoil = 399` (lệch đúng 1) → bơm bật. Đây là chứng minh biên dưới là `<` chứ không phải `<=`.
+- Dòng 553: `gSoil = 700` **đúng bằng** `soilThresholdHigh` → vẫn bật, vì chỉ tắt khi lớn hơn thật sự.
+- Dòng 554: `gSoil = 701` → tắt. Cặp 700/701 chứng minh biên trên là `>`.
+- Dòng 555: `gWater = 200` **đúng bằng** `waterThresholdLow` → vẫn được phép bật bơm; an toàn nước chỉ chặn khi nhỏ hơn thật sự (control.cpp:17).
+- Dòng 556: `gWater = 199` → bơm bị tắt ngay lập tức (nhánh an toàn). Cặp 200/199 là biên sống còn: chỉ lệch 1 đơn vị ADC nhưng quyết định bơm có được chạy khô hay không.
+- Dòng 558: chú thích nhóm quạt — `controlFan()` dùng `gTemp > high` để bật và `gTemp < low` để tắt.
+- Dòng 559: `resetState()` đưa `tempThresholdHigh = 30`, `tempThresholdLow = 25`.
+- Dòng 560: `gTemp = 30` đúng bằng ngưỡng cao → không bật.
+- Dòng 561: `gTemp = 30.01f` (hơn đúng 0.01) → bật; chứng minh ngưỡng cao cũng nghiêm ngặt.
+- Dòng 562: `gTemp = 25` đúng bằng ngưỡng thấp → quạt vẫn chạy (chưa tắt).
+- Dòng 563: `gTemp = 24.99f` → tắt. Dải 25..30 là vùng trễ (hysteresis) chống quạt bật/tắt liên tục.
+- Dòng 565–570: nhóm đèn xanh: `controlLight()` bật khi `gLight < lightThreshold − 50` và tắt khi `gLight > lightThreshold + 50` (mặc định 500 → hai mốc 450 và 550):
+  - Dòng 567: `gLight = 450` đúng bằng mốc dưới → không bật.
+  - Dòng 568: `449` → bật.
+  - Dòng 569: `550` đúng bằng mốc trên → vẫn bật.
+  - Dòng 570: `551` → tắt. Dải chết 450..550 rộng 100 đơn vị ADC để đèn không nhấp nháy khi ánh sáng dao động quanh ngưỡng.
+- Dòng 572–582: nhóm thời tiết dùng lại đúng hai mốc ±50 và ngưỡng ẩm > 80:
+  - Dòng 574: `gHum = 50` (khô).
+  - Dòng 575: `gLight = 550` — không sáng (550 không > 550), không tối → `WEATHER_NORMAL` (0).
+  - Dòng 576: `551` → sáng, khô → `WEATHER_SUNNY` (1).
+  - Dòng 577: `450` — không tối (450 không < 450) → `WEATHER_NORMAL`.
+  - Dòng 578: `449` → tối, khô → `WEATHER_CLOUDY` (2).
+  - Dòng 579: `gHum = 80` **đúng bằng 80** → vẫn không tính là ẩm (điều kiện là `> 80.0`), trời tối → `WEATHER_CLOUDY`.
+  - Dòng 580: `gHum = 81` → ẩm, tối → `WEATHER_RAIN` (3).
+  - Dòng 581: `gLight = 551` (sáng) + ẩm → `WEATHER_CLOUDY` (2) — cùng độ ẩm nhưng sáng thì là "âm u", tối mới là "mưa".
+  - Dòng 582: `gHum = 50.5f` (khô) + sáng → `WEATHER_SUNNY`. Cặp 80/81 và 50.5 kiểm tra cả ngưỡng ẩm lẫn việc độ ẩm thập phân không làm sai nhánh.
+- Dòng 584: chú thích nhóm còi: cảnh báo dùng đúng điều kiện `gWater < waterThresholdLow` như nhánh an toàn của bơm.
+- Dòng 585–586: `resetState()`; `gPir = false` để nhánh đèn PIR không can thiệp, chỉ kiểm tra còi.
+- Dòng 587: `gWater = 200` đúng bằng ngưỡng → `checkBuzzer(false)`, còi im.
+- Dòng 588: `gWater = 199` → `checkBuzzer(true)`, còi kêu; biên cảnh báo khớp chính xác biên an toàn của bơm.
+- Dòng 589: `gWater = 200` trở lại → `checkBuzzer(false)`: còi phải tắt khi nước hồi phục, không được "kẹt kêu".
+- Dòng 590: đóng hàm.
+
+#### D2 — testIdempotency() (chú thích dòng 592; thân hàm 593–653)
+
+**Mục đích:** Chứng minh mọi hàm setter của cơ cấu chấp hành có tính **idempotent**: gọi lại lệnh cũ với cùng trạng thái thì không ghi chân, không phát xung, không làm gì thêm. Đồng thời kiểm tra mức điện áp chân đúng với logic đã ghi.
+
+```cpp
+// D2: tính idempotent của actuator + nhất quán dây chân
+static void testIdempotency() {
+  printf("D2  actuators: idempotency + pin levels\n");
+  resetState();
+  setRelay(false);
+  setFan(false);
+  setBuzzer(false);
+  setBlueLed(false);
+  setBreatheLed(false);
+
+  int d0 = mockDigitalWriteCount;
+  setRelay(true);
+  CHECK_EQ(mockDigitalWriteCount, d0 + 1);
+  setRelay(true);                                // idempotent: không ghi lại
+  CHECK_EQ(mockDigitalWriteCount, d0 + 1);
+  checkRelayPin(true);
+  setRelay(false);
+  CHECK_EQ(mockDigitalWriteCount, d0 + 2);
+  checkRelayPin(false);
+
+  int d1 = mockDigitalWriteCount;
+  setFan(true);
+  CHECK_EQ(mockDigitalWriteCount, d1 + 1);
+  setFan(true);
+  CHECK_EQ(mockDigitalWriteCount, d1 + 1);
+  CHECK_EQ(mockPinLevel[FAN_PIN], HIGH);
+  setFan(false);
+  CHECK_EQ(mockDigitalWriteCount, d1 + 2);
+  CHECK_EQ(mockPinLevel[FAN_PIN], LOW);
+
+#if BUZZER_PASSIVE
+  int t0 = mockToneCalls, n0 = mockNoToneCalls;
+  setBuzzer(true);
+  setBuzzer(true);
+  CHECK_EQ(mockToneCalls, t0 + 1);
+  checkBuzzer(true);
+  setBuzzer(false);
+  CHECK_EQ(mockNoToneCalls, n0 + 1);
+  checkBuzzer(false);
+#else
+  int d2 = mockDigitalWriteCount;
+  setBuzzer(true);
+  setBuzzer(true);
+  CHECK_EQ(mockDigitalWriteCount, d2 + 1);
+  checkBuzzer(true);
+  setBuzzer(false);
+  CHECK_EQ(mockDigitalWriteCount, d2 + 2);
+  checkBuzzer(false);
+#endif
+
+  setBlueLed(true);
+  int p0 = mockLedcWriteCount;
+  setBlueLed(true);                              // idempotent: không ghi lại
+  CHECK_EQ(mockLedcWriteCount, p0);
+  CHECK_EQ(currentLedPwm(), 255);
+  setBlueLed(false);
+  CHECK_EQ(currentLedPwm(), 0);
+  setBreatheLed(false);
+  int p1 = mockLedcWriteCount;
+  setBreatheLed(false);                          // đã tắt: không làm gì
+  CHECK_EQ(mockLedcWriteCount, p1);
+}
+```
+
+"Gọi lại lệnh cũ không tạo thêm tác động" nghĩa là: nếu trạng thái mục tiêu đã đúng (ví dụ bơm đang chạy mà lại ra lệnh `setRelay(true)`), setter thoát ngay ở dòng `if (relayState == on) return;` (actuators.cpp:10) — không ghi lại chân GPIO, không phát lại xung, không ghi thêm log. Điều này quan trọng vì `controlAlerts()`/`controlLight()`… được gọi mỗi vòng `loop()`, tức setter bị gọi liên tục với cùng một trạng thái; nếu không idempotent thì chân relay bị giật điện liên tục (nghe lạch cạch, giảm tuổi thọ relay), servo bị rung, buzzer bị phát lại xung, log tràn cổng serial và CPU bị đốt vô ích.
+
+- Dòng 593–594: khai báo hàm test và in tên test.
+- Dòng 595–600: `resetState()` (đã đặt mọi trạng thái về false) rồi chủ động gọi 5 setter về false. Vì trạng thái đã false sẵn, cả 5 lời gọi đều thoát sớm — cũng là minh hoạ idempotent, và quan trọng hơn là để chốt trạng thái chắc chắn trước khi đo.
+- Dòng 602: `d0 = mockDigitalWriteCount` — chốt mốc đếm số lần `digitalWrite()` đã xảy ra.
+- Dòng 603–604: `setRelay(true)` ghi chân một lần → bộ đếm tăng đúng 1.
+- Dòng 605–606: gọi lại `setRelay(true)` khi relay đã bật → bộ đếm **không đổi** (`d0 + 1`). Đây là phép kiểm tra idempotent cốt lõi.
+- Dòng 607: `checkRelayPin(true)` — xác nhận mức chân thật đúng (đã tính cực tính `RELAY_ACTIVE_LOW`: active-low thì bật = LOW).
+- Dòng 608–610: tắt relay → bộ đếm `d0 + 2` (thêm đúng 1 lần ghi), mức chân đổi theo.
+- Dòng 612–616: làm lại kịch bản với quạt: bật ghi 1 lần, gọi lặp không ghi thêm.
+- Dòng 617: `CHECK_EQ(mockPinLevel[FAN_PIN], HIGH)` — quạt dùng logic thường, bật = mức HIGH.
+- Dòng 618–620: tắt quạt → thêm 1 lần ghi, chân xuống LOW.
+- Dòng 622–640: khối còi chia hai nhánh biên dịch tuỳ loại buzzer:
+  - Nhánh `#if BUZZER_PASSIVE` (build `--full` với `-DBUZZER_PASSIVE=1`): đếm `mockToneCalls`/`mockNoToneCalls`; gọi `setBuzzer(true)` hai lần chỉ phát đúng 1 `tone()`, tắt phát đúng 1 `noTone()`.
+  - Nhánh `#else` (build mặc định, buzzer chủ động): bật hai lần chỉ 1 `digitalWrite`, tắt thêm 1; `checkBuzzer()` xác nhận chân/mức đúng.
+- Dòng 642–646: `setBlueLed(true)` lần đầu ghi PWM 255; chốt `p0 = mockLedcWriteCount` rồi gọi lại `setBlueLed(true)` khi đèn đã sáng → `mockLedcWriteCount` không đổi. `currentLedPwm() == 255` xác nhận độ sáng tối đa.
+- Dòng 647–648: tắt đèn → PWM về 0 (đọc từ `mockPwm` qua `currentLedPwm()`).
+- Dòng 649–652: `setBreatheLed(false)` khi chế độ thở đang tắt → thoát sớm, không ghi PWM; chốt `p1` trước và gọi lại lần nữa cũng không đổi bộ đếm. Chốt lại: cùng một trạng thái, gọi bao nhiêu lần cũng không sinh thêm tác động vật lý.
+- Dòng 653: đóng hàm.
+
+#### D3 — testTimingBoundaries() (chú thích dòng 655; thân hàm 656–706)
+
+**Mục đích:** Kiểm tra chính xác các **mốc thời gian**: đúng `TOUCH_DEBOUNCE − 1` thì chưa xảy ra, đúng `TOUCH_DEBOUNCE` thì xảy ra; tương tự cho cửa cho ăn, hiệu ứng thở, cối xay gió; và ghi servo đúng tại hai góc biên 0°/180°.
+
+```cpp
+// D3: biên thời gian chính xác + ghi servo tại các mốc biên
+static void testTimingBoundaries() {
+  printf("D3  timing: exact interval boundaries\n");
+
+  // Debounce chạm: >= TOUCH_DEBOUNCE
+  resetState();
+  mockAdvance(10000);
+  gTouch = false; controlTouch();
+  lastTouch = mockMillis();
+  setBlueLed(false);
+  gTouch = true; controlTouch();                  // delta 0: bị nuốt
+  CHECK(!blueLedState);
+  gTouch = false; controlTouch();
+  mockAdvance(TOUCH_DEBOUNCE - 1);                // 299: bị nuốt
+  gTouch = true; controlTouch();
+  CHECK(!blueLedState);
+  gTouch = false; controlTouch();
+  mockAdvance(1);                                 // đúng 300: được phép
+  gTouch = true; controlTouch();
+  CHECK(blueLedState);
+
+  // Cửa cho ăn: đóng đúng tại FEED_DURATION
+  resetState();
+  startFeed();
+  mockAdvance(FEED_DURATION - 1); controlFeed(); CHECK(feedRunning());
+  mockAdvance(1);                 controlFeed(); CHECK(!feedRunning());
+
+  // Breathing: cập nhật đầu tiên đúng tại BREATHE_INTERVAL
+  resetState();
+  setBreatheLed(true);
+  setLedPwm(0);
+  lastBreatheUpdate = mockMillis();
+  mockAdvance(BREATHE_INTERVAL - 1); controlBreathe(); CHECK_EQ(currentLedPwm(), 0);
+  mockAdvance(1);                    controlBreathe(); CHECK_EQ(currentLedPwm(), 5);
+  setBreatheLed(false);
+
+  // Cối xay gió: bước quét chạy đúng tại WINDMILL_INTERVAL
+  resetState();
+  setWindmill(true);
+  mockAdvance(1000);
+  controlWindmill();                              // đồng bộ timer khoảng thời gian
+  int c0 = mockServoWriteCount;
+  mockAdvance(WINDMILL_INTERVAL - 1); controlWindmill(); CHECK_EQ(mockServoWriteCount, c0);
+  mockAdvance(1);                     controlWindmill(); CHECK_EQ(mockServoWriteCount, c0 + 1);
+  setWindmill(false);
+
+  // Ghi servo tại đúng các mốc biên
+  resetState();
+  servoAngle = 0;   servo.write(servoAngle);   CHECK_EQ(mockServoAngle, 0);
+  servoAngle = 180; servo.write(servoAngle);   CHECK_EQ(mockServoAngle, 180);
+  servoAngle = 0;   servo.write(servoAngle);
+}
+```
+
+Vì sao phải dùng `mockAdvance` và kiểm tra đúng giá trị biên: firmware ra quyết định theo `millis()` (đồng hồ ảo trong test). `mockAdvance(n)` cộng thẳng `n` ms vào đồng hồ đó một cách tất định — không chờ thật, không phụ thuộc tốc độ máy, nên có thể kiểm chứng chính xác từng mốc ±1 ms. Kiểm tra đúng 29 ms "chưa đổi" và đúng 30 ms "mới đổi" bảo vệ chống lỗi off-by-one: nếu code viết `>` thay vì `>=`, thiết bị sẽ phản ứng chậm hơn một chu kỳ; còn nếu cập nhật mỗi vòng lặp không kiểm tra thời gian thì PWM/servo bị ghi dồn dập, gây nhiễu và tốn CPU.
+
+- Dòng 656–657: khai báo hàm test và in tên test.
+- Dòng 659: chú thích nhóm chạm — `controlTouch()` cho phép nhấn mới khi `now − lastTouch >= TOUCH_DEBOUNCE`.
+- Dòng 660–661: `resetState()` (đồng hồ ảo về 0), rồi `mockAdvance(10000)` đưa đồng hồ lên mốc 10 000 ms để không dính các mốc 0.
+- Dòng 662: `gTouch = false; controlTouch();` — nhả chạm trước, chốt `sPrevTouch = false` bên trong hàm (biến static có thể còn giá trị từ test trước), đảm bảo lần nhấn sau là sườn lên thật.
+- Dòng 663: `lastTouch = mockMillis()` — đồng bộ mốc thời gian debounce bằng tay để phép đo delta bắt đầu từ đúng 10 000 ms.
+- Dòng 664: `setBlueLed(false)` — tắt đèn chắc chắn (đã tắt nên không ghi).
+- Dòng 665–666: nhấn ngay (`delta = 0`) → bị nuốt, đèn không bật. Biên dưới của debounce.
+- Dòng 667: nhả chạm để lần nhấn kế tiếp lại là sườn lên.
+- Dòng 668–670: đẩy đúng `TOUCH_DEBOUNCE − 1` = 299 ms rồi nhấn → vẫn bị nuốt. Đây là điểm "29 ms chưa đổi" của debounce chạm.
+- Dòng 671: nhả chạm.
+- Dòng 672–674: đẩy thêm đúng 1 ms → tổng 300 ms, vừa đủ `TOUCH_DEBOUNCE`; nhấn → được chấp nhận, đèn bật. Nếu code dùng `>` thay vì `>=`, test này sẽ thất bại ngay.
+- Dòng 676: chú thích nhóm cửa cho ăn.
+- Dòng 677–678: `resetState()` (đồng hồ về 0); `startFeed()` mở cửa tại mốc 0 và ghi góc mở.
+- Dòng 679: sau 1999 ms (`FEED_DURATION − 1`), `controlFeed()` → vẫn đang mở.
+- Dòng 680: thêm đúng 1 ms → tổng 2000 ms, cửa đóng đúng hạn. Sai một nhịp là thời lượng mở máng ăn lệch khỏi thiết kế.
+- Dòng 682: chú thích nhóm thở PWM.
+- Dòng 683–685: `resetState()`; `setBreatheLed(true)` bật chế độ thở (đặt độ sáng 0, hướng +1); `setLedPwm(0)` ghi PWM 0 để có mốc so sánh.
+- Dòng 686: `lastBreatheUpdate = mockMillis()` — đồng bộ mốc cập nhật, vì biến này là biến toàn cục có thể còn giá trị từ test trước; đây là lý do phải gán tay thay vì tin vào trạng thái cũ.
+- Dòng 687: sau `BREATHE_INTERVAL − 1` = 29 ms, `controlBreathe()` chưa cập nhật → PWM vẫn đúng 0.
+- Dòng 688: thêm 1 ms → đúng 30 ms, cập nhật đầu tiên chạy: độ sáng 0 + 5 = 5 → PWM bằng 5. Đúng cả mốc thời gian lẫn bước tăng 5.
+- Dòng 689: tắt chế độ thở để dọn trạng thái.
+- Dòng 691: chú thích nhóm cối xay gió.
+- Dòng 692–694: `resetState()`; `setWindmill(true)`; đẩy 1000 ms.
+- Dòng 695: gọi `controlWindmill()` một lần để **đồng bộ mốc timer**: `sWindmillUpdate` là static, có thể đang giữ mốc cũ từ T11/T12; sau lời gọi này nó bằng mốc hiện tại, và lần ghi servo này không được tính vào phép đo.
+- Dòng 696: `c0 = mockServoWriteCount` — chốt số lần ghi servo.
+- Dòng 697: sau đúng 29 ms (`WINDMILL_INTERVAL − 1`), bộ đếm ghi servo không đổi — chưa tới chu kỳ quét.
+- Dòng 698: thêm đúng 1 ms → đủ 30 ms, ghi servo thêm đúng 1 lần (`c0 + 1`). Nhờ đếm số lần ghi, test chứng minh không có lần ghi thừa nào giữa hai mốc.
+- Dòng 699: tắt cối xay gió.
+- Dòng 701–705: kiểm tra ghi servo tại đúng hai mốc biên hành trình: ghi 0° → mock nhận đúng 0; ghi 180° → mock nhận đúng 180; rồi trả servo về 0°. Hai góc biên là giới hạn cơ khí, ghi lệch có thể làm kẹt bánh răng servo.
+- Dòng 706: đóng hàm.
+
+### 14.4. I1–I10 — integration test qua setup()/loop() thật (dòng 708–952)
+
+Khác với các unit test ở mục trước (gọi thẳng từng hàm), nhóm test I1–I10 chạy **firmware thật**: gọi `setup()` và `loop()` của SmartFarm.ino, gọi thẳng các handler HTTP đã đăng ký. Ba "đồ nghề" dùng chung của nhóm này (đã định nghĩa ở dòng 144–162):
+
+- `invoke(path, ...)` — "gõ URL" trong test: đặt tham số truy vấn giả bằng `mockServerSetArg()`, gọi handler của route bằng `mockServerInvoke()` (trả về `true` nếu route tồn tại; nếu không, `invoke` tự đánh dấu FAIL), rồi trả mã HTTP mà handler đã `send()`.
+- `runLoop(ms)` — chạy vòng `loop()` thật trong thời gian mô phỏng: mỗi bước 10 ms gọi `mockAdvance()` (đẩy đồng hồ giả) rồi `loop()`.
+- `has(chuỗi, mẫu)` — dò chuỗi con bằng `strstr` (xem dòng 69–71).
+
+`setup()` chỉ được gọi **một lần duy nhất** ở I1; từ I2 trở đi các test tận dụng 14 route đã đăng ký sẵn đó. Bốn macro CHECK đã giải thích ở mục 14.1, không nhắc lại.
+
+#### I1 — testInoBoot() (dòng 713–724)
+
+**Mục đích:** Chạy `setup()` đúng một lần để xác nhận firmware khởi động đăng ký đủ 14 route HTTP và in banner/menu ra Serial.
+
+```cpp
+static void testInoBoot() {
+  printf("I1  boot: setup() registers routes\n");
+  mockSerialClear();
+  mockServerReset();
+  setup();
+  CHECK_EQ(mockServerRouteCount(), 14);
+  const char *routes[] = {"/", "/api", "/toggle", "/auto", "/rgb", "/servo", "/breathe",
+                          "/on", "/off", "/windmill", "/feed", "/demo", "/threshold", "/favicon.ico"};
+  for (const char *r : routes) CHECK(mockServerHasRoute(r));
+  CHECK(has(mockSerialOutput(), "SMART FARM DEBUG MENU"));
+  CHECK(has(mockSerialOutput(), "System ready"));
+}
+```
+
+- Dòng 714: in mốc tên test để dễ đọc log khi chạy.
+- Dòng 715: `mockSerialClear()` xóa cả output lẫn buffer nhập giả của Serial — nhờ vậy phần kiểm tra sau chỉ thấy đúng những gì `setup()` in ra.
+- Dòng 716: `mockServerReset()` xóa sạch bảng route giả + tham số + response cuối; mục đích là buộc `setup()` phải tự đăng ký lại từ đầu, nhờ đó con số đếm được ở dòng 718 mới đáng tin.
+- Dòng 717: gọi `setup()` thật của firmware (bật Serial, cấu hình GPIO/PWM, OLED, nạp cài đặt, WiFi, đăng ký route). Đây là lần gọi `setup()` duy nhất của nhóm I1–I10.
+- Dòng 718: sau `setup()` phải có **đúng 14 route** — khớp đúng 14 lệnh `server.on(...)` trong SmartFarm.ino (dòng 140–153).
+- Dòng 719–720: mảng 14 đường dẫn mong đợi: trang gốc `/`, API `/api`, các nút điều khiển, và `/favicon.ico`.
+- Dòng 721: duyệt mảng, từng route một phải tồn tại trong mock (`mockServerHasRoute` trả về `false` thì CHECK báo FAIL).
+- Dòng 722: Serial phải chứa chuỗi `"SMART FARM DEBUG MENU"` — do `printDebugMenu()` in ở cuối `setup()`.
+- Dòng 723: Serial phải chứa `"System ready"` — dòng log cuối cùng của `setup()`.
+
+#### I2 — testHttpApi() (dòng 727–749)
+
+**Mục đích:** Chốt "hợp đồng" JSON của route `/api`: đúng kiểu nội dung, đủ trường, giá trị khớp với trạng thái giả đã biết.
+
+```cpp
+static void testHttpApi() {
+  printf("I2  http: /api JSON\n");
+  gTemp = 26.5f; gHum = 61.2f;
+  gLight = 800; gSoil = 650; gWater = 900;
+  gPir = true; gTouch = false;
+  CHECK_EQ(invoke("/api"), 200);
+  CHECK_STR(mockServerLastType(), "application/json");
+  const char *b = mockServerLastBody();
+  CHECK(has(b, "\"temp\":26.5"));
+  CHECK(has(b, "\"hum\":61.2"));
+  CHECK(has(b, "\"light\":800"));
+  CHECK(has(b, "\"soil\":650"));
+  CHECK(has(b, "\"water\":900"));
+  CHECK(has(b, "\"weather\":1"));            // sáng + không khí khô -> nắng
+  CHECK(has(b, "\"pir\":true"));
+  CHECK(has(b, "\"touch\":false"));
+  CHECK(has(b, "\"relay\":false"));
+  CHECK(has(b, "\"windmill\":false"));
+  CHECK(has(b, "\"feed\":false"));
+  CHECK(has(b, "\"demo\":false"));
+  CHECK(has(b, "\"pumpAuto\":"));
+  CHECK(has(b, "\"breatheAuto\":"));
+}
+```
+
+- Dòng 728: mốc tên test.
+- Dòng 729–731: gán bộ giá trị cảm biến giả đã biết trước: 26.5 °C, 61.2 %, light 800, soil 650, water 900, PIR có người, touch không chạm.
+- Dòng 732: `invoke("/api")` gọi handler thật `handleApi()`; CHECK_EQ yêu cầu mã HTTP trả về là **200** (thành công).
+- Dòng 733: kiểu nội dung phải là `"application/json"` — nếu trả `text/html` thì trình duyệt/đối tác sẽ hiểu sai.
+- Dòng 734: lấy body (chuỗi JSON) vào biến `b` để dò tiếp.
+- Dòng 735–736: body phải chứa đúng `"temp":26.5` và `"hum":61.2` — in đúng 1 chữ số thập phân.
+- Dòng 737–739: light/soil/water phải là 800/650/900 (số nguyên, không có phần thập phân).
+- Dòng 740: `"weather":1` — trời sáng (light 800 > ngưỡng) và không khí khô (hum 61.2 thấp) nên `weatherStatus()` trả `WEATHER_SUNNY` = 1 (enum: NORMAL=0, SUNNY=1, CLOUDY=2, RAIN=3).
+- Dòng 741–742: `"pir":true` (có người) và `"touch":false` (không chạm) — đúng như đã gán ở dòng 731.
+- Dòng 743–746: các cờ ở trạng thái nghỉ phải là `false`: relay (bơm), windmill (cối xay), feed (cho ăn), demo (trình diễn).
+- Dòng 747–748: chỉ cần **có mặt** hai khóa `"pumpAuto"` và `"breatheAuto"` (không kiểm giá trị) — đủ để chắc API không thiếu trường; phần kiểm tra giá trị chi tiết do test D5 (dùng parser JSON) lo.
+
+#### I3 — testHttpLedOnOff() (dòng 752–761)
+
+**Mục đích:** Kiểm tra hai route bật/tắt LED xanh dương (hoạt động 12): vừa đổi trạng thái phần cứng vừa trả đúng body xác nhận.
+
+```cpp
+static void testHttpLedOnOff() {
+  printf("I3  http: /on /off\n");
+  CHECK_EQ(invoke("/on"), 200);
+  CHECK(blueLedState);
+  CHECK(!lightAuto);
+  CHECK_STR(mockServerLastBody(), "LED ON");
+  CHECK_EQ(invoke("/off"), 200);
+  CHECK(!blueLedState);
+  CHECK_STR(mockServerLastBody(), "LED OFF");
+}
+```
+
+- Dòng 753: mốc tên test.
+- Dòng 754: gọi `/on` → phải trả HTTP 200.
+- Dòng 755: biến trạng thái `blueLedState` phải bật `true`.
+- Dòng 756: `lightAuto` phải bị tắt — quy tắc "bấm tay thì thoát chế độ tự động" của đèn.
+- Dòng 757: body trả về phải **đúng nguyên văn** `"LED ON"` (CHECK_STR so cả chuỗi, không phải chuỗi con).
+- Dòng 758: gọi `/off` → cũng phải 200.
+- Dòng 759: `blueLedState` phải về `false`.
+- Dòng 760: body phải đúng `"LED OFF"`.
+
+#### I4 — testHttpMechanisms() (dòng 764–788)
+
+**Mục đích:** Kiểm tra cơ cấu servo qua HTTP: cối xay gió bật/tắt, cho ăn mở cửa, và quy tắc "điều khiển tay thì giải phóng cơ cấu tự động" (HĐ6/HĐ10).
+
+```cpp
+static void testHttpMechanisms() {
+  printf("I4  http: windmill / feed / servo arbitration\n");
+  invoke("/windmill", "on", "true");
+  CHECK(windmillOn);
+  invoke("/windmill", "on", "false");
+  CHECK(!windmillOn);
+
+  invoke("/feed");
+  CHECK(feedRunning());
+  CHECK_EQ(mockServoAngle, FEED_OPEN_ANGLE);
+
+  invoke("/servo", "angle", "45");           // điều khiển thủ công giải phóng cơ cấu
+  CHECK_EQ(servoAngle, 45);
+  CHECK_EQ(mockServoAngle, 45);
+  CHECK(!feedRunning());
+  invoke("/servo", "angle", "999");          // bị kẹp
+  CHECK_EQ(servoAngle, 180);
+  invoke("/servo", "angle", "-5");           // bị kẹp
+  CHECK_EQ(servoAngle, 0);
+
+  invoke("/demo");
+  CHECK(demoRunning());
+  runLoop(40000);                            // chạy toàn bộ demo qua loop()
+  CHECK(!demoRunning());
+}
+```
+
+- Dòng 765: mốc tên test.
+- Dòng 766–767: gọi `/windmill?on=true` → cờ `windmillOn` phải bật.
+- Dòng 768–769: gọi `/windmill?on=false` → cờ phải tắt (mỗi lần `invoke` đặt lại tham số trước khi gọi handler).
+- Dòng 771–773: gọi `/feed` (không tham số) → `feedRunning()` phải `true` và góc servo giả phải bằng `FEED_OPEN_ANGLE` = **90°** (cửa máng ăn mở — xem config.h).
+- Dòng 775–776: gọi `/servo?angle=45` → điều khiển thủ công, biến `servoAngle` = 45.
+- Dòng 777: `mockServoAngle` cũng phải 45 — tức lệnh đã thực sự ghi ra servo phần cứng, không chỉ lưu biến.
+- Dòng 778: `feedRunning()` phải `false` — điều khiển tay "giải phóng" cơ cấu cho ăn đang chạy (không tranh chấp servo).
+- Dòng 779–780: góc 999 vượt biên bị **kẹp về 180** (giới hạn servo).
+- Dòng 781–782: góc −5 bị kẹp về **0**.
+- Dòng 784–785: gọi `/demo` → demo của bộ kit bắt đầu chạy.
+- Dòng 786: `runLoop(40000)` cho `loop()` thật chạy 40 giây mô phỏng — tổng 15 bước demo khoảng 30,7 s nên demo kết thúc trọn vẹn bên trong khoảng này.
+- Dòng 787: hết thời gian demo, cờ `demoRunning()` phải tự tắt.
+
+#### I5 — testHttpControlRoutes() (dòng 791–841)
+
+**Mục đích:** Gom các route điều khiển còn lại — `/toggle`, `/auto`, `/rgb`, `/threshold`: kiểm tra kẹp giá trị, tự sửa thứ tự ngưỡng, lưu bền vào Preferences và mã lỗi 400 khi tham số sai.
+
+```cpp
+static void testHttpControlRoutes() {
+  printf("I5  http: toggle/auto/rgb/threshold\n");
+  invoke("/toggle", "id", "pump");
+  CHECK(!pumpAuto);
+  CHECK(relayState);
+  invoke("/toggle", "id", "pump");
+  CHECK(!relayState);
+  CHECK_EQ(invoke("/toggle", "id", "bogus"), 400);
+
+  invoke("/auto", "id", "rgb", "on", "false");
+  CHECK(!rgbAuto);
+
+  invoke("/rgb", "r", "300", "g", "-5", "b", "128");
+  CHECK_EQ(rgbR, 255);
+  CHECK_EQ(rgbG, 0);
+  CHECK_EQ(rgbB, 128);
+  CHECK(!rgbAuto);
+  CHECK_EQ(mockPixel[1], (255 << 16) | (0 << 8) | 128);
+
+  invoke("/auto", "id", "breathe", "on", "true");
+  CHECK(breatheAuto);
+  CHECK(breatheLedState);
+  runLoop(2000);
+  uint32_t peak = 0;
+  for (int i = 0; i < 60; i++) {
+    mockAdvance(BREATHE_INTERVAL);
+    loop();
+    if (currentLedPwm() > peak) peak = currentLedPwm();
+  }
+  CHECK(peak > 0);                           // breathing được animate qua loop()
+  invoke("/auto", "id", "breathe", "on", "false");
+  CHECK(!breatheAuto);
+  CHECK(!breatheLedState);
+  CHECK_EQ(invoke("/auto", "id", "bogus", "on", "true"), 400);
+
+  invoke("/threshold", "soilLow", "2000");
+  CHECK_NEAR(soilThresholdLow, 2000, 0.01);
+  CHECK(soilThresholdHigh > soilThresholdLow);   // tự sửa thứ tự
+  CHECK_NEAR(mockPrefGet("soilLow", 0), 2000, 0.01);  // đã lưu bền
+  invoke("/threshold", "soilLow", "9000");
+  CHECK_NEAR(soilThresholdLow, 4095, 0.01);      // bị kẹp
+  CHECK_NEAR(soilThresholdHigh, 4095, 0.01);
+  CHECK_EQ(invoke("/threshold"), 400);           // không có tham số
+  soilThresholdLow = 400; soilThresholdHigh = 700;
+
+  invoke("/threshold", "tempLow", "50");         // dải nhiệt độ đảo được tự sửa
+  CHECK_NEAR(tempThresholdLow, 50, 0.01);
+  CHECK(tempThresholdHigh > tempThresholdLow);
+  CHECK_NEAR(mockPrefGet("tempHigh", 0), tempThresholdHigh, 0.01);
+  tempThresholdHigh = 30; tempThresholdLow = 25;
+}
+```
+
+- Dòng 792: mốc tên test.
+- Dòng 793–795: lần bấm `/toggle?id=pump` thứ nhất: `pumpAuto` phải tắt (thoát tự động) và `relayState` phải bật (bơm chạy bằng tay).
+- Dòng 796–797: bấm lần hai: `relayState` phải tắt (bơm dừng tay); `pumpAuto` vẫn giữ `false` (test không yêu cầu bật lại).
+- Dòng 798: `id=bogus` (thiết bị không tồn tại) → phải trả **400** (Bad Request).
+- Dòng 800–801: `/auto?id=rgb&on=false` → tắt tự động RGB.
+- Dòng 803: `/rgb?r=300&g=-5&b=128` — giá trị cố tình vượt biên để thử kẹp.
+- Dòng 804–806: kênh R 300 bị kẹp về **255**, G −5 bị kẹp về **0**, B giữ **128**.
+- Dòng 807: `rgbAuto` phải `false` — đặt màu bằng tay thì thoát chế độ tự động.
+- Dòng 808: LED NeoPixel thứ 1 (chỉ số 1) phải mang mã màu `(255 << 16) | (0 << 8) | 128` = 0xFF0080 — kiểu đóng gói 0xRRGGBB; `setRgb` đặt cùng màu cho mọi LED nên chỉ cần mẫu 1 LED.
+- Dòng 810–812: `/auto?id=breathe&on=true` → bật tự động thở: cờ `breatheAuto` và `breatheLedState` đều `true` (chế độ thở tiếp quản LED xanh).
+- Dòng 813: chạy thêm 2 giây mô phỏng cho trạng thái ổn định.
+- Dòng 814: biến `peak` lưu đỉnh PWM cao nhất quan sát được.
+- Dòng 815–819: 60 lần lặp, mỗi lần đẩy đồng hồ đúng `BREATHE_INTERVAL` (30 ms) rồi gọi `loop()`; độ sáng PWM thay đổi dần nên phải ghi nhận được giá trị lớn hơn 0.
+- Dòng 820: `CHECK(peak > 0)` — hiệu ứng thở **thực sự được animate** qua `loop()` (nếu logic đứng yên, PWM mãi là 0 và test đổ).
+- Dòng 821–823: tắt tự động thở → cả `breatheAuto` lẫn `breatheLedState` phải về `false`.
+- Dòng 824: `id=bogus` cho `/auto` → 400.
+- Dòng 826–827: `/threshold?soilLow=2000` → ngưỡng đất dưới = 2000 (sai số cho phép 0.01).
+- Dòng 828: ngưỡng trên phải **lớn hơn** ngưỡng dưới — firmware tự sửa thứ tự khi người dùng đặt ngược.
+- Dòng 829: giá trị phải được lưu bền: `mockPrefGet("soilLow", 0)` trả 2000, chứng tỏ đã `put` vào Preferences.
+- Dòng 830–832: đặt 9000 (vượt ADC 12 bit) → bị kẹp trần **4095**; ngưỡng trên cũng thành 4095 để không mâu thuẫn.
+- Dòng 833: gọi `/threshold` **không tham số** → 400.
+- Dòng 834: khôi phục cặp ngưỡng chuẩn (400/700) cho các test sau.
+- Dòng 836–838: `/threshold?tempLow=50` — dải nhiệt độ bị đảo (low 50 > high cũ 30) → low = 50 và high được tự đẩy lên lớn hơn.
+- Dòng 839: ngưỡng `tempHigh` mới cũng phải được lưu bền vào Preferences.
+- Dòng 840: khôi phục dải nhiệt độ chuẩn 25–30.
+
+#### I6 — testHttpRootFavicon() (dòng 844–852)
+
+**Mục đích:** Kiểm tra trang chủ trả HTML đúng nội dung và favicon trả 204 (không có nội dung) để trình duyệt không tải ảnh.
+
+```cpp
+static void testHttpRootFavicon() {
+  printf("I6  http: root page + favicon\n");
+  CHECK_EQ(invoke("/"), 200);
+  CHECK_STR(mockServerLastType(), "text/html");
+  CHECK(has(mockServerLastBody(), "Smart Farm"));
+  CHECK(has(mockServerLastBody(), "/windmill"));
+  CHECK(has(mockServerLastBody(), "/demo"));
+  CHECK_EQ(invoke("/favicon.ico"), 204);
+}
+```
+
+- Dòng 845: mốc tên test.
+- Dòng 846: gọi trang gốc `/` → HTTP 200.
+- Dòng 847: kiểu nội dung phải là `"text/html"` để trình duyệt hiển thị trang.
+- Dòng 848: body phải chứa tiêu đề `"Smart Farm"`.
+- Dòng 849–850: trang phải có liên kết điều khiển `/windmill` (cối xay) và `/demo` (trình diễn) — đảm bảo giao diện không sót nút.
+- Dòng 851: `/favicon.ico` phải trả **204 No Content** thay vì 404 — cách "im lặng" chuẩn mực với favicon.
+
+#### I7 — testOled() (dòng 855–884)
+
+**Mục đích:** Kiểm tra khung trạng thái vẽ lên OLED (giả) ở các trạng thái khác nhau: đủ cảm biến, IP, WiFi mất, cối xay chạy, đang cho ăn.
+
+```cpp
+static void testOled() {
+  printf("I7  oled: status frame\n");
+  mockWifiStatus = WL_CONNECTED;
+  gTemp = 26.5f; gHum = 61; gLight = 800; gSoil = 650; gWater = 900;
+  relayState = false;
+  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  const char *t = mockOledText();
+  CHECK(has(t, "Smart Farm"));
+  CHECK(has(t, "TT: Nang"));
+  CHECK(has(t, "T:26.5C H:61%"));
+  CHECK(has(t, "Light: 800"));
+  CHECK(has(t, "Soil: 650"));
+  CHECK(has(t, "H2O:900 P:OFF"));
+  CHECK(has(t, "IP:192.168.1.50"));
+  CHECK(has(t, "San sang"));
+
+  mockWifiStatus = WL_DISCONNECTED;
+  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  CHECK(has(mockOledText(), "WiFi: ---"));
+  mockWifiStatus = WL_CONNECTED;
+
+  windmillOn = true;
+  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  CHECK(has(mockOledText(), "Coi xay: ON"));
+  windmillOn = false;
+  startFeed();
+  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  CHECK(has(mockOledText(), "Cho an..."));
+  stopFeed();
+}
+```
+
+- Dòng 856: mốc tên test.
+- Dòng 857: giả lập WiFi đang kết nối (`WL_CONNECTED`) để OLED hiện IP.
+- Dòng 858–859: đặt bộ cảm biến cố định và tắt bơm (`relayState = false`).
+- Dòng 860: gọi thẳng `updateOLED(...)` — hàm vẽ khung trạng thái thật, nhưng mọi lệnh vẽ đi vào màn hình giả.
+- Dòng 861: `mockOledText()` trả về toàn bộ text đã in lên OLED giả (gom theo từng dòng qua `setCursor`).
+- Dòng 862: có tiêu đề `"Smart Farm"`.
+- Dòng 863: `"TT: Nang"` — dòng thời tiết: light 800 là sáng, hum 61 khô → "Nang" (nắng).
+- Dòng 864: `"T:26.5C H:61%"` — nhiệt độ 1 số thập phân, độ ẩm số nguyên.
+- Dòng 865–866: giá trị ánh sáng 800 và độ ẩm đất 650 hiện đúng.
+- Dòng 867: `"H2O:900 P:OFF"` — mức nước 900, bơm (P = Pump) đang OFF.
+- Dòng 868: `"IP:192.168.1.50"` — IP giả do mock WiFi cung cấp.
+- Dòng 869: `"San sang"` — trạng thái nghỉ ("Sẵn sàng", viết không dấu cho font OLED).
+- Dòng 871–872: chuyển WiFi sang mất kết nối rồi vẽ lại.
+- Dòng 873: màn hình phải hiện `"WiFi: ---"` thay cho IP.
+- Dòng 874: trả WiFi về kết nối cho các phần sau.
+- Dòng 876–877: bật cối xay rồi vẽ lại.
+- Dòng 878: phải có dòng `"Coi xay: ON"`.
+- Dòng 879–881: tắt cối xay, cho ăn rồi vẽ lại.
+- Dòng 882: phải có dòng `"Cho an..."` — OLED phản ánh đúng trạng thái máng ăn.
+- Dòng 883: `stopFeed()` dọn trạng thái cho các test sau.
+
+#### I8 — testSerialMenu() (dòng 887–918)
+
+**Mục đích:** Kiểm tra menu debug qua Serial: 8 phím `1`–`8` mở đúng mục, menu được in lại, phím `0` thoát, phím lạ báo "Invalid".
+
+```cpp
+static void testSerialMenu() {
+  printf("I8  serial: debug menu commands\n");
+  mockSerialClear();
+
+  struct { char cmd; const char *marker; } cases[] = {
+    {'1', "--- SENSORS ---"},
+    {'2', "--- ACTUATORS ---"},
+    {'3', "--- CONTROL ---"},
+    {'4', "--- WEBSERVER ---"},
+    {'5', "--- WIFI ---"},
+    {'6', "--- OLED ---"},
+    {'7', "--- SETTINGS ---"},
+    {'8', "--- LOGGER ---"},
+  };
+  for (auto &c : cases) {
+    mockSerialClear();
+    mockSerialPush(&c.cmd);
+    loop();
+    CHECK(has(mockSerialOutput(), c.marker));
+    CHECK(has(mockSerialOutput(), "Chon: "));       // in lại menu
+    mockSerialPush("0");
+    loop();
+    CHECK(has(mockSerialOutput(), "Running normally"));
+  }
+
+  mockSerialClear();
+  mockSerialPush("x");                               // không hợp lệ
+  loop();
+  CHECK(has(mockSerialOutput(), "Invalid"));
+  CHECK(has(mockSerialOutput(), "Chon: "));
+  mockSerialClear();
+}
+```
+
+- Dòng 888: mốc tên test.
+- Dòng 889: xóa Serial trước khi bắt đầu.
+- Dòng 891–900: bảng đối chiếu 8 phím với dấu hiệu (marker) mà mỗi mục debug in ra, ví dụ phím `1` → `"--- SENSORS ---"`.
+- Dòng 901: duyệt từng ca kiểm thử.
+- Dòng 902: xóa output trước mỗi ca để chỉ đọc kết quả của ca này.
+- Dòng 903: `mockSerialPush(&c.cmd)` đẩy ký tự phím vào buffer nhập giả của Serial.
+- Dòng 904: gọi `loop()` — vòng lặp thật đọc phím, bật `sDebugMode` và chạy `handleDebugCmd()`.
+- Dòng 905: output phải chứa marker của đúng mục (mở đúng chức năng).
+- Dòng 906: cuối mỗi mục, menu phải in lại (`"Chon: "`) để người dùng chọn tiếp.
+- Dòng 907–908: đẩy phím `0` rồi chạy `loop()` để thoát chế độ debug.
+- Dòng 909: phải thấy dòng `"Running normally"` (thực tế firmware in `"Running normally..."` — test chỉ dò chuỗi con).
+- Dòng 912–916: ca phím lạ `'x'`: `loop()` phải in `"Invalid"` và in lại menu `"Chon: "`.
+- Dòng 917: dọn Serial lần cuối.
+
+#### I9 — testSerialDemo() (dòng 921–937)
+
+**Mục đích:** Kiểm tra phím `9` khởi động demo qua Serial, tên bước demo hiện trên OLED, và demo kết thúc êm qua `loop()`.
+
+```cpp
+static void testSerialDemo() {
+  printf("I9  serial: '9' demo + OLED step name\n");
+  mockSerialClear();
+  mockSerialPush("9");
+  loop();
+  CHECK(demoRunning());
+  CHECK(has(mockSerialOutput(), "DEMO START"));
+
+  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  CHECK(has(mockOledText(), "HD2: Thap sang"));      // tên bước trên OLED
+
+  runLoop(40000);
+  CHECK(!demoRunning());
+  CHECK(has(mockSerialOutput(), "DEMO DONE"));
+  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  CHECK(has(mockOledText(), "San sang"));
+}
+```
+
+- Dòng 922: mốc tên test.
+- Dòng 923–925: xóa Serial, đẩy phím `'9'` rồi gọi `loop()` — firmware phải gọi `startDemo()`.
+- Dòng 926: `demoRunning()` phải `true` — demo đã bật.
+- Dòng 927: Serial phải có thông báo `"DEMO START"`.
+- Dòng 929: vẽ OLED ngay khi demo vừa chạy.
+- Dòng 930: màn hình phải hiện tên **bước đang chạy** `"HD2: Thap sang"` (bước đầu tiên của kịch bản, dòng demo.cpp:23).
+- Dòng 932: `runLoop(40000)` chạy hết ~30,7 s kịch bản demo qua `loop()` thật.
+- Dòng 933: kết thúc, `demoRunning()` phải `false`.
+- Dòng 934: Serial phải có `"DEMO DONE"`.
+- Dòng 935–936: vẽ lại OLED — giao diện phải quay về trạng thái nghỉ `"San sang"`.
+
+#### I10 — testWifiRecovery() (dòng 940–951)
+
+**Mục đích:** Kiểm tra phần quản lý WiFi trong `loop()`: khi mất mạng đủ lâu thì log "WiFi lost" và đến khi nối lại thì log "WiFi reconnected".
+
+```cpp
+static void testWifiRecovery() {
+  printf("I10 wifi: loss + reconnect logging\n");
+  mockWifiStatus = WL_DISCONNECTED;
+  lastWifiCheck = mockMillis() - WIFI_CHECK_INTERVAL - 1;
+  mockSerialClear();
+  loop();
+  CHECK(has(mockSerialOutput(), "WiFi lost"));
+  mockWifiStatus = WL_CONNECTED;
+  mockSerialClear();
+  loop();
+  CHECK(has(mockSerialOutput(), "WiFi reconnected"));
+}
+```
+
+- Dòng 941: mốc tên test.
+- Dòng 942: giả lập WiFi đang mất kết nối (`WL_DISCONNECTED`).
+- Dòng 943: `lastWifiCheck = mockMillis() - WIFI_CHECK_INTERVAL - 1` — lùi mốc kiểm tra quá chu kỳ 10 giây đúng 1 ms, đảm bảo lần `loop()` tới chắc chắn đã đến hạn thử lại (nếu để nguyên, `manageWiFi()` sẽ chờ đủ 10 s mới làm gì).
+- Dòng 944: xóa Serial để chỉ đọc log của vòng lặp này.
+- Dòng 945: gọi `loop()` thật → `manageWiFi()` thấy mất mạng + đến hạn → ghi log lỗi 401.
+- Dòng 946: Serial phải chứa `"WiFi lost"` (chuỗi đầy đủ là `"WiFi lost, reconnecting..."`).
+- Dòng 947: giả lập WiFi nối lại được.
+- Dòng 948–949: xóa Serial rồi gọi `loop()` thêm một vòng.
+- Dòng 950: Serial phải có `"WiFi reconnected"` — firmware phát hiện vừa nối lại và thông báo đúng **một lần** (nhờ cờ `sWarned` trong `manageWiFi()`; việc chỉ log một lần được kiểm tra kỹ hơn ở test D8 — `testWifiThrottle()`).
+
+### 14.5. Bộ đọc JSON tự viết — parseFlatJson và các hàm phụ (dòng 953–1041)
+
+Để kiểm tra "hợp đồng" JSON của `/api`, bộ test **tự viết một parser JSON tối giản** thay vì dùng thư viện. Vì sao?
+
+- **Không phụ thuộc thư viện:** test được biên dịch và chạy trên máy tính (host) với các file mock, không có sẵn ArduinoJson. Tự viết giữ bộ test độc lập, biên dịch nhanh, không lo lệch phiên bản.
+- **Kiểm tra nghiêm ngặt đúng 21 khóa:** parser kèm bảng `API_KEYS` (21 khóa) buộc response `/api` phải đúng số lượng, đúng tên, đúng kiểu (số/bool/chuỗi), không thừa không thiếu không trùng. Chỉ cần đổi tên một trường mà quên cập nhật test là đổ ngay.
+- **Chỉ cần JSON phẳng:** `/api` trả object một tầng, không lồng nhau, nên parser "flat" là đủ và dễ đọc hơn cả thư viện.
+
+```cpp
+// Parser flat-JSON tối giản dùng để kiểm tra contract của /api.
+struct JsonPair { std::string key, raw, type; };   // kiểu: s(tring) n(umber) b(ool) z(null)
+```
+
+- Dòng 957: chú thích nêu mục đích của parser (kiểm tra contract của `/api`).
+- Dòng 958: `JsonPair` gồm 3 chuỗi: `key` (tên khóa), `raw` (giá trị **nguyên văn** đúng như trong JSON) và `type` (kiểu: `"s"` string, `"n"` number, `"b"` bool, `"z"` null). Giữ `raw` nguyên văn giúp test so khớp chính xác cả chuỗi lẫn số.
+
+```cpp
+static bool parseFlatJson(const char *text, std::vector<JsonPair> &out, std::string &err) {
+  const char *p = text;
+  auto skipWs = [&]() { while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++; };
+  skipWs();
+  if (*p != '{') { err = "not a JSON object"; return false; }
+  p++; skipWs();
+  if (*p == '}') {
+    p++; skipWs();
+    if (*p != '\0') { err = "trailing garbage"; return false; }
+    return true;
+  }
+  while (true) {
+    skipWs();
+    if (*p != '"') { err = "key is not a string"; return false; }
+    p++;
+    std::string key;
+    while (*p && *p != '"') key += *p++;
+    if (*p != '"') { err = "unterminated key"; return false; }
+    p++; skipWs();
+    if (*p != ':') { err = "missing ':'"; return false; }
+    p++; skipWs();
+
+    JsonPair pair;
+    pair.key = key;
+    if (*p == '"') {
+      p++;
+      pair.type = "s";
+      while (*p && *p != '"') {
+        if (*p == '\\') {
+          p++;
+          if (!*p) { err = "bad escape"; return false; }
+        }
+        pair.raw += *p++;
+      }
+      if (*p != '"') { err = "unterminated string"; return false; }
+      p++;
+    } else if (strncmp(p, "true", 4) == 0) {
+      pair.type = "b"; pair.raw = "true"; p += 4;
+    } else if (strncmp(p, "false", 5) == 0) {
+      pair.type = "b"; pair.raw = "false"; p += 5;
+    } else if (strncmp(p, "null", 4) == 0) {
+      pair.type = "z"; pair.raw = "null"; p += 4;
+    } else {
+      char *end = nullptr;
+      double v = strtod(p, &end);
+      if (end == p) { err = "invalid value"; return false; }
+      (void)v;
+      pair.type = "n";
+      pair.raw.assign(p, end - p);
+      p = end;
+    }
+    out.push_back(pair);
+    skipWs();
+    if (*p == ',') { p++; continue; }
+    if (*p == '}') { p++; break; }
+    err = "expected ',' or '}'";
+    return false;
+  }
+  skipWs();
+  if (*p != '\0') { err = "trailing garbage"; return false; }
+  return true;
+}
+```
+
+Cách hoạt động từng bước:
+
+- Dòng 960: chữ ký hàm: nhận chuỗi `text`, đổ kết quả vào `out`, ghi thông báo lỗi vào `err`; trả `true` nếu JSON hợp lệ.
+- Dòng 961: con trỏ `p` là "ngón tay" duyệt lần lượt từng ký tự của chuỗi.
+- Dòng 962: lambda `skipWs` nhảy qua mọi ký tự trắng (space, tab, `\n`, `\r`) — nhờ nó, parser chấp nhận JSON in trên một dòng lẫn nhiều dòng.
+- Dòng 963–964: bỏ khoảng trắng đầu, rồi ký tự đầu tiên phải là `{` (mở object); sai thì báo `"not a JSON object"` và dừng.
+- Dòng 965: đã qua `{`, bỏ tiếp khoảng trắng.
+- Dòng 966–970: nhánh đặc biệt object rỗng `{}`: sau `}` chỉ được phép hết chuỗi; còn ký tự lạ thì báo `"trailing garbage"` (chống rác sau JSON).
+- Dòng 971: vòng lặp vô hạn đọc từng cặp khóa–giá trị; thoát bằng `break` khi gặp `}`, hoặc `return false` khi gặp lỗi.
+- Dòng 972–973: bỏ khoảng trắng, bắt buộc ký tự tiếp theo là `"` mở khóa; nếu không (khóa không phải chuỗi) → lỗi `"key is not a string"`.
+- Dòng 974–976: gom từng ký tự của khóa vào biến `key` cho đến khi gặp `"` đóng; khóa không hỗ trợ escape (đủ dùng vì tên trường là chữ ASCII cố định).
+- Dòng 977–978: thiếu nháy đóng → `"unterminated key"`; có thì nhảy qua `"` rồi bỏ khoảng trắng.
+- Dòng 979–980: bắt buộc có dấu `:` ngăn cách khóa và giá trị (`"missing ':'"`), rồi bỏ khoảng trắng trước giá trị.
+- Dòng 982–983: tạo `JsonPair` mới và gán `pair.key` vừa đọc.
+- Dòng 984–986: nếu gặp `"` → đây là giá trị **chuỗi**: đánh dấu type `"s"` và nhảy qua nháy mở.
+- Dòng 987–992: đọc từng ký tự vào `pair.raw`; nếu gặp dấu `\` (escape) thì nhảy qua nó, bắt buộc còn ký tự phía sau (`"bad escape"` nếu chuỗi cụt giữa escape), rồi lấy ký tự bị escape đó. Nói cách khác parser chấp nhận escape nhưng lưu ký tự trần.
+- Dòng 994–995: phải gặp nháy đóng, nếu hết chuỗi trước thì `"unterminated string"`; sau đó nhảy qua nháy đóng.
+- Dòng 996–997: nhận dạng `true` bằng `strncmp` 4 ký tự → type `"b"`, raw `"true"`, tiến con trỏ 4 bước.
+- Dòng 998–999: nhận dạng `false` (5 ký tự) → type `"b"`, raw `"false"`.
+- Dòng 1000–1001: nhận dạng `null` (4 ký tự) → type `"z"`, raw `"null"`.
+- Dòng 1002–1009: nhánh còn lại coi là **số**: gọi `strtod` (hàm chuẩn của C) để đọc số từ vị trí `p`; nếu `end == p` tức không đọc được ký tự số nào → lỗi `"invalid value"`. `(void)v` chỉ để tắt cảnh báo biến không dùng (giá trị số không cần, vì chỉ giữ raw). `assign(p, end - p)` lưu đúng đoạn text số nguyên văn, type `"n"`, rồi nhảy `p` tới cuối số.
+- Dòng 1011: cặp khóa–giá trị đã đọc xong → thêm vào vector `out`.
+- Dòng 1012–1014: sau giá trị, bỏ khoảng trắng: gặp `,` thì sang cặp kế tiếp (`continue`); gặp `}` thì kết thúc object (`break`).
+- Dòng 1015–1016: ký tự nào khác cũng là lỗi `"expected ',' or '}'"`.
+- Dòng 1018–1020: sau `}` cuối cùng, bỏ khoảng trắng rồi **bắt buộc hết chuỗi**; còn ký tự lạ → `"trailing garbage"`; sạch sẽ thì trả `true`.
+
+Tóm lại, parser xử lý 4 dạng giá trị (chuỗi, true/false, null, số), bỏ khoảng trắng ở mọi vị trí hợp lý, và coi **mọi sai lệch** là lỗi kèm mô tả tiếng Anh ngắn trong `err` (khóa không phải chuỗi, thiếu `:`, chuỗi hở, escape cụt, rác cuối chuỗi...).
+
+```cpp
+struct ApiKey { const char *key; char type; };
+static const ApiKey API_KEYS[] = {
+  {"temp", 'n'}, {"hum", 'n'}, {"light", 'n'}, {"soil", 'n'}, {"water", 'n'}, {"weather", 'n'},
+  {"pir", 'b'}, {"touch", 'b'}, {"relay", 'b'}, {"fan", 'b'}, {"led", 'b'}, {"breathe", 'b'},
+  {"windmill", 'b'}, {"feed", 'b'}, {"demo", 'b'}, {"demoStep", 's'},
+  {"pumpAuto", 'b'}, {"lightAuto", 'b'}, {"rgbAuto", 'b'}, {"fanAuto", 'b'}, {"breatheAuto", 'b'}
+};
+static const int API_KEY_COUNT = (int)(sizeof(API_KEYS) / sizeof(API_KEYS[0]));
+```
+
+- Dòng 1023: `ApiKey` là cặp (tên khóa, ký tự kiểu mong đợi) — kiểu viết tắt đúng như trong `JsonPair.type`.
+- Dòng 1024–1029: "bảng vàng" **21 khóa** bắt buộc của `/api`: 6 số (`temp`, `hum`, `light`, `soil`, `water`, `weather`), 14 bool (`pir`, `touch`, `relay`, `fan`, `led`, `breathe`, `windmill`, `feed`, `demo`, `pumpAuto`, `lightAuto`, `rgbAuto`, `fanAuto`, `breatheAuto`) và 1 chuỗi (`demoStep`). Đủ 21 = 6 + 14 + 1.
+- Dòng 1030: `API_KEY_COUNT` tự tính bằng `sizeof` — thêm/bớt khóa trong bảng thì con số này tự đúng, không phải sửa tay.
+
+```cpp
+static const JsonPair *findPair(const std::vector<JsonPair> &pairs, const char *key) {
+  for (const auto &p : pairs) if (p.key == key) return &p;
+  return nullptr;
+}
+```
+
+- Dòng 1032–1034: `findPair` dò tuyến tính trong danh sách cặp đã parse, trả con trỏ tới cặp có khóa trùng, hoặc `nullptr` nếu không có.
+- Dòng 1035: kết thúc hàm — không tìm thấy thì trả `nullptr`.
+
+```cpp
+static double numOf(const std::vector<JsonPair> &pairs, const char *key) {
+  const JsonPair *p = findPair(pairs, key);
+  return p ? strtod(p->raw.c_str(), nullptr) : -1e9;
+}
+```
+
+- Dòng 1037–1039: `numOf` lấy giá trị số của một khóa: tìm cặp (dòng 1038), có thì ép chuỗi `raw` thành `double` bằng `strtod`; **không có thì trả −1e9** — một số cực nhỏ, không thể trùng giá trị cảm biến thật, nên mọi so sánh sẽ lộ lỗi "thiếu khóa" ngay.
+- Dòng 1040: đóng hàm.
+
+Các hàm này (cùng parser) được dùng ở mục sau — `validateApiResponse()` và test D5 `testApiJsonContract()` (dòng 1042 trở đi, trong đó có `boolOf()` bắt đầu tại dòng 1042) — để khẳng định `/api` trả **đúng 21 khóa, đúng kiểu, không trùng lặp**, và giá trị số/bool khớp với trạng thái thật của firmware.
+
+### 14.6. validateApiResponse + D5 — hợp đồng JSON 21 khóa (dòng 1042–1154)
+
+Phần này kiểm tra /api có trả về đúng "contract" (hợp đồng dữ liệu) đã thỏa thuận giữa firmware và client hay không: đúng 21 khóa, đúng kiểu dữ liệu từng khóa, và giá trị phải khớp với các biến trạng thái thật. Bảng kỳ vọng nằm ngay trên vùng này: mảng `API_KEYS` (dòng 1024–1029) liệt kê 21 khóa với kiểu `'n'` number, `'b'` bool, `'s'` string; `API_KEY_COUNT` (dòng 1030) đếm ra 21.
+
+#### boolOf() (dòng 1042–1045)
+
+```cpp
+static bool boolOf(const std::vector<JsonPair> &pairs, const char *key) {
+  const JsonPair *p = findPair(pairs, key);
+  return p && p->raw == "true";
+}
+```
+
+- Dòng 1042: hàm phụ nhận danh sách cặp khóa–giá trị đã parse (`pairs`) và tên khóa cần tra; trả về `bool`.
+- Dòng 1043: `findPair` (dòng 1032) duyệt tuần tự, trả con trỏ tới cặp có khóa trùng hoặc `nullptr` nếu không có.
+- Dòng 1044: nếu không tìm thấy (`p` null) thì trả `false`; nếu thấy thì so chuỗi thô `raw` với `"true"` — chỉ đúng khi JSON ghi đúng `true`. Với kiểu bool, `parseFlatJson` (dòng 996–999) lưu raw là `"true"`/`"false"` nên so sánh chuỗi là đủ; mọi giá trị khác như `false`, `1`, `"true"` (chuỗi) đều bị coi là false.
+
+#### validateApiResponse() (dòng 1048–1097)
+
+```cpp
+// Kiểm tra contract đầy đủ cho response /api cuối cùng
+static bool validateApiResponse(std::string &err) {
+  if (mockServerLastCode() != 200) { err = "HTTP code != 200"; return false; }
+  if (strcmp(mockServerLastType(), "application/json") != 0) { err = "wrong content type"; return false; }
+
+  std::vector<JsonPair> pairs;
+  if (!parseFlatJson(mockServerLastBody(), pairs, err)) return false;
+
+  if ((int)pairs.size() != API_KEY_COUNT) {
+    char b[64]; snprintf(b, sizeof(b), "key count %d != %d", (int)pairs.size(), API_KEY_COUNT);
+    err = b;
+    return false;
+  }
+  std::set<std::string> seen;
+  for (const auto &p : pairs) {
+    if (!seen.insert(p.key).second) { err = "duplicate key: " + p.key; return false; }
+  }
+  for (int i = 0; i < API_KEY_COUNT; i++) {
+    const JsonPair *p = findPair(pairs, API_KEYS[i].key);
+    if (!p) { err = std::string("missing key: ") + API_KEYS[i].key; return false; }
+    if (p->type[0] != API_KEYS[i].type) { err = std::string("bad type: ") + API_KEYS[i].key; return false; }
+  }
+
+  if (fabs(numOf(pairs, "temp") - gTemp) > 0.06) { err = "temp mismatch"; return false; }
+  if (fabs(numOf(pairs, "hum") - gHum) > 0.06) { err = "hum mismatch"; return false; }
+  if ((long)numOf(pairs, "light") != gLight) { err = "light mismatch"; return false; }
+  if ((long)numOf(pairs, "soil") != gSoil) { err = "soil mismatch"; return false; }
+  if ((long)numOf(pairs, "water") != gWater) { err = "water mismatch"; return false; }
+  if ((int)numOf(pairs, "weather") != (int)weatherStatus()) { err = "weather mismatch"; return false; }
+
+  if (boolOf(pairs, "pir") != gPir) { err = "pir mismatch"; return false; }
+  if (boolOf(pairs, "touch") != gTouch) { err = "touch mismatch"; return false; }
+  if (boolOf(pairs, "relay") != relayState) { err = "relay mismatch"; return false; }
+  if (boolOf(pairs, "fan") != fanState) { err = "fan mismatch"; return false; }
+  if (boolOf(pairs, "led") != blueLedState) { err = "led mismatch"; return false; }
+  if (boolOf(pairs, "breathe") != breatheLedState) { err = "breathe mismatch"; return false; }
+  if (boolOf(pairs, "windmill") != windmillOn) { err = "windmill mismatch"; return false; }
+  if (boolOf(pairs, "feed") != feedRunning()) { err = "feed mismatch"; return false; }
+  if (boolOf(pairs, "demo") != demoRunning()) { err = "demo mismatch"; return false; }
+  if (boolOf(pairs, "pumpAuto") != pumpAuto) { err = "pumpAuto mismatch"; return false; }
+  if (boolOf(pairs, "lightAuto") != lightAuto) { err = "lightAuto mismatch"; return false; }
+  if (boolOf(pairs, "rgbAuto") != rgbAuto) { err = "rgbAuto mismatch"; return false; }
+  if (boolOf(pairs, "fanAuto") != fanAuto) { err = "fanAuto mismatch"; return false; }
+  if (boolOf(pairs, "breatheAuto") != breatheAuto) { err = "breatheAuto mismatch"; return false; }
+
+  const JsonPair *ds = findPair(pairs, "demoStep");
+  const char *expectedStep = demoRunning() ? demoStepName() : "";
+  if (ds->raw != expectedStep) { err = "demoStep mismatch"; return false; }
+
+  return true;
+}
+```
+
+- Dòng 1047: comment gốc — "Kiểm tra contract đầy đủ cho response /api cuối cùng".
+- Dòng 1048: nhận tham chiếu `err` để ghi lý do thất bại; hàm trả `true` nếu hợp đồng đúng.
+- Dòng 1049: mã HTTP phải là 200 (thành công), nếu khác ghi lỗi và dừng ngay.
+- Dòng 1050: header `Content-Type` phải đúng `application/json`; client không được nhận kiểu dữ liệu khác.
+- Dòng 1052–1053: parse thân phản hồi bằng parser flat-JSON tự viết; parser thất bại thì trả false (parser đã điền `err`).
+- Dòng 1055–1058: số cặp khóa phải đúng bằng 21; nếu sai thì in cả số thực tế lẫn số mong đợi để dễ debug.
+- Dòng 1060–1063: dùng `std::set` (tập hợp) để phát hiện khóa trùng — `insert(...).second` là `false` nghĩa là khóa đã tồn tại. Nhờ vậy 21 khóa phải là 21 khóa phân biệt, không được lặp.
+- Dòng 1064–1068: với từng khóa trong bảng `API_KEYS`: tìm khóa, thiếu thì lỗi "missing key"; kiểu (`p->type[0]`) phải khớp ký tự trong bảng (`'n'` number, `'b'` bool, `'s'` string, `'z'` null — quy ước ở dòng 958), sai thì lỗi "bad type".
+- Dòng 1070–1071: temp và hum là số thực, cho phép lệch 0.06 — vì giá trị in ra JSON bị làm tròn khi format nên không thể so tuyệt đối.
+- Dòng 1072–1074: light, soil, water là số nguyên; ép `(long)` trước khi so để tránh sai số kiểu float.
+- Dòng 1075: weather phải khớp `(int)weatherStatus()` — trạng thái thời tiết hiện tại của firmware.
+- Dòng 1077–1082: các cờ cảm biến và thiết bị: pir, touch (cảm biến), relay, fan, led, breathe (thiết bị) phải khớp biến trạng thái tương ứng.
+- Dòng 1083–1085: windmill, feed, demo phải khớp trạng thái thật (`windmillOn`, `feedRunning()`, `demoRunning()`).
+- Dòng 1086–1090: 5 cờ chế độ tự động: pumpAuto, lightAuto, rgbAuto, fanAuto, breatheAuto.
+- Dòng 1092–1094: demoStep là string; nếu demo đang chạy thì phải bằng `demoStepName()`, ngược lại phải là chuỗi rỗng `""` (đúng quy ước của firmware). `ds` chắc chắn không null vì khóa demoStep đã được kiểm tra tồn tại ở vòng lặp dòng 1064.
+- Dòng 1096: mọi điều kiện đều qua — hợp đồng JSON hợp lệ.
+
+#### D5 — testApiJsonContract() (dòng 1100–1154; thân hàm 1100–1152)
+
+**Mục đích:** Xác minh /api luôn trả JSON đúng hợp đồng 21 khóa — với trạng thái biết trước, trạng thái demo/cho ăn, và 200 trạng thái ngẫu nhiên.
+
+```cpp
+// D5: JSON contract nghiêm ngặt của /api
+static void testApiJsonContract() {
+  printf("D5  api: strict JSON contract (21 keys)\n");
+  std::string err;
+
+  // Trạng thái đã biết
+  gTemp = 26.5f; gHum = 61.2f;
+  gLight = 800; gSoil = 650; gWater = 900;
+  gPir = true; gTouch = false;
+  invoke("/api");
+  if (!validateApiResponse(err)) printf("  FAIL: %s\n", err.c_str());
+  CHECK(err.empty());
+
+  // Trạng thái demo: cờ demo + chuỗi step phải cập nhật trực tiếp
+  invoke("/demo");
+  CHECK(demoRunning());
+  invoke("/api");
+  err.clear();
+  if (!validateApiResponse(err)) printf("  FAIL: %s\n", err.c_str());
+  CHECK(err.empty());
+  CHECK(has(mockServerLastBody(), "\"demo\":true"));
+  CHECK(has(mockServerLastBody(), demoStepName()));
+  runLoop(40000);
+  CHECK(!demoRunning());
+
+  // Trạng thái cho ăn
+  startFeed();
+  invoke("/api");
+  err.clear();
+  if (!validateApiResponse(err)) printf("  FAIL: %s\n", err.c_str());
+  CHECK(err.empty());
+  CHECK(has(mockServerLastBody(), "\"feed\":true"));
+  stopFeed();
+
+  // 200 trạng thái ngẫu nhiên: JSON phải luôn hợp lệ và nhất quán
+  std::mt19937 rng(1234);
+  int bad = 0;
+  for (int i = 0; i < 200; i++) {
+    gTemp = (float)(rng() % 500) / 10.0f;
+    gHum = (float)(rng() % 101);
+    gLight = (int)(rng() % 4096);
+    gSoil = (int)(rng() % 4096);
+    gWater = (int)(rng() % 4096);
+    gPir = (rng() % 2) != 0;
+    gTouch = (rng() % 2) != 0;
+    invoke("/api");
+    err.clear();
+    if (!validateApiResponse(err)) {
+      bad++;
+      if (bad == 1) printf("  FAIL: %s\n", err.c_str());
+    }
+  }
+  CHECK_EQ(bad, 0);
+}
+```
+
+- Dòng 1101: in tên test — "strict JSON contract (21 keys)" nghĩa là hợp đồng JSON nghiêm ngặt với 21 khóa.
+- Dòng 1104–1107: đặt trạng thái đã biết: nhiệt độ 26.5°C, độ ẩm 61.2%, ánh sáng 800, đất 650, nước 900, có người (pir) và không chạm (touch) — các biến `g...` mô phỏng cảm biến toàn cục.
+- Dòng 1108–1110: gọi /api rồi kiểm tra hợp đồng; nếu sai in lý do, và `CHECK(err.empty())` xác nhận không có lỗi (biến `err` do `validateApiResponse` điền).
+- Dòng 1112–1118: bật demo rồi gọi /api ngay; JSON phải hợp lệ trong lúc demo đang chạy.
+- Dòng 1119: `has` (dòng 69) là tìm chuỗi con bằng `strstr`; kiểm tra thân phản hồi chứa đúng đoạn `"demo":true`.
+- Dòng 1120: thân phản hồi phải chứa tên bước demo hiện tại (`demoStepName()`) — tức demoStep cập nhật trực tiếp theo thời gian thực.
+- Dòng 1121–1122: chạy mô phỏng 40 giây (bước 10ms) cho demo kết thúc, rồi xác nhận demo đã dừng.
+- Dòng 1124–1131: trạng thái cho ăn: `startFeed()` rồi /api phải chứa `"feed":true`; sau đó `stopFeed()` dọn trạng thái.
+- Dòng 1134: `std::mt19937 rng(1234)` — bộ sinh số giả ngẫu nhiên với seed (hạt giống) cố định là 1234. Vì thuật toán sinh số là tất định theo seed, dãy số sinh ra giống hệt nhau ở mọi lần chạy → test lặp lại được (reproducible). Nếu test fail, lập trình viên chạy lại vẫn gặp đúng trạng thái gây lỗi để sửa; nếu seed lấy theo đồng hồ thì mỗi lần một dãy khác, rất khó tái hiện lỗi.
+- Dòng 1137: temp = `(rng() % 500) / 10.0` → số thực trong khoảng 0.0–49.9°C.
+- Dòng 1138: hum = 0–100%.
+- Dòng 1139–1141: light, soil, water = 0–4095, đúng dải ADC 12 bit của ESP32.
+- Dòng 1142–1143: pir và touch ngẫu nhiên true/false.
+- Dòng 1144–1149: gọi /api và kiểm tra hợp đồng với từng trạng thái; đếm số lần sai vào `bad`, chỉ in lỗi đầu tiên để log không bị ngập 200 dòng.
+- Dòng 1151: `CHECK_EQ(bad, 0)` — không được phép có bất kỳ trạng thái nào trả JSON sai hợp đồng.
+- Dòng 1153–1154: dòng trống và comment `// D6: ...` — mở đầu mục 14.7 bên dưới.
+
+### 14.7. D6 — thân phản hồi chính xác + ngưỡng biên (dòng 1155–1250)
+
+Mục này kiểm tra hai loại "hợp đồng" khác: (1) thân phản hồi HTTP của các route phải đúng từng ký tự, và (2) các ngưỡng cấu hình phải xử lý đúng tại biên — giá trị lớn nhất/nhỏ nhất, giá trị âm, chuỗi không phải số.
+
+#### D6 — testResponseExactness() (dòng 1155–1250; thân hàm 1155–1248)
+
+**Mục đích:** Xác minh body của các route (/on, /off, /toggle, /auto, /rgb, /breathe, /windmill, /feed, /demo, /threshold, /servo) đúng chính xác từng ký tự, và các ngưỡng (soil, water, temp, light) được kẹp/sửa đúng tại biên.
+
+```cpp
+// D6: độ chính xác body HTTP + biên ngưỡng
+static void testResponseExactness() {
+  printf("D6  http: exact bodies + threshold edges\n");
+
+  CHECK_EQ(invoke("/on"), 200);
+  CHECK_STR(mockServerLastBody(), "LED ON");
+  CHECK_STR(mockServerLastType(), "text/plain");
+  CHECK_EQ(invoke("/off"), 200);
+  CHECK_STR(mockServerLastBody(), "LED OFF");
+
+  CHECK_EQ(invoke("/toggle", "id", "pump"), 200);
+  CHECK_STR(mockServerLastBody(), "ok");
+  CHECK_EQ(invoke("/toggle", "id", "nope"), 400);
+  CHECK_STR(mockServerLastBody(), "unknown id");
+  CHECK_EQ(invoke("/auto", "id", "nope", "on", "true"), 400);
+  CHECK_STR(mockServerLastBody(), "unknown id");
+  CHECK_EQ(invoke("/auto", "id", "light", "on", "TRUE"), 200);
+  CHECK(!lightAuto);                       // chỉ "true" mới bật auto
+
+  invoke("/rgb", "r", "0", "g", "255", "b", "255");
+  CHECK_EQ(rgbR, 0); CHECK_EQ(rgbG, 255); CHECK_EQ(rgbB, 255);
+  CHECK_STR(mockServerLastBody(), "ok");
+
+  invoke("/breathe");
+  CHECK_STR(mockServerLastBody(), "ok");
+  CHECK(breatheLedState);
+  CHECK(!breatheAuto);
+  invoke("/breathe");
+  CHECK(!breatheLedState);
+
+  invoke("/windmill");                     // không tham số -> tắt
+  CHECK_STR(mockServerLastBody(), "windmill off");
+  invoke("/windmill", "on", "true");
+  CHECK_STR(mockServerLastBody(), "windmill on");
+  CHECK(windmillOn);
+  invoke("/windmill", "on", "false");
+  CHECK_STR(mockServerLastBody(), "windmill off");
+
+  invoke("/feed");
+  CHECK_STR(mockServerLastBody(), "feeding");
+  CHECK(feedRunning());
+  runLoop(2100);
+  CHECK(!feedRunning());
+
+  invoke("/demo");
+  CHECK_STR(mockServerLastBody(), "demo started");
+  CHECK(demoRunning());
+  runLoop(32000);
+  CHECK(!demoRunning());
+
+  CHECK_EQ(invoke("/threshold"), 400);
+  CHECK_STR(mockServerLastBody(), "no params");
+  invoke("/threshold", "soilLow", "4095");
+  CHECK_NEAR(soilThresholdLow, 4095, 0.01);
+  CHECK_NEAR(soilThresholdHigh, 4095, 0.01);        // mức sửa tốt nhất tại biên
+  // Ngưỡng bằng nhau không được làm bơm bật/tắt liên tục (guard điều khiển):
+  gWater = 900; gSoil = 100; relayState = false; pumpAuto = true;
+  controlPump();
+  CHECK(!relayState);
+  soilThresholdLow = 400; soilThresholdHigh = 700;
+
+  invoke("/threshold", "soilLow", "-5");
+  CHECK_NEAR(soilThresholdLow, 0, 0.01);
+  CHECK_NEAR(soilThresholdHigh, 700, 0.01);         // không đổi (vẫn > low)
+  invoke("/threshold", "soilLow", "abc");
+  CHECK_NEAR(soilThresholdLow, 0, 0.01);            // toFloat("abc") trả về 0
+  soilThresholdLow = 400; soilThresholdHigh = 700;
+
+  invoke("/threshold", "waterLow", "99999");
+  CHECK_NEAR(waterThresholdLow, 4095, 0.01);
+  waterThresholdLow = 200;
+
+  invoke("/threshold", "tempLow", "60");
+  CHECK_NEAR(tempThresholdLow, 60, 0.01);
+  CHECK_NEAR(tempThresholdHigh, 61, 0.01);          // giữ nghiêm ngặt trên low
+  invoke("/threshold", "tempLow", "25");
+  CHECK_NEAR(tempThresholdLow, 25, 0.01);
+  invoke("/threshold", "tempHigh", "0");
+  CHECK_NEAR(tempThresholdHigh, 26, 0.01);          // sửa thành low + 1
+  tempThresholdHigh = 30; tempThresholdLow = 25;
+  invoke("/threshold", "light", "5000");
+  CHECK_EQ(lightThreshold, 4095);
+  lightThreshold = 500;
+
+  invoke("/rgb");                                    // không tham số -> toàn số 0
+  CHECK_EQ(rgbR, 0); CHECK_EQ(rgbG, 0); CHECK_EQ(rgbB, 0);
+  CHECK(!rgbAuto);
+  invoke("/servo", "angle", "0");
+  CHECK_EQ(servoAngle, 0);
+  invoke("/servo", "angle", "180");
+  CHECK_EQ(servoAngle, 180);
+  invoke("/servo", "angle", "abc");
+  CHECK_EQ(servoAngle, 0);
+  servoAngle = 0;
+}
+```
+
+- Dòng 1156: in tên test — "exact bodies + threshold edges" nghĩa là thân phản hồi chính xác + các giá trị ngay tại biên (ngưỡng).
+- Dòng 1158–1160: /on phải trả mã 200, body đúng chính xác `LED ON`, kiểu `text/plain`. Vì `CHECK_STR` dùng `strcmp` (so từng ký tự, phân biệt hoa/thường và khoảng trắng), chỉ cần thừa một dấu cách hay ký tự xuống dòng là fail — điều này giữ giao diện ổn định cho mọi client đang đọc chuỗi này.
+- Dòng 1161–1162: /off tương tự với body `LED OFF`.
+- Dòng 1164–1167: /toggle với `id=pump` trả 200 và body `ok`; `id=nope` trả 400 (yêu cầu sai) cùng thông báo `unknown id`.
+- Dòng 1168–1169: /auto với id lạ cũng trả 400 và `unknown id`.
+- Dòng 1170–1171: /auto `light` với `on=TRUE` (chữ hoa) trả 200 nhưng cờ `lightAuto` phải vẫn tắt — firmware chỉ nhận đúng chuỗi `"true"`, qua đó kiểm tra việc phân biệt chữ hoa/thường.
+- Dòng 1173–1175: /rgb đặt từng kênh màu; ba biến `rgbR`, `rgbG`, `rgbB` phải lần lượt là 0, 255, 255 và body là `ok`.
+- Dòng 1177–1182: /breathe lần đầu bật hiệu ứng (`breatheLedState` true) và phải tắt chế độ auto (`breatheAuto` false); lần thứ hai thì tắt hiệu ứng.
+- Dòng 1184–1190: /windmill không tham số mặc định tắt, body `windmill off`; `on=true` bật, body `windmill on`; `on=false` tắt lại.
+- Dòng 1192–1196: /feed trả body `feeding`, trạng thái cho ăn bật; chạy mô phỏng 2100ms (hơn thời lượng cho ăn ~2 giây một chút) thì phải tự kết thúc — đây là kiểm tra tại biên thời gian.
+- Dòng 1198–1202: /demo trả `demo started`, demo chạy; sau 32 giây mô phỏng thì demo phải kết thúc.
+- Dòng 1204–1205: /threshold không có tham số trả 400 kèm body `no params` (không có tham số).
+- Dòng 1206–1208: `soilLow=4095` — 4095 là giá trị ADC lớn nhất (12 bit, mức ẩm cao nhất). Firmware kẹp giá trị vào dải hợp lệ và sửa để high không nhỏ hơn low, nên cả `soilThresholdLow` lẫn `soilThresholdHigh` đều thành 4095 (chú thích gốc: "mức sửa tốt nhất tại biên").
+- Dòng 1209–1212: kiểm tra guard (bộ bảo vệ) chống bơm bật/tắt liên tục khi hai ngưỡng bằng nhau (vùng trễ bằng 0): đặt đất rất khô (100), nước đủ (900), bơm đang tắt, pumpAuto bật, gọi `controlPump()` — kỳ vọng relay vẫn tắt (không tự bật).
+- Dòng 1213: khôi phục ngưỡng đất về 400/700 trước các kiểm tra tiếp theo.
+- Dòng 1215–1217: `soilLow=-5` bị kẹp về 0 (không cho ngưỡng âm); `soilThresholdHigh` giữ nguyên 700 vì vẫn lớn hơn low.
+- Dòng 1218–1219: `soilLow=abc` — chuỗi không phải số nên `toFloat("abc")` trả về 0, ngưỡng thành 0 (comment gốc trong code).
+- Dòng 1220: khôi phục ngưỡng đất.
+- Dòng 1222–1224: `waterLow=99999` vượt trần ADC nên bị kẹp về 4095; sau đó khôi phục về 200.
+- Dòng 1226–1228: `tempLow=60` được nhận đúng; `tempThresholdHigh` tự động thành 61 để luôn cao hơn low ít nhất 1 đơn vị (giữ nghiêm ngặt high > low).
+- Dòng 1229–1230: `tempLow=25` được nhận đúng 25.
+- Dòng 1231–1232: `tempHigh=0` nhỏ hơn low (25) nên bị sửa thành low + 1 = 26.
+- Dòng 1233: khôi phục temp về 25/30.
+- Dòng 1234–1236: `light=5000` vượt trần 4095 nên bị kẹp về 4095; khôi phục về 500.
+- Dòng 1238–1240: /rgb không tham số đặt cả ba kênh về 0 và tắt rgbAuto.
+- Dòng 1241–1242: /servo với `angle=0` (biên dưới) hợp lệ → `servoAngle` = 0.
+- Dòng 1243–1244: /servo với `angle=180` (biên trên) hợp lệ → `servoAngle` = 180.
+- Dòng 1245–1246: góc `abc` không phải số → về 0 (giá trị an toàn).
+- Dòng 1247: khôi phục `servoAngle` về 0 sau test.
+- Dòng 1249–1250: dòng trống và comment `// D7: ...` — mở đầu mục test OLED tiếp theo (ngoài phạm vi 14.7).
+
+
+### 14.8. D7 + D8 — layout OLED từng dòng và biên serial (dòng 1251–1372)
+
+#### D7 — testOledLines() (dòng 1251–1278)
+
+**Mục đích:** Gọi hàm thật `updateOLED()` rồi soi từng dòng mà nó vẽ ra: đúng nội dung, đúng định dạng, và mọi dòng đều ≤ 21 ký tự kể cả khi số liệu ở giá trị xấu nhất.
+
+```cpp
+static void testOledLines() {
+  printf("D7  oled: per-row layout + 21-char line limit\n");
+  mockWifiStatus = WL_CONNECTED;
+  mockWifiIp = "255.255.255.255";
+  gTemp = 26.5f; gHum = 61; gLight = 800; gSoil = 650; gWater = 900;
+  relayState = false; windmillOn = false;
+  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  CHECK_STR(mockOledLine(0), "Smart Farm");
+  CHECK_STR(mockOledLine(1), "TT: Nang");
+  CHECK_STR(mockOledLine(2), "T:26.5C H:61%");
+  CHECK_STR(mockOledLine(3), "Light: 800");
+  CHECK_STR(mockOledLine(4), "Soil: 650");
+  CHECK_STR(mockOledLine(5), "H2O:900 P:OFF");
+  CHECK_STR(mockOledLine(6), "IP:255.255.255.255");
+  CHECK_STR(mockOledLine(7), "San sang");
+
+  // Giá trị xấu nhất: mỗi dòng vẫn phải vừa 21 ký tự (128 px / 6 px)
+  gTemp = 99.9f; gHum = 100; gLight = 4095; gSoil = 4095; gWater = 4095;
+  relayState = true;
+  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  for (int r = 0; r < mockOledLineCount(); r++) {
+    CHECK(strlen(mockOledLine(r)) <= 21);
+    CHECK(strlen(mockOledLine(r)) > 0);
+  }
+  CHECK_STR(mockOledLine(5), "H2O:4095 P:ON");
+  relayState = false;
+  mockWifiIp = "192.168.1.50";
+}
+```
+
+- Dòng 1251–1252: khai báo hàm test; câu `printf` chỉ để in tên test khi chạy.
+- Dòng 1253: nạp mock `mockWifiStatus = WL_CONNECTED` — “WiFi đang kết nối”, cần cho dòng IP ở dòng 6.
+- Dòng 1254: nạp IP dài nhất có thể `"255.255.255.255"` (15 ký tự) — đây là ca xấu nhất cho dòng “IP:…”.
+- Dòng 1255: đặt thẳng 5 giá trị cảm biến (không cần đọc ADC) để các dòng giữa có số đẹp, dễ đối chiếu.
+- Dòng 1256: tắt bơm và cối xay để thấy rõ nhánh `P:OFF` và nhánh “San sang”.
+- Dòng 1257: gọi hàm thật `updateOLED()` (src/oled.cpp:18). Mock OLED ghi lại từng dòng theo lời gọi `setCursor(0, y)`: y chia 8 là số thứ tự dòng (mock.cpp:248–252).
+- Dòng 1258: dòng 0 phải là tiêu đề “Smart Farm”.
+- Dòng 1259: dòng 1 là “TT: ” + mô tả thời tiết; gLight 800 > ngưỡng 500+50 và gHum 61 ≤ 80 nên `weatherStatus()` trả WEATHER_SUNNY → chữ “Nang” (sensors.cpp:93–99, oled.cpp:9–16).
+- Dòng 1260: dòng 2 = “T:” + nhiệt độ 1 số thập phân (26.5) + “C H:” + độ ẩm 0 số thập phân (61) + “%”.
+- Dòng 1261–1262: dòng 3, 4 = “Light: 800”, “Soil: 650” (chú ý có dấu cách sau dấu hai chấm).
+- Dòng 1263: dòng 5 = “H2O:900 P:OFF” — phần `P:` theo cờ `relayState` (đang tắt).
+- Dòng 1264: dòng 6 = “IP:” + địa chỉ IP mà mock trả về (tổng 18 ký tự).
+- Dòng 1265: dòng 7 = “San sang” vì demo không chạy, cối xay tắt, máng ăn đang đóng (oled.cpp:66–76).
+- Dòng 1267–1269: chuyển sang bộ giá trị xấu nhất: 99.9 °C, độ ẩm 100 %, các cảm biến ADC chạm trần 4095 (ADC 12 bit: 2^12 − 1); bật bơm để ép nhánh `P:ON`.
+- Dòng 1270: vẽ lại toàn bộ màn hình với dữ liệu mới.
+- Dòng 1271–1273: quét cả 8 dòng (`mockOledLineCount()` luôn trả 8); `CHECK(<= 21)` vì màn rộng 128 px, font mặc định mỗi ký tự 6 px → 128/6 ≈ 21,3 nên tối đa 21 ký tự; `CHECK(> 0)` chắc rằng không dòng nào bị bỏ trống.
+- Dòng 1275: riêng dòng 5 phải đúng “H2O:4095 P:ON” — số 4 chữ số và trạng thái ON vẫn không làm dòng vượt 21 ký tự.
+- Dòng 1276–1277: dọn dẹp: trả bơm về tắt, trả IP mặc định cho các test sau.
+
+#### D8 — testSerialEdges() (dòng 1281–1362)
+
+**Mục đích:** Kiểm tra các ca biên khi gõ lệnh qua serial (dòng trống, chỉ CR, byte rác, dòng rác dài) và hành vi chế độ debug: tạm dừng tự động hóa, từ chối phím lạ, rồi khôi phục quy tắc an toàn ngay khi thoát.
+
+```cpp
+static void testSerialEdges() {
+  printf("D8  serial: edge cases + debug mode\n");
+
+  mockSerialClear();
+  mockSerialPush("\r\n");                    // dòng trống: bỏ qua
+  loop();
+  loop();
+  CHECK_EQ(strlen(mockSerialOutput()), 0);
+
+  mockSerialClear();
+  mockSerialPush("\r");                      // chỉ CR: bỏ qua
+  loop();
+  CHECK_EQ(strlen(mockSerialOutput()), 0);
+
+  char badByte[2] = {(char)0xFF, 0};         // byte rác: bị từ chối
+  mockSerialClear();
+  mockSerialPush(badByte);
+  loop();
+  CHECK(has(mockSerialOutput(), "Invalid"));
+
+  mockSerialClear();
+  for (int i = 0; i < 64; i++) mockSerialPush("x");   // dòng rác dài
+  for (int i = 0; i < 64; i++) loop();
+  CHECK_EQ(mockSerialPending(), 0);
+  CHECK_EQ(countOccurrences(mockSerialOutput(), "Invalid"), 64);
+
+  // '0' ở chế độ thường được xử lý an toàn (in thông báo thoát, vẫn ở chế độ thường)
+  mockSerialClear();
+  mockSerialPush("0");
+  loop();
+  CHECK(has(mockSerialOutput(), ">> Exit debug."));
+
+  // Chế độ debug tạm dừng automation (chế độ bảo trì)...
+  resetState();
+  gWater = 900; gSoil = 100; pumpAuto = true;
+  controlPump();
+  CHECK(relayState);
+  mockSerialClear();
+  mockSerialPush("3");
+  loop();
+  CHECK(has(mockSerialOutput(), "--- CONTROL ---"));
+  gWater = 50;
+  mockAdc[WATER_PIN] = INVERT_WATER ? 4045 : 50;
+  lastSensorRead = mockMillis();
+  loop();
+  CHECK(relayState);                          // chế độ debug: automation tạm dừng
+  // trong chế độ debug mọi phím khác đều bị từ chối
+  mockSerialClear();
+  mockSerialPush("x");
+  loop();
+  CHECK(has(mockSerialOutput(), "Enter '0' to exit debug."));
+  // ...và loop đầu tiên sau khi thoát khôi phục quy tắc an toàn
+  mockSerialClear();
+  mockSerialPush("0");
+  loop();
+  CHECK(has(mockSerialOutput(), "Running normally..."));
+  CHECK(!relayState);
+
+  // Menu debug '5' khi WiFi mất sẽ đi qua nhánh kết nối lại
+  resetState();
+  mockWifiStatus = WL_DISCONNECTED;
+  mockSerialClear();
+  mockSerialPush("5");
+  loop();
+  CHECK(has(mockSerialOutput(), "--- WIFI ---"));
+  CHECK_EQ(mockWifiReconnectCalls, 1);
+  mockSerialPush("0");
+  loop();
+  mockWifiStatus = WL_CONNECTED;
+
+  // Mức DEBUG bật dòng cảm biến định kỳ và tag DEBUG
+  resetState();
+  gMinLogLevel = LOG_DEBUG;
+  mockSerialClear();
+  logSensors();
+  CHECK(has(mockSerialOutput(), "[SENSORS]"));
+  debugLogger();
+  CHECK(has(mockSerialOutput(), "[DEBUG]"));
+  gMinLogLevel = LOG_INFO;
+
+  resetState();
+}
+```
+
+- Dòng 1281–1282: khai báo hàm test; câu `printf` chỉ để in tên test.
+- Cách “bơm” byte rác: test nạp ký tự vào bộ đệm nhập serial giả lập bằng `mockSerialPush()` (mock.cpp:144) rồi gọi `loop()` thật. Mỗi vòng `loop()` chỉ đọc đúng 1 byte qua `Serial.available()/Serial.read()` (SmartFarm.ino:166–167), nên muốn ăn hết N byte phải gọi loop N lần.
+- Dòng 1284–1288: bơm chuỗi `"\r\n"` (dòng trống) rồi loop 2 lần; cả '\r' lẫn '\n' đều rơi vào nhánh “bỏ qua” (SmartFarm.ino:168–169) nên `mockSerialOutput()` phải rỗng.
+- Dòng 1290–1293: chỉ một ký tự '\r' cũng bị bỏ qua, không in gì.
+- Dòng 1295–1299: byte rác 0xFF: `Serial.read()` trả 255, gán vào biến `char` thành −1 — không phải '9', không nằm trong '0'..'8' nên rơi vào nhánh cuối và in “>> Invalid. Enter 0-9.” (SmartFarm.ino:176–179). CHECK chỉ cần thấy chữ “Invalid”.
+- Dòng 1301–1305: gửi 64 ký tự 'x' liền nhau; chạy đúng 64 vòng loop, mỗi vòng “ăn” 1 ký tự. `mockSerialPending() == 0` chứng minh không sót byte nào trong bộ đệm; `countOccurrences("Invalid") == 64` chứng minh từng ký tự rác đều bị từ chối riêng, không bị nuốt cụm.
+- Dòng 1308–1311: gõ '0' lúc đang ở chế độ thường: code tạm bật cờ debug rồi `handleDebugCmd('0')` lập tức tắt lại và in “>> Exit debug.” — thoát an toàn, máy vẫn ở chế độ thường.
+- Dòng 1314–1317: dựng tình huống bơm đang chạy: nước 900, đất 100 (rất khô), bật auto rồi gọi `controlPump()` thật → bơm ON, CHECK xác nhận.
+- Dòng 1319–1321: gõ '3' để vào menu debug Control; `debugControl()` in “--- CONTROL ---” (logger.cpp:106–112).
+- Dòng 1322–1326: nước tụt còn 50, cập nhật luôn `mockAdc[WATER_PIN]` cho khớp (đảo cực nếu INVERT_WATER), dời `lastSensorRead` để chu kỳ đọc 1 giây không đọc đè. Gọi `loop()`: vì đang ở chế độ debug, `loop()` thoát sớm tại `if (sDebugMode) return;` (SmartFarm.ino:190) TRƯỚC dòng an toàn — nên bơm vẫn chạy. Đây là chủ ý “chế độ bảo trì tạm dừng tự động hóa”, và CHECK khẳng định đúng điều đó.
+- Dòng 1328–1331: trong debug, mọi phím khác '0' đều bị từ chối bằng câu “>> Enter '0' to exit debug.” (SmartFarm.ino:185).
+- Dòng 1333–1337: gõ '0' để thoát: in “>> Exit debug.” và “Running normally…” (SmartFarm.ino:181–183); ngay vòng loop đầu tiên sau khi thoát, dòng an toàn “nước thấp thì tắt bơm” chạy lại → CHECK xác nhận bơm đã tắt.
+- Dòng 1340–1346: ca WiFi mất: ép `mockWifiStatus = WL_DISCONNECTED` rồi gõ '5'; `debugWifi()` in “--- WIFI ---” và gọi `WiFi.reconnect()` khi chưa kết nối (logger.cpp:122–130) → bộ đếm `mockWifiReconnectCalls` đúng bằng 1.
+- Dòng 1347–1349: gõ '0' thoát debug rồi trả WiFi về trạng thái kết nối cho các test sau.
+- Dòng 1352–1359: hạ mức log xuống `LOG_DEBUG` rồi gọi `logSensors()` và `debugLogger()`: dòng cảm biến định kỳ chỉ in khi mức log cho phép nên phải thấy “[SENSORS]” (logger.cpp:63–67); `debugLogger()` in header mang tag “[DEBUG]”. Sau đó trả mức log về INFO.
+- Dòng 1361: `resetState()` trả mọi thứ về mặc định.
+
+### 14.9. D9 + D10 + D11 — chẩn đoán demo, chống spam WiFi, thứ tự khởi động (dòng 1373–1515)
+
+#### D9 — testDemoDiagnostics() (dòng 1373–1439)
+
+**Mục đích:** Chạy trọn trình diễn thật `startDemo()`/`updateDemo()` hai lượt: lượt 1 kiểm tra đúng 15 bước, đúng tên, đúng tổng thời lượng 30.700 ms và dọn sạch cơ cấu; lượt 2 cố tình để cạn nước giữa bước bơm để chứng minh an toàn luôn thắng.
+
+```cpp
+static const char *DEMO_STEPS[] = {
+  "HD2: Thap sang", "HD3: Den tho PWM", "HD4: Cham LED (bat)", "HD4: Cham LED (tat)",
+  "HD5: PIR co nguoi", "HD5: Nguoi roi di", "HD6: Coi xay gio quay", "HD7: Tuoi tu dong",
+  "HD8: Bao nuoc can", "HD9: Den tang truong", "HD10: Cho an tu dong", "HD10: Dong cua",
+  "HD11: Xem OLED", "HD12: Dieu khien", "HD12: Tat tu xa"
+};
+static const int DEMO_STEP_COUNT = (int)(sizeof(DEMO_STEPS) / sizeof(DEMO_STEPS[0]));
+
+static void testDemoDiagnostics() {
+  printf("D9  demo: step order, duration, OLED names, mid-step safety\n");
+
+  // Lượt 1: chuỗi bước chính xác + tổng thời lượng + tên OLED
+  resetState();
+  primeSensors(900);
+  mockSerialClear();
+  unsigned long t0 = mockMillis();
+  startDemo();
+  CHECK(demoRunning());
+  std::vector<std::string> names;
+  names.push_back(demoStepName());
+  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  CHECK_STR(mockOledLine(7), names.back().c_str());
+  CHECK(strlen(names.back().c_str()) <= 21);
+
+  unsigned long cap = mockMillis() + 120000;
+  while (demoRunning() && mockMillis() < cap) {
+    mockAdvance(10);
+    simLoop();
+    if (!demoRunning()) break;
+    const char *n = demoStepName();
+    if (names.back() != n) {
+      names.push_back(n);
+      updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+      CHECK_STR(mockOledLine(7), n);
+      CHECK(strlen(n) <= 21);
+    }
+  }
+  unsigned long elapsed = mockMillis() - t0;
+  CHECK(!demoRunning());
+  CHECK_EQ((int)names.size(), DEMO_STEP_COUNT);
+  for (int i = 0; i < DEMO_STEP_COUNT && i < (int)names.size(); i++) {
+    CHECK_STR(names[i].c_str(), DEMO_STEPS[i]);
+  }
+  CHECK(elapsed >= 30700 && elapsed <= 30800);       // tổng thời gian các bước chính xác
+  CHECK_EQ(countOccurrences(mockSerialOutput(), "[DEMO] "), DEMO_STEP_COUNT);
+  CHECK(has(mockSerialOutput(), "DEMO DONE"));
+  CHECK(!relayState);
+  CHECK_EQ(mockServoAngle, WINDMILL_MIN_ANGLE);
+  CHECK_EQ(currentLedPwm(), 0);
+  checkBuzzer(false);
+
+  // Lượt 2: hết nước giữa bước bơm -> an toàn phải ngắt bơm ngay
+  resetState();
+  primeSensors(900);
+  startDemo();
+  bool dropped = false, violated = false, sawPumpOn = false;
+  cap = mockMillis() + 120000;
+  while (demoRunning() && mockMillis() < cap) {
+    mockAdvance(10);
+    if (!dropped && strstr(demoStepName(), "HD7")) {
+      dropped = true;
+      gWater = 50;                                     // bồn cạn giữa bước
+      mockAdc[WATER_PIN] = INVERT_WATER ? 4045 : 50;
+      lastSensorRead = mockMillis();
+    }
+    simLoop();
+    if (relayState) sawPumpOn = true;
+    if (relayState && gWater < (int)waterThresholdLow) violated = true;
+  }
+  CHECK(dropped);
+  CHECK(sawPumpOn);                                    // bơm chạy khi nước còn ổn
+  CHECK(!violated);                                    // sau đó không bao giờ chạy khô
+  CHECK(!demoRunning());
+  CHECK(!relayState);
+}
+```
+
+- Dòng 1365–1371: `DEMO_STEPS` là danh sách 15 tên bước viết tay trong test để đối chiếu với tên do firmware thật trả ra; `DEMO_STEP_COUNT` tự tính bằng 15.
+- Dòng 1373–1374: khai báo hàm test; câu `printf` chỉ để in tên test.
+- Dòng 1377–1378: `resetState()` trả mọi thứ về mặc định; `primeSensors(900)` đổ đầy bộ lọc trung bình động (đọc 5 lần) và đặt mực nước 900.
+- Dòng 1380–1382: ghi mốc thời gian `t0`, gọi `startDemo()` thật (demo.cpp:79) rồi xác nhận demo đang chạy.
+- Dòng 1383–1386: lưu tên bước đầu tiên, vẽ OLED rồi CHECK dòng 7 hiển thị đúng tên bước — khi demo chạy, dòng trạng thái cuối màn hình thuộc về demo (oled.cpp:68–69).
+- Dòng 1387: tên bước phải ≤ 21 ký tự; tên dài nhất “HD6: Coi xay gio quay” đúng 21 ký tự nên vừa màn.
+- Dòng 1389–1401: vòng lặp mô phỏng thời gian: mỗi vòng đẩy đồng hồ 10 ms rồi gọi `simLoop()` (bản sao phần điều khiển của loop thật, không HTTP/OLED — test_main.cpp:126–142). Khi tên bước đổi, ghi lại tên mới, vẽ lại OLED và CHECK dòng 7 + giới hạn 21 ký tự. `cap` 120.000 ms chỉ là lưới an toàn chống treo (demo thật dài ~30,7 s).
+- Dòng 1402–1404: đo tổng thời gian; xác nhận demo đã dừng; số tên ghi nhận đúng bằng 15.
+- Dòng 1405–1407: so từng tên với `DEMO_STEPS` — đúng thứ tự các hoạt động HD2 → HD12.
+- Dòng 1408: `elapsed` nằm trong 30.700–30.800 ms. Vì sao đúng 30.700? Cộng 15 khoảng thời gian ở demo.cpp:23–37: 2000+4000+1200+1000+2500+1000+4000+2500+1000+3000+3000+800+2500+1200+1000 = 30.700 ms. Cận trên 30.800 chừa sai số tối đa một nhịp 10 ms khi phát hiện chuyển bước.
+- Dòng 1409: đếm log “[DEMO] ” đúng 15 lần — mỗi bước in 1 dòng lúc bắt đầu (bước đầu ở `startDemo()`, các bước sau ở `updateDemo()`).
+- Dòng 1410: cuối demo phải có dòng “DEMO DONE”.
+- Dòng 1411–1414: demo kết thúc phải dọn sạch: bơm tắt, servo về `WINDMILL_MIN_ANGLE` (mặc định 0 — config.h:83), PWM đèn xanh bằng 0, còi tắt (demo.cpp:112–123).
+- Dòng 1417–1421: lượt 2 tái lập môi trường rồi khởi động demo; thêm 3 cờ theo dõi và lưới an toàn 120 s.
+- Dòng 1424–1429: ngay khi bước hiện tại là “HD7: Tuoi tu dong”, lần đầu tiên sẽ hạ mực nước xuống 50, cập nhật ADC thô cho khớp (đảo cực nếu INVERT_WATER) và dời `lastSensorRead` để chu kỳ đọc cảm biến không ghi đè ngay.
+- Dòng 1430–1432: chạy `simLoop()` rồi ghi nhận: `sawPumpOn` bật khi bơm từng chạy; `violated` bật nếu bắt gặp bơm chạy trong lúc nước dưới ngưỡng.
+- Vì sao `violated` luôn sai (không bao giờ chạy khô): bơm chỉ được bật đúng lúc bắt đầu bước HD7, khi nước còn 900; vòng kế tiếp nước đã cạn, dòng an toàn ở đầu `simLoop()` (dòng 134: nước thấp + bơm đang chạy → tắt bơm ngay) cắt bơm trước khi bất kỳ nhánh nào kịp bật lại.
+- Dòng 1434–1438: CHECK đủ 4 điều: đã hạ nước giữa bước; bơm từng chạy khi nước còn ổn; chưa từng chạy khô; demo vẫn kết thúc bình thường và bơm tắt khi kết thúc.
+
+#### D10 — testWifiThrottle() (dòng 1442–1485)
+
+**Mục đích:** Kiểm tra bộ đếm chống spam của `manageWiFi()`: chỉ thử kết nối lại đúng mỗi 10.000 ms, chỉ ghi log “WiFi lost” một lần cho mỗi đợt mất mạng, và ghi “WiFi reconnected” một lần khi nối lại.
+
+```cpp
+static void testWifiThrottle() {
+  printf("D10 wifi: reconnect throttle + counters\n");
+  mockWifiStatus = WL_CONNECTED;
+  const int c0 = mockWifiBeginCalls;
+  loop();                                              // reset cờ đã cảnh báo
+  CHECK_EQ(mockWifiBeginCalls, c0);                    // đã kết nối: không thử kết nối lại
+
+  mockWifiStatus = WL_DISCONNECTED;
+  lastWifiCheck = mockMillis();
+  const int b0 = mockWifiBeginCalls, d0 = mockWifiDisconnectCalls;
+  mockSerialClear();
+
+  mockAdvance(WIFI_CHECK_INTERVAL - 1);
+  loop();
+  CHECK_EQ(mockWifiBeginCalls, b0);                    // chưa đến hạn
+  mockAdvance(1);
+  loop();
+  CHECK_EQ(mockWifiBeginCalls, b0 + 1);                // đến hạn đúng tại khoảng thời gian
+  CHECK_EQ(mockWifiDisconnectCalls, d0 + 1);
+  CHECK_EQ(countOccurrences(mockSerialOutput(), "WiFi lost"), 1);
+
+  mockAdvance(WIFI_CHECK_INTERVAL - 1);
+  loop();
+  CHECK_EQ(mockWifiBeginCalls, b0 + 1);
+  mockAdvance(1);
+  loop();
+  CHECK_EQ(mockWifiBeginCalls, b0 + 2);                // thử lại mỗi 10 s
+  CHECK_EQ(countOccurrences(mockSerialOutput(), "WiFi lost"), 1);  // nhưng chỉ ghi log một lần
+
+  mockWifiStatus = WL_CONNECTED;
+  mockSerialClear();
+  loop();
+  CHECK(has(mockSerialOutput(), "WiFi reconnected"));
+  CHECK_EQ(mockWifiBeginCalls, b0 + 2);                // không thử thêm
+
+  // Một lần mất mạng mới lại ghi log (cờ cảnh báo đã được reset bởi lần kết nối lại)
+  mockWifiStatus = WL_DISCONNECTED;
+  lastWifiCheck = mockMillis() - WIFI_CHECK_INTERVAL - 1;
+  mockSerialClear();
+  loop();
+  CHECK_EQ(countOccurrences(mockSerialOutput(), "WiFi lost"), 1);
+  mockWifiStatus = WL_CONNECTED;
+  loop();
+}
+```
+
+- Dòng 1442–1443: khai báo hàm test; câu `printf` chỉ để in tên test.
+- Dòng 1444–1447: đặt WiFi đang kết nối; lấy mốc `c0` rồi gọi `loop()` — `manageWiFi()` thấy kết nối thì chỉ cập nhật mốc thời gian và xóa cờ đã cảnh báo, không gọi `WiFi.begin()` (wifi.cpp:12–19). CHECK xác nhận không tốn lượt kết nối nào.
+- Dòng 1449–1452: ép mất WiFi; đồng bộ `lastWifiCheck` với đồng hồ giả lập; lưu mốc `b0`/`d0` và xóa output serial.
+- Dòng 1454–1456: đẩy đồng hồ 9.999 ms (`WIFI_CHECK_INTERVAL − 1` = 10.000 − 1) rồi loop: chưa đến hạn nên không thử lại.
+- Dòng 1457–1459: đẩy thêm đúng 1 ms → vừa tròn 10.000 ms, điều kiện `now − lastWifiCheck >= WIFI_CHECK_INTERVAL` (dùng phép trừ chống tràn) đúng → thử kết nối lại, `WiFi.begin()` tăng đúng 1.
+- Dòng 1460: mỗi lần thử lại đều `WiFi.disconnect()` trước cho sạch trạng thái → bộ đếm disconnect cũng +1.
+- Dòng 1461: thông báo “WiFi lost” xuất hiện đúng 1 lần — cờ tĩnh `sWarned` (wifi.cpp:9) chỉ cho in ở lần mất kết nối đầu.
+- Dòng 1463–1468: lặp lại chu kỳ đúng 10.000 ms → lần thử thứ hai; “thử lại mỗi 10 giây” là vì `lastWifiCheck` được cập nhật sau mỗi lần thử.
+- Dòng 1469: vẫn chỉ 1 dòng “WiFi lost” dù đã thử 2 lần — chống spam serial.
+- Dòng 1471–1474: WiFi kết nối lại → in “WiFi reconnected” đúng một lần khi cờ cảnh báo được hạ (wifi.cpp:13–16).
+- Dòng 1475: đã kết nối thì không gọi `WiFi.begin()` thêm.
+- Dòng 1478–1482: kịch bản mất mạng lần mới: lùi mốc `lastWifiCheck` về quá khứ để chắc chắn quá hạn; lần này log “WiFi lost” lại xuất hiện 1 lần — chứng minh cờ cảnh báo đã được reset ở lần kết nối lại trước đó.
+- Dòng 1483–1484: trả WiFi về kết nối để dọn trạng thái (vòng loop này cũng in “WiFi reconnected” nhưng test không kiểm tra).
+
+#### D11 — testBootOrder() (dòng 1488–1513)
+
+**Mục đích:** Chạy `setup()` thật trên “chip mới tinh” và soi log thứ tự gọi chân: mức an toàn phải được ghi vào chốt ra TRƯỚC khi chuyển chân sang OUTPUT (chống glitch), kèm kiểm tra watchdog và đủ 14 route.
+
+```cpp
+static void testBootOrder() {
+  printf("D11 boot: output latch before pinMode + WDT\n");
+  mockReset();
+  mockServerReset();
+  mockIoLogClear();
+  setup();
+  checkRelayPin(false);                                // bơm TẮT khi boot
+
+  const char *log = mockIoLog();
+  const char *wRelay = strstr(log, "W:26=");
+  const char *mRelay = strstr(log, "M:26;");
+  CHECK(wRelay && mRelay);
+  CHECK(wRelay < mRelay);                              // ghi chốt trước
+
+  const char *wFan = strstr(log, "W:14=");
+  const char *mFan = strstr(log, "M:14;");
+  CHECK(wFan && mFan && wFan < mFan);
+
+  const char *wBuzz = strstr(log, "W:25=");
+  const char *mBuzz = strstr(log, "M:25;");
+  CHECK(wBuzz && mBuzz && wBuzz < mBuzz);
+
+  CHECK(mockWdtInitCalls >= 1);
+  CHECK_EQ(mockWdtAddCalls, 1);
+  CHECK_EQ(mockServerRouteCount(), 14);
+}
+```
+
+- Dòng 1488–1489: khai báo hàm test; câu `printf` chỉ để in tên test.
+- Dòng 1490: `mockReset()` xóa toàn bộ phần cứng giả lập, bộ đếm, và cả bảng “flash” giả lập `sPrefs` (mock.cpp:301) → chip “mới tinh”, không còn cài đặt cũ.
+- Dòng 1491: `mockServerReset()` xóa danh sách route để chắc chắn đếm lại từ 0.
+- Dòng 1492: `mockIoLogClear()` xóa log thứ tự gọi chân.
+- Dòng 1493: `setup()` thật chạy toàn bộ quá trình khởi động.
+- Dòng 1494: `checkRelayPin(false)` — chân bơm phải ở mức TẮT (tùy biến thể active-low/active-high mà helper so mức HIGH/LOW tương ứng).
+- Dòng 1496–1500: lấy log IO rồi tìm “W:26=” (lượt ghi mức bằng `digitalWrite`) và “M:26;” (lượt đổi chế độ chân bằng `pinMode`) của chân 26 = RELAY_PIN (config.h:17). Mock ghi log dạng `W:<chân>=<mức>;` và `M:<chân>;` (mock.cpp:56–61). CHECK khẳng định cả hai đều có và vị trí ghi mức đứng TRƯỚC vị trí pinMode.
+- Dòng 1502–1504: tương tự cho quạt, chân 14.
+- Dòng 1506–1508: tương tự cho còi, chân 25.
+- Vì sao kiểm tra thứ tự “ghi mức trước pinMode”: nếu gọi `pinMode(OUTPUT)` trước, chân có thể tạm thời phát mức không mong muốn trong lúc khởi động — với relay kích mức thấp, bơm sẽ “chớp” một cái. Ghi trước mức an toàn vào chốt ra rồi mới chuyển chân sang OUTPUT sẽ triệt hiện tượng glitch đó (xem setup() SmartFarm.ino:81–88).
+- Dòng 1510: watchdog được khởi tạo ít nhất 1 lần — setup gọi `esp_task_wdt_init`, bản core 3.x còn gọi `esp_task_wdt_deinit` trước (SmartFarm.ino:66–76).
+- Dòng 1511: `esp_task_wdt_add(NULL)` đúng 1 lần (SmartFarm.ino:77) → task loop được bảo vệ và được “nuôi” ở đầu mỗi vòng loop.
+- Dòng 1512: setup đăng ký đúng 14 route (SmartFarm.ino:140–153) — mock đếm được vì ghi lại từng lời gọi `server.on`.
+
+### 14.10. D12 — bền vững sau khi mất điện (dòng 1516–1667)
+
+#### D12 — testRebootPersistence() (dòng 1516–1544)
+
+**Mục đích:** Chỉnh ngưỡng và các cờ tự động qua HTTP, rồi mô phỏng một chu kỳ mất điện — chứng minh cài đặt nằm trong “flash” sống sót, còn trạng thái cơ cấu chỉ trong RAM bị mất sạch.
+
+```cpp
+static void testRebootPersistence() {
+  printf("D12 settings: power-cycle persistence\n");
+  invoke("/threshold", "soilLow", "1234");
+  CHECK_NEAR(soilThresholdLow, 1234, 0.01);
+  CHECK_NEAR(soilThresholdHigh, 1284, 0.01);
+  invoke("/auto", "id", "pump", "on", "false");
+  invoke("/auto", "id", "breathe", "on", "true");
+  invoke("/toggle", "id", "fan");
+  CHECK(!pumpAuto);
+  CHECK(breatheAuto);
+  CHECK(!fanAuto);
+  CHECK(fanState);
+
+  // chu kỳ nguồn: flash giữ prefs, trạng thái chỉ trong RAM bị mất
+  mockServerReset();
+  fanState = relayState = windmillOn = blueLedState = breatheLedState = false;
+  rgbR = rgbG = rgbB = 0;
+  setup();
+
+  CHECK_EQ(mockServerRouteCount(), 14);
+  CHECK_NEAR(soilThresholdLow, 1234, 0.01);
+  CHECK_NEAR(soilThresholdHigh, 1284, 0.01);
+  CHECK(!pumpAuto);
+  CHECK(!fanAuto);
+  CHECK(breatheAuto);
+  CHECK(breatheLedState);                              // setup bật lại breathing
+  CHECK(!fanState);                                    // trạng thái runtime được reset
+  CHECK_EQ(rgbR, 0);                                   // RGB thủ công không được lưu bền
+}
+```
+
+- Dòng 1516–1517: khai báo hàm test; câu `printf` chỉ để in tên test.
+- Dòng 1518: gọi handler thật `/threshold` với `soilLow = 1234` qua helper `invoke()` (helper nạp tham số rồi gọi `mockServerInvoke` và kiểm tra route tồn tại).
+- Dòng 1519: ngưỡng dưới đất được đặt đúng 1234 (so `CHECK_NEAR` vì là số thực).
+- Dòng 1520: ngưỡng trên đất tự thành 1284 = 1234 + 50 — vì `handleThreshold()` ép `soilHigh = soilLow + 50` khi phát hiện `high ≤ low` (webserver.cpp:400–402).
+- Dòng 1521: tắt tự động bơm qua `/auto?...on=false` → `pumpAuto = false`.
+- Dòng 1522: bật tự động chế độ thở → `breatheAuto = true` và handler còn bật luôn đèn thở.
+- Dòng 1523: `/toggle` thiết bị “fan”: tắt tự động quạt (`fanAuto = false`) rồi đảo trạng thái quạt đang tắt thành bật (webserver.cpp:274–295).
+- Dòng 1524–1527: CHECK đủ 4 trạng thái trước khi “mất điện”.
+- Mỗi handler ở trên đều gọi `saveSettings()` (webserver.cpp:293/312), tức “ghi vào flash”: bảng flash giả lập `sPrefs` được cập nhật qua `mockPrefPut()` (mock.cpp:277, Preferences.h:12–13). `saveSettings()` chỉ lưu ngưỡng + 5 cờ tự động, KHÔNG lưu trạng thái bơm/quạt/đèn/RGB (settings.cpp:6–21).
+- Dòng 1529: chú thích nói rõ mô hình: flash giữ prefs, trạng thái chỉ trong RAM bị mất.
+- Dòng 1530: `mockServerReset()` đóng vai “khởi động lại chip”: nó chỉ xóa route và tham số request tạm thời (mock.cpp:194–198), KHÔNG đụng tới `sPrefs` — khác hẳn `mockReset()` ở D11 vốn xóa cả `sPrefs` (mock.cpp:301). Vì thế “flash” vẫn nguyên.
+- Dòng 1531–1532: tự tay xóa các biến trạng thái chỉ sống trong RAM (bơm, quạt, cối xay, 2 chế độ đèn xanh, RGB) — tương đương cúp điện làm RAM mất sạch.
+- Dòng 1533: `setup()` chạy lại như lần cấp điện đầu: đăng ký lại 14 route và gọi `loadSettings()` đọc cài đặt từ “flash” (Preferences mock → `mockPrefGet`, Preferences.h:14–16).
+- Dòng 1535: đủ 14 route được đăng ký lại sau khi khởi động.
+- Dòng 1536–1537: hai ngưỡng đất 1234/1284 vẫn còn nguyên — bằng chứng sống sót qua “mất điện”.
+- Dòng 1538–1540: các cờ tự động bơm/quạt/thở đều khôi phục đúng: bơm không tự động, quạt không tự động, thở tự động.
+- Dòng 1541: `breatheLedState` đang bật vì setup có dòng `if (breatheAuto) setBreatheLed(true)` (SmartFarm.ino:119) — hiệu ứng thở đã lưu được khôi phục khi boot.
+- Dòng 1542: `fanState` vẫn tắt dù có cài đặt flash — trạng thái runtime không được lưu bền, phải chờ automation hoặc người dùng bật lại.
+- Dòng 1543: màu RGB đặt thủ công cũng không sống sót (các khóa RGB không có trong `saveSettings()`) — sau khi boot lại, RGB vẫn tắt.
+
+### 14.11. D13 + D14 — fuzz 90.000 bước và tràn millis() (dòng 1668–1774)
+
+Hai test cuối của nhóm "deep": **D13** dùng fuzz/soak để "tra tấn" toàn bộ logic điều khiển bằng 90.000 bước ngẫu nhiên có seed, còn **D14** kiểm tra an toàn khi `millis()` của ESP32 bị tràn số (wrap-around) sau khoảng 49,7 ngày chạy liên tục.
+
+#### D13 — testFuzzSoak() (dòng 1668–1685)
+
+**Mục đích:** Chạy 90.000 vòng `loop()` với môi trường, HTTP request, lệnh serial và thao tác cơ cấu ngẫu nhiên (3 seed × 30.000 bước), sau **mỗi** vòng kiểm tra các "safety invariant" (bất biến an toàn) để phát hiện lỗi hiếm gặp mà test thủ công không chạm tới.
+
+```cpp
+static void testFuzzSoak() {
+  printf("D13 fuzz: seeded soak with safety invariants\n");
+  resetState();
+  mockWifiStatus = WL_CONNECTED;
+  mockServerReset();
+  setup();                                   // route + giá trị mặc định từ "flash"
+
+  fuzzRun(1,    30000);
+  fuzzRun(42,   30000);
+  fuzzRun(2026, 30000);
+
+  // ổn định: để demo đang chạy kết thúc, rồi kiểm tra trạng thái yên tĩnh
+  stopFeed();
+  unsigned long cap = mockMillis() + 120000;
+  while (demoRunning() && mockMillis() < cap) { mockAdvance(10); loop(); }
+  CHECK(!demoRunning());
+  mockSerialClear();
+}
+```
+
+- Dòng 1668: khai báo hàm test (chỉ dùng trong file này).
+- Dòng 1669: in tên test để đọc log biết đang chạy mục nào.
+- Dòng 1670: `resetState()` đưa mọi biến toàn cục về mặc định (ngưỡng, trạng thái relay, cờ auto... — xem định nghĩa ở dòng 105).
+- Dòng 1671: giả lập WiFi đang kết nối để `loop()` không mất thời gian thử kết nối lại.
+- Dòng 1672: `mockServerReset()` xóa các route/tham số HTTP đã đăng ký trên web server giả.
+- Dòng 1673: `setup()` chạy đúng hàm boot thật: đăng ký 14 route, nạp settings từ "flash" giả, bật breathing nếu `breatheAuto`.
+- Dòng 1675–1677: ba lượt `fuzzRun` với seed **1**, **42**, **2026**, mỗi lượt 30.000 vòng → đúng 90.000 bước. Dùng nhiều seed để dải dữ liệu ngẫu nhiên đa dạng hơn, và seed cố định nên **kết quả lặp lại được** (chạy lại luôn ra cùng chuỗi).
+- Dòng 1680: `stopFeed()` đóng máng ăn trước khi chờ ổn định.
+- Dòng 1681: đặt trần thời gian mô phỏng 120.000 ms, tránh vòng lặp chờ treo vô hạn nếu demo không bao giờ kết thúc.
+- Dòng 1682: mỗi vòng tiến đồng hồ 10 ms rồi gọi `loop()` cho đến khi demo kết thúc. Phép `mockMillis() < cap` vẫn đúng khi đồng hồ tràn nhờ luật trừ số unsigned (xem D14).
+- Dòng 1683: `CHECK(!demoRunning())` — sau khi chờ, demo **buộc phải** kết thúc sạch.
+- Dòng 1684: dọn log serial để không lẫn sang test sau.
+
+**Fuzz và soak là gì?**
+- *fuzz* = dùng dữ liệu/hành động ngẫu nhiên làm đầu vào để tìm lỗi; *soak* = chạy "ngâm" thật lâu, thật nhiều vòng để lỗi hiếm tự lộ ra.
+- *seed* = hạt giống của bộ sinh số ngẫu nhiên `std::mt19937` (dòng 1576). Cùng seed ⇒ cùng chuỗi số ngẫu nhiên ⇒ test tái lập được y nguyên.
+- *invariant* = điều kiện luôn phải đúng, ví dụ "bơm không bao giờ chạy khi hết nước". Sau **mỗi** lần `loop()`, `checkFuzzInvariants()` kiểm tra lại toàn bộ.
+
+**Bộ máy fuzz — fuzzRun(seed, iters) (dòng 1575–1666):** mỗi vòng bốc ngẫu nhiên `rng() % 10` để chọn 1 trong 10 loại hành động (dòng 1590–1657):
+
+- case 0 (dòng 1591–1605): môi trường ngẫu nhiên — gán nước/đất/ánh sáng/nhiệt/độ ẩm và lật chân TOUCH/PIR.
+- case 1 (dòng 1606–1616): gọi HTTP ngẫu nhiên (trong 13 route) với 0–3 tham số ngẫu nhiên; mã trả về chỉ được là 200, 204 hoặc 400.
+- case 2 (dòng 1617–1622): bơm ký tự serial ngẫu nhiên (`'9'`, `'0'`, `'x'`, `'!'`, `'\n'`, `'\r'`, `' '`).
+- case 3 (dòng 1623–1630): bật/tắt thủ công relay, quạt, LED xanh, LED thở.
+- case 4 (dòng 1631–1637): điều khiển cặp servo dùng chung — cối xay gió, mở/đóng máng ăn.
+- case 5–6 (dòng 1638–1643): `startDemo()` hoặc gọi route `/demo`.
+- case 7 (dòng 1644–1647): lật chân TOUCH và PIR ngẫu nhiên.
+- case 8 (dòng 1648–1654): cập nhật ngưỡng qua `/threshold` bằng giá trị ngẫu nhiên (kể cả số âm).
+- case 9 (dòng 1655–1656): không làm gì (no-op).
+
+Phần đuôi mỗi vòng lặp (dòng 1659–1664):
+
+```cpp
+    mockAdvance(1 + rng() % 250);
+    bool demoAtLoopStart = demoRunning();
+    loop();
+    checkFuzzInvariants(demoAtLoopStart);
+
+    if (i % 1000 == 999) mockSerialClear();   // giới hạn buffer bắt log
+```
+
+- Dòng 1659: nhảy đồng hồ 1–250 ms ngẫu nhiên (thời điểm thực tế không bao giờ tròn trịa).
+- Dòng 1660: chụp lại trạng thái demo **trước** khi gọi `loop()` (xem giải thích bên dưới).
+- Dòng 1661: chạy đúng `loop()` thật của firmware.
+- Dòng 1662: kiểm tra các bất biến an toàn sau vòng lặp vừa rồi.
+- Dòng 1664: cứ 1000 vòng dọn buffer serial một lần — nếu không, log tích tụ làm test chậm và tốn RAM vô ích.
+
+**Các safety invariant được kiểm tra sau mỗi loop() — checkFuzzInvariants() (dòng 1547–1573):**
+
+```cpp
+static void checkFuzzInvariants(bool demoAtLoopStart) {
+  // 1. Bơm không bao giờ chạy khi hết nước (safety line + controlPump).
+  CHECK(!(gWater < (int)waterThresholdLow && relayState));
+  // 2. Mức chân luôn khớp với trạng thái logic.
+  CHECK((mockPinLevel[RELAY_PIN] != 0) == (relayState != (bool)RELAY_ACTIVE_LOW));
+  CHECK((mockPinLevel[FAN_PIN] != 0) == fanState);
+  // 3. Các cơ cấu servo dùng chung không bao giờ chạy cùng lúc.
+  CHECK(!(windmillOn && feedRunning()));
+  // 4. Các chế độ LED xanh loại trừ lẫn nhau.
+  CHECK(!(blueLedState && breatheLedState));
+  // 5. Ghi servo và PWM luôn nằm trong dải hợp lệ.
+  CHECK(mockServoMinSeen >= 0 && mockServoMaxSeen <= 180);
+  CHECK_EQ(mockInvalidPixelWrites, 0);
+  CHECK_EQ(mockInvalidPwmWrites, 0);
+  // 6. Không còn PWM cũ khi cả hai chế độ LED đều tắt.
+  if (!blueLedState && !breatheLedState) CHECK_EQ(currentLedPwm(), 0);
+  // 7. Khi còi đang báo động (không phải demo), còi phải thực sự bật.
+  // Bỏ qua loop mà demo đang chạy vừa kết thúc: automation (và
+  // còi báo) chỉ hoạt động lại ở loop kế tiếp.
+  if (!demoRunning() && !demoAtLoopStart && gWater < (int)waterThresholdLow) {
+#if BUZZER_PASSIVE
+    CHECK(mockBuzzerToneHz > 0);
+#else
+    CHECK_EQ(mockPinLevel[BUZZER_PIN], HIGH);
+#endif
+  }
+}
+```
+
+- Dòng 1549 (invariant 1): bơm **không bao giờ** chạy khô — nước dưới ngưỡng thì relay phải tắt, dù đang ở chế độ thủ công hay demo.
+- Dòng 1551–1552 (invariant 2): mức điện thực tế trên chân phải khớp trạng thái logic. Với relay còn tính `RELAY_ACTIVE_LOW` (relay kích mức thấp): chân khác 0 tương đương `relayState != RELAY_ACTIVE_LOW`; quạt thì khớp trực tiếp.
+- Dòng 1554 (invariant 3): cối xay gió và máng ăn **loại trừ nhau** vì dùng chung một servo — không bao giờ cùng chạy.
+- Dòng 1556 (invariant 4): LED xanh thường và LED thở loại trừ nhau (cùng một bóng LED, hai chế độ không được giẫm chân).
+- Dòng 1558–1560 (invariant 5): mọi góc servo ghi ra phải nằm trong 0–180; không được ghi pixel màu hay kênh PWM không hợp lệ.
+- Dòng 1562 (invariant 6): khi cả hai chế độ LED đều tắt thì PWM phải về 0, không được để "dư âm" sáng mờ.
+- Dòng 1566–1571 (invariant 7): hết nước (ngoài demo) thì còi báo động phải thực sự kêu — kiểm tra tần số `tone()` nếu buzzer loại passive, hoặc mức chân HIGH nếu loại active.
+
+**Vì sao có tham số `demoAtLoopStart`?** Khi demo vừa kết thúc ngay trong `loop()` vừa rồi, firmware chỉ chạy lại các bộ điều khiển tự động (trong đó có còi báo) ở **loop kế tiếp** (xem nhánh `if (demoRunning()) ... else ...` trong `loop()`). Lúc đó `demoRunning()` đã trả về `false`, nhưng còi chưa kịp bật — nếu không có cờ `demoAtLoopStart` (trạng thái demo lúc *bắt đầu* vòng lặp), invariant 7 sẽ báo lỗi giả ở đúng một vòng chuyển giao. Cờ này giúp bỏ qua vòng "giao ca" đó.
+
+#### D14 — testClockWrap() (dòng 1688–1772)
+
+**Mục đích:** Xác nhận mọi bộ đếm thời gian trong firmware vẫn đúng khi `millis()` quay vòng từ `0xFFFFFFFF` về `0` giữa chừng — sự cố hiếm nhưng thật, xảy ra sau ~49,7 ngày chạy liên tục.
+
+**Vì sao tràn `millis()` nguy hiểm?** `millis()` trả về `unsigned long` 32 bit, đếm mili-giây nên tràn sau 2³² ms = 4.294.967.296 ms ≈ **49,71 ngày**. Cách viết sai như `now >= last + interval` sẽ hỏng khi `last + interval` vượt 2³² (tràn thành số nhỏ). Cách viết đúng là phép trừ: `now - last >= interval` — với số unsigned, phép trừ tự "quấn" theo modulo 2³² và luôn cho đúng khoảng thời gian trôi qua, miễn khoảng đo nhỏ hơn 2³².
+
+```cpp
+// D14: an toàn wrap-around của millis()
+static void testClockWrap() {
+  printf("D14 clock: millis() wrap-around\n");
+  stopFeed();
+  setWindmill(false);
+
+  // A: đọc cảm biến định kỳ xuyên qua mốc wrap
+  resetState();
+  mockSetMillis(0xFFFFFF00UL);
+  mockDhtTemp = 41.0f; mockDhtHum = 33.0f;
+  mockAdc[LDR_PIN] = 1500; mockAdc[SOIL_PIN] = 800; mockAdc[WATER_PIN] = 1200;
+  lastSensorRead = mockMillis();
+  runLoop(5100);                             // vượt mốc wrap tại +256 ms
+  CHECK_NEAR(gTemp, 41.0, 0.01);
+  CHECK_NEAR(gHum, 33.0, 0.01);
+
+  // B: timer cho ăn trải qua mốc wrap
+  mockSetMillis(0xFFFFFFFFUL);
+  startFeed();
+  CHECK(feedRunning());
+  mockAdvance(1);                            // wrap về 0
+  mockAdvance(1998);
+  controlFeed();
+  CHECK(feedRunning());                      // 1999 ms < FEED_DURATION
+  mockAdvance(2);
+  controlFeed();
+  CHECK(!feedRunning());
+  CHECK_EQ(mockServoAngle, FEED_CLOSE_ANGLE);
+
+  // C: timer breathing trải qua mốc wrap
+  mockSetMillis(0xFFFFFFFFUL);
+  setBreatheLed(true);
+  setLedPwm(0);
+  lastBreatheUpdate = mockMillis();
+  mockAdvance(BREATHE_INTERVAL - 1);
+  controlBreathe();
+  CHECK_EQ(currentLedPwm(), 0);
+  mockAdvance(1);
+  controlBreathe();
+  CHECK_EQ(currentLedPwm(), 5);
+  setBreatheLed(false);
+
+  // D: chạm bật/tắt với timestamp lớn
+  mockSetMillis(0xF0000000UL);
+  mockAdvance(10000);
+  gTouch = false; controlTouch();
+  lastTouch = mockMillis();
+  setBlueLed(false);
+  bool before = blueLedState;
+  mockAdvance(TOUCH_DEBOUNCE);               // xóa cửa sổ debounce trước
+  gTouch = true; controlTouch();
+  CHECK(blueLedState != before);
+  gTouch = false; controlTouch();
+  setBlueLed(false);
+
+  // E: demo đầy đủ phải kết thúc sạch khi mốc wrap xảy ra giữa lượt chạy
+  mockSetMillis(0xFFFFFF00UL);
+  primeSensors(900);
+  startDemo();
+  unsigned long cap = mockMillis() + 120000;
+  while (demoRunning() && mockMillis() < cap) {
+    mockAdvance(10);
+    simLoop();
+  }
+  CHECK(!demoRunning());
+  CHECK(!relayState);
+  CHECK_EQ(currentLedPwm(), 0);
+
+  // F: timer thử lại WiFi trải qua mốc wrap
+  mockSetMillis(0xFFFFFF00UL);
+  mockWifiStatus = WL_CONNECTED;
+  loop();                                            // xóa cờ đã cảnh báo
+  int b0 = mockWifiBeginCalls;
+  mockWifiStatus = WL_DISCONNECTED;
+  lastWifiCheck = 0xFFFFFF00UL;
+  mockAdvance(9999);                                  // wrap qua mốc biên
+  loop();
+  CHECK_EQ(mockWifiBeginCalls, b0);                   // 9999 ms: chưa đến hạn
+  mockAdvance(1);
+  loop();
+  CHECK_EQ(mockWifiBeginCalls, b0 + 1);               // 10000 ms: đến hạn
+  mockWifiStatus = WL_CONNECTED;
+  loop();
+
+  resetState();
+}
+```
+
+- Dòng 1690–1691: dọn cơ cấu trước khi test — đóng máng ăn và tắt cối xay gió (fuzz ở D13 có thể để chúng đang chạy, và servo là tài nguyên dùng chung).
+- **Phần A — đọc cảm biến định kỳ xuyên mốc wrap (dòng 1693–1701):**
+  - Dòng 1694: `resetState()` đưa ngưỡng/cờ về mặc định.
+  - Dòng 1695: `mockSetMillis(0xFFFFFF00UL)` — đặt đồng hồ chỉ còn cách mốc tràn **256 ms** (vì 0xFFFFFF00 = 2³² − 256).
+  - Dòng 1696–1697: gán giá trị DHT và ADC giả để biết trước kết quả đọc.
+  - Dòng 1698: `lastSensorRead = mockMillis()` — mốc đọc gần nhất là "bây giờ" (sát mốc tràn).
+  - Dòng 1699: `runLoop(5100)` chạy 5100 ms theo bước 10 ms — quãng này **băng qua** mốc tràn tại +256 ms. Lưu ý chính vòng lặp `while (mockMillis() - start < simMs)` của `runLoop` (dòng 156–162) cũng dựa vào phép trừ unsigned nên tự nó đã là một phép thử wrap.
+  - Dòng 1700–1701: nhiệt/ẩm đọc được phải đúng bằng giá trị giả ⇒ bộ đếm `now - lastSensorRead >= SENSOR_INTERVAL` vẫn kích hoạt đúng sau khi tràn.
+- **Phần B — timer cho ăn xuyên mốc wrap (dòng 1703–1714):**
+  - Dòng 1704–1706: đặt đồng hồ sát mốc tràn, mở máng ăn và xác nhận đang chạy.
+  - Dòng 1707: `mockAdvance(1)` — đồng hồ **tràn về 0**; thời gian trôi từ lúc mở = 1 ms.
+  - Dòng 1708–1710: cộng thêm 1998 ms → trôi 1999 ms `< FEED_DURATION` (2000 ms) nên máng vẫn mở.
+  - Dòng 1711–1713: cộng thêm 2 ms → trôi 2001 ms `≥ 2000 ms` nên `controlFeed()` đóng máng.
+  - Dòng 1714: servo phải về đúng `FEED_CLOSE_ANGLE` (0°).
+- **Phần C — timer breathing xuyên mốc wrap (dòng 1716–1727):**
+  - Dòng 1717–1720: đặt đồng hồ sát tràn, bật LED thở, ép PWM = 0 và mốc cập nhật = bây giờ.
+  - Dòng 1721–1723: sau `BREATHE_INTERVAL − 1` = 29 ms, chưa tới nhịp 30 ms nên PWM vẫn 0.
+  - Dòng 1724–1726: thêm 1 ms (đủ 30 ms, đã đi qua mốc tràn) → `controlBreathe()` tăng độ sáng một bậc lên PWM 5.
+  - Dòng 1727: tắt breathing để phần sau không bị ảnh hưởng.
+- **Phần D — chạm bật/tắt với timestamp lớn (dòng 1729–1740):**
+  - Dòng 1730–1731: đặt đồng hồ ở `0xF0000000` (≈ 4,02 tỉ ms — mốc thời gian lớn) rồi cộng 10.000 ms.
+  - Dòng 1732–1733: xác lập trạng thái chạm sạch và đặt `lastTouch = bây giờ`, tạo cửa sổ debounce mới.
+  - Dòng 1736: cộng đúng `TOUCH_DEBOUNCE` (300 ms) để cửa sổ debounce cũ hết hạn trước khi thử.
+  - Dòng 1737–1738: chạm mới phải đổi được trạng thái LED xanh — chứng minh công thức `now - lastTouch >= TOUCH_DEBOUNCE` đúng với mốc thời gian lớn.
+- **Phần E — demo đầy đủ xuyên mốc wrap (dòng 1742–1753):**
+  - Dòng 1743–1745: bắt đầu demo ở 256 ms trước mốc tràn, với nước đầy (`primeSensors(900)`) để demo chạy trọn kịch bản.
+  - Dòng 1746–1750: chờ tối đa 120.000 ms, mỗi bước 10 ms gọi `simLoop()` (đúng phần điều khiển của `loop()`).
+  - Dòng 1751–1753: demo phải kết thúc, relay tắt, PWM về 0 — "kết thúc sạch" dù mốc tràn rơi vào giữa lượt chạy.
+- **Phần F — timer thử lại WiFi xuyên mốc wrap (dòng 1755–1769):**
+  - Dòng 1756–1758: đặt đồng hồ sát tràn và giả lập đang kết nối; gọi `loop()` để `manageWiFi()` xóa cờ "đã cảnh báo" (`sWarned` trong `src/wifi.cpp:9`).
+  - Dòng 1759–1761: ghi nhớ số lần gọi `WiFi.begin()`, chuyển sang mất kết nối, đặt `lastWifiCheck = 0xFFFFFF00UL`.
+  - Dòng 1762–1764: cộng 9999 ms (đã băng qua mốc tràn), trôi đúng 9999 ms `< WIFI_CHECK_INTERVAL` (10.000 ms) nên **chưa** thử kết nối lại.
+  - Dòng 1765–1767: thêm 1 ms → đúng hạn 10.000 ms, `WiFi.begin()` được gọi thêm đúng 1 lần.
+  - Dòng 1768–1769: trả về trạng thái kết nối rồi gọi `loop()` một nhịp để firmware ổn định lại cờ cảnh báo.
+- Dòng 1771: `resetState()` trả toàn bộ trạng thái về mặc định cho test I11 phía sau.
+
+### 14.12. T16 + T17 + I11 + main() — quyền sở hữu đèn của PIR, khôi phục đèn thở, boot suy giảm, hàm main (dòng 1775–1922)
+
+Bốn phần cuối file: hai test hành vi (T16, T17), một test boot suy giảm (I11) và hàm `main()` điều phối toàn bộ bộ test.
+
+#### T16 — testAlertLedOwnership() (dòng 1775–1822)
+
+**Mục đích:** Xác nhận "quyền sở hữu" LED xanh: PIR chỉ được tắt LED khi chính nó là thứ đã bật LED; đèn bật thủ công không bị người đi qua làm tắt; sau cảnh báo, chế độ đèn thở được khôi phục nếu đang bật auto.
+
+```cpp
+// T16: quyền sở hữu LED cảnh báo của PIR + khôi phục breathing (hoạt động 3/5)
+static void testAlertLedOwnership() {
+  printf("T16 alerts: PIR LED ownership + breathing restore\n");
+
+  // Có chuyển động khi đang breathing: cảnh báo chiếm LED; breathing tiếp tục sau đó
+  resetState();
+  gPir = false; controlAlerts();          // xóa mọi trạng thái cảnh báo đang chờ
+  setBreatheAuto(true);
+  setBreatheLed(true);
+  CHECK(breatheLedState);
+  gPir = true;
+  controlAlerts();
+  CHECK(blueLedState);
+  CHECK(!breatheLedState);                // cảnh báo đã chiếm LED
+  gPir = false;
+  controlAlerts();
+  CHECK(!blueLedState);
+  CHECK(breatheLedState);                 // breathing tự chọn được bật lại
+  CHECK(breatheAuto);
+  setBreatheAuto(false);
+  setBreatheLed(false);
+
+  // LED bật thủ công không bị ảnh hưởng khi có người đi qua (PIR không sở hữu nó)
+  resetState();
+  gPir = false; controlAlerts();
+  setBlueLed(true);
+  gPir = true;  controlAlerts();
+  CHECK(blueLedState);
+  gPir = false; controlAlerts();
+  CHECK(blueLedState);
+  setBlueLed(false);
+
+  // Không có breathing auto, cảnh báo chỉ tắt LED trở lại
+  resetState();
+  gPir = false; controlAlerts();
+  gPir = true;  controlAlerts();
+  CHECK(blueLedState);
+  gPir = false; controlAlerts();
+  CHECK(!blueLedState);
+  CHECK(!breatheLedState);
+
+  // Phòng thủ: giá trị ramp cũ được xóa khi breathing tắt
+  resetState();
+  breatheBrightness = 100;
+  setLedPwm(222);
+  controlBreathe();
+  CHECK_EQ(breatheBrightness, 0);
+  CHECK_EQ(currentLedPwm(), 0);
+}
+```
+
+- Dòng 1776: in tên test.
+- **Kịch bản 1 — đang thở mà có người đi qua (dòng 1779–1794):**
+  - Dòng 1779–1780: reset trạng thái, gọi `controlAlerts()` với `gPir = false` để xóa các cờ cảnh báo còn treo từ trước.
+  - Dòng 1781–1783: bật đèn thở tự động và đèn thở; xác nhận `breatheLedState` đang bật.
+  - Dòng 1784–1785: giả lập phát hiện chuyển động rồi gọi `controlAlerts()` (cạnh lên của PIR).
+  - Dòng 1786: LED xanh phải bật — cảnh báo đã **chiếm** LED.
+  - Dòng 1787: đèn thở phải tắt — nhường LED cho cảnh báo (LED dùng chung nên hai chế độ loại trừ nhau).
+  - Dòng 1788–1789: hết chuyển động, gọi lại `controlAlerts()`.
+  - Dòng 1790: LED xanh tắt — vì chính PIR là thứ đã bật nó (nhớ qua cờ `sPirLitLed`).
+  - Dòng 1791–1792: đèn thở **tự bật lại** vì `breatheAuto` vẫn đang bật; cờ `breatheAuto` giữ nguyên.
+  - Dòng 1793–1794: dọn dẹp để sang kịch bản sau.
+- **Kịch bản 2 — đèn bật thủ công (dòng 1796–1804):** bật `setBlueLed(true)` trước, rồi PIR lên/xuống. Cả hai lần kiểm tra đèn vẫn sáng: vì lúc phát hiện, đèn đã sáng nên `sPirLitLed = false` (PIR không nhận công) và **không được quyền** tắt đèn của người dùng.
+- **Kịch bản 3 — không bật breathing auto (dòng 1806–1813):** PIR bật đèn khi có người; hết người thì chỉ tắt đèn trở lại, không bật đèn thở (`CHECK(!blueLedState)` và `CHECK(!breatheLedState)`).
+- **Kịch bản 4 — phòng thủ giá trị ramp cũ (dòng 1815–1821):** gán giả `breatheBrightness = 100` và PWM = 222, gọi `controlBreathe()` khi breathing đang tắt → hàm phải xóa ramp về 0 và kéo PWM về 0, tránh "dư âm" sáng mờ còn sót lại.
+
+**`sPirLitLed` là gì?** Đây là biến `static` trong `src/control.cpp:11`:
+
+```cpp
+static bool sPirLitLed = false;   // true = cảnh báo PIR là thứ đã bật LED
+```
+
+Khi phát hiện chuyển động (cạnh lên), `controlAlerts()` ghi `sPirLitLed = !blueLedState` (`src/control.cpp:147`) — chỉ đánh dấu "PIR sở hữu LED" nếu **trước đó đèn đang tắt**. Khi hết chuyển động, chỉ khi `sPirLitLed` đúng thì PIR mới được tắt LED; và nếu `breatheAuto` đang bật thì bật lại đèn thở (`src/control.cpp:152–155`). Nhờ vậy đèn đang sáng do thủ công/tự động/đang thở không bị người đi qua tắt mất.
+
+#### T17 — testDemoBreathingRestore() (dòng 1825–1840)
+
+**Mục đích:** Sau khi demo bài học kết thúc, chế độ đèn thở đang bật auto phải được khôi phục (demo đã tạm chiếm LED trong lúc trình diễn).
+
+```cpp
+// T17: demo hoạt động khôi phục breathing tự chọn khi kết thúc
+static void testDemoBreathingRestore() {
+  printf("T17 demo: breathing restored after the show\n");
+  resetState();
+  primeSensors(900);
+  setBreatheAuto(true);
+  setBreatheLed(true);
+  startDemo();
+  unsigned long cap = mockMillis() + 120000;
+  while (demoRunning() && mockMillis() < cap) { mockAdvance(10); simLoop(); }
+  CHECK(!demoRunning());
+  CHECK(breatheAuto);
+  CHECK(breatheLedState);                 // breathing bật lại sau DEMO DONE
+  CHECK(!blueLedState);
+  setBreatheAuto(false);
+  setBreatheLed(false);
+}
+```
+
+- Dòng 1826: in tên test.
+- Dòng 1827–1828: reset trạng thái và "mồi" cảm biến với nước đầy (900) để demo chạy hết kịch bản không bị ngắt vì an toàn nước.
+- Dòng 1829–1830: bật đèn thở auto + đèn thở trước khi demo bắt đầu (mô phỏng người dùng đang để chế độ thở).
+- Dòng 1831: `startDemo()` — demo chiếm LED cho các hiệu ứng của bài học.
+- Dòng 1832–1833: chờ demo kết thúc, tối đa 120.000 ms mô phỏng.
+- Dòng 1834: demo phải dừng.
+- Dòng 1835: cờ `breatheAuto` vẫn phải giữ nguyên (demo không được tắt ý định của người dùng).
+- Dòng 1836: `breatheLedState` phải bật lại — đúng như `demo.cpp:121`: sau "DEMO DONE", nếu `breatheAuto` thì bật lại breathing.
+- Dòng 1837: LED xanh thường không được bật (không có tranh chấp LED sau demo).
+- Dòng 1838–1839: dọn dẹp.
+
+#### I11 — testBootDegraded() (dòng 1843–1862)
+
+**Mục đích:** Boot trong tình trạng suy giảm — **không có màn hình OLED** và **không kết nối được WiFi** — firmware vẫn phải ghi đúng mã lỗi, đăng ký đủ route web, nuôi watchdog trong lúc chờ và không tự chạy demo.
+
+```cpp
+// I11: boot suy giảm - thiếu OLED và timeout kết nối WiFi
+static void testBootDegraded() {
+  printf("I11 boot: missing OLED + WiFi timeout\n");
+  resetState();
+  mockServerReset();
+  mockDisplayBeginOk = false;
+  mockWifiStatus = WL_DISCONNECTED;
+  mockSerialClear();
+  setup();
+
+  CHECK_EQ(mockServerRouteCount(), 14);              // route vẫn được đăng ký
+  CHECK(has(mockSerialOutput(), "MA LOI: 101"));     // không tìm thấy OLED
+  CHECK(has(mockSerialOutput(), "MA LOI: 102"));     // WiFi timeout
+  CHECK(mockWdtResetCalls >= 100);                   // watchdog được feed trong lúc chờ
+  CHECK(mockWifiBeginCalls >= 1);
+  CHECK(!demoRunning());
+
+  mockDisplayBeginOk = true;
+  mockWifiStatus = WL_CONNECTED;
+  resetState();
+}
+```
+
+- Dòng 1844: in tên test.
+- Dòng 1845–1846: reset trạng thái và web server giả.
+- Dòng 1847: `mockDisplayBeginOk = false` — giả lập `display.begin()` trả về thất bại, tức phần cứng không có OLED.
+- Dòng 1848: `mockWifiStatus = WL_DISCONNECTED` — giả lập WiFi không bao giờ kết nối, buộc nhánh chờ phải hết hạn.
+- Dòng 1849: `mockSerialClear()` để log bắt được chỉ chứa thông báo của lần boot này.
+- Dòng 1850: `setup()` — chạy đúng hàm boot thật trong điều kiện suy giảm.
+- Dòng 1852: dù thiếu OLED/WiFi, vẫn phải đăng ký đủ **14 route** của web server.
+- Dòng 1853: log phải chứa `MA LOI: 101` — mã lỗi "OLED not found" (`SmartFarm.ino:111`).
+- Dòng 1854: log phải chứa `MA LOI: 102` — mã lỗi "WiFi timeout" (`SmartFarm.ino:136`): chờ tối đa `WIFI_CONNECT_TIMEOUT` = 30.000 ms rồi chạy tiếp, `manageWiFi()` sẽ thử lại nền.
+- Dòng 1855: `mockWdtResetCalls >= 100` — trong vòng chờ WiFi blocking, mỗi 250 ms firmware gọi `esp_task_wdt_reset()` (`SmartFarm.ino:127`), tức khoảng 120 lần trên 30 giây; nếu không nuôi watchdog, chip sẽ bị reset giữa lúc boot.
+- Dòng 1856: đã có ít nhất một lần gọi `WiFi.begin()`.
+- Dòng 1857: boot xong không tự ý chạy demo.
+- Dòng 1859–1861: khôi phục cờ mock (OLED OK, WiFi kết nối) và reset trạng thái.
+
+**Vì sao I11 nằm cuối `main()`?** `setup()` là một lần boot đầy đủ, nó đụng và để lại nhiều trạng thái/counter toàn cục: cờ mock WiFi/OLED, `mockWifiBeginCalls`, `mockWdtResetCalls`, route của server giả... Trong khi `resetState()` không dọn hết mọi thứ (các biến `static` bên trong `src/` như `sPirLitLed`, `sMotionAlarm`, `sWarned` không bị nó chạm tới). Đặt I11 cuối cùng đảm bảo "cú boot suy giảm" này không làm nhiễu bất kỳ test nào chạy sau nó — phía sau chỉ còn in tổng kết và `return`.
+
+#### main() (dòng 1868–1922)
+
+**Mục đích:** Điểm vào của toàn bộ bộ test — in banner cấu hình biên dịch, gọi lần lượt các test theo thứ tự có chủ đích (unit → biên → integration → deep), in tổng kết và trả exit code.
+
+```cpp
+int main() {
+  printf("=== Smart Farm deep test suite (core %d, invert L/S/W %d/%d/%d, relayLO %d, buzzPassive %d) ===\n",
+         ESP_ARDUINO_VERSION_MAJOR, INVERT_LIGHT, INVERT_SOIL, INVERT_WATER,
+         RELAY_ACTIVE_LOW, BUZZER_PASSIVE);
+
+  testSensorsAverage();
+  testDhtFailover();
+  testPumpHysteresis();
+  testPumpLowWaterSafety();
+  testFanHysteresis();
+  testLightPirAlerts();
+  testBreatheAndLedModes();
+  testTouchToggle();
+  testRgbPlant();
+  testBuzzerAlarm();
+  testWindmillSweep();
+  testFeedGate();
+  testWeather();
+  testSettingsRoundtrip();
+  testDemoFullRun();
+  testAlertLedOwnership();
+  testDemoBreathingRestore();
+
+  testBoundaries();
+  testIdempotency();
+  testTimingBoundaries();
+
+  printf("--- integration ---\n");
+  testInoBoot();
+  testHttpApi();
+  testHttpLedOnOff();
+  testHttpMechanisms();
+  testHttpControlRoutes();
+  testHttpRootFavicon();
+  testOled();
+  testSerialMenu();
+  testSerialDemo();
+  testWifiRecovery();
+
+  printf("--- deep ---\n");
+  testApiJsonContract();
+  testResponseExactness();
+  testOledLines();
+  testSerialEdges();
+  testDemoDiagnostics();
+  testWifiThrottle();
+  testBootOrder();
+  testRebootPersistence();
+  testFuzzSoak();
+  testClockWrap();
+  testBootDegraded();
+
+  printf("=== %d checks, %d failures ===\n", gChecks, gFails);
+  return gFails ? 1 : 0;
+}
+```
+
+- Dòng 1869–1871: in banner với các cờ cấu hình lúc biên dịch — phiên bản core Arduino-ESP32 (`ESP_ARDUINO_VERSION_MAJOR`), hướng đảo tín hiệu cảm biến sáng/đất/nước (`INVERT_LIGHT/SOIL/WATER`), relay kích mức thấp và loại buzzer. Người đọc kết quả test nhìn banner là biết đang chạy cấu hình nào.
+- Dòng 1873–1889: **nhóm unit test** — cảm biến trung bình (T1) → DHT failover → bơm hysteresis → an toàn nước thấp → quạt → đèn + PIR → breathing/LED → chạm → RGB → còi → cối xay gió → máng ăn → thời tiết → settings → demo đầy đủ (T15) → sở hữu LED của PIR (T16) → khôi phục breathing sau demo (T17). Chạy trước vì nhanh, cô lập được lỗi đơn vị.
+- Dòng 1891–1893: **nhóm biên** — giá trị biên, tính idempotency (gọi lặp cho cùng kết quả), biên thời gian.
+- Dòng 1895–1905: **nhóm integration** — boot qua file `.ino`, HTTP API, LED on/off, các cơ cấu, các route điều khiển, root/favicon, OLED, menu serial, serial demo, khôi phục WiFi. Đây là các test cho firmware đã "boot thật".
+- Dòng 1907–1918: **nhóm deep** — hợp đồng JSON của API, độ chính xác phản hồi, các dòng OLED, biên serial, chẩn đoán demo, throttle WiFi (D10), thứ tự boot (D11), lưu bền settings qua chu kỳ nguồn (D12), fuzz soak (D13), tràn `millis()` (D14), boot suy giảm (I11).
+- Dòng 1920: in tổng kết `=== %d checks, %d failures ===` với `gChecks` (tổng số kiểm tra đã chạy) và `gFails` (số kiểm tra thất bại).
+- Dòng 1921: `return gFails ? 1 : 0` — trả mã thoát 1 nếu có lỗi để script/CI phát hiện, 0 nếu tất cả pass.
+
+**Vì sao thứ tự gọi quan trọng?** Đây là chương trình C++ chạy một tiến trình duy nhất: biến `static`/toàn cục **không tự reset** giữa các test, và `resetState()` chỉ dọn một phần trạng thái. Các test sau dựa vào trạng thái do test trước để lại (ví dụ `setup()` nạp settings từ "flash" giả, các biến `static` trong `src/` như cờ cảnh báo PIR còn nguyên). Vì vậy bộ test được xếp từ **đơn vị → biên → integration → deep**, và các test có tác dụng phụ mạnh nhất (boot lại, fuzz, tràn đồng hồ, boot suy giảm) nằm cuối để không làm nhiễu những test khác. Khi một test đổi hành vi gọi test trước, kết quả có thể lệch theo — đây là lý do không nên đảo thứ tự tùy tiện trong `main()`.
+---
+
+## PHẦN 15 — test/mocks (giả lập phần cứng trên máy tính)
+
+**mock** (giả lập) là các thư viện thay thế tạm cho phần cứng và thư viện ESP32 thật, nhưng giữ nguyên tên lớp/tên hàm mà firmware đang gọi. Nhờ vậy `test/run_tests.sh` chỉ cần biên dịch **SmartFarm.ino + src/*.cpp thật** bằng `g++` trên PC, với `test/mocks/` nằm trước trong đường dẫn include (`test/run_tests.sh:35`) — firmware không hề biết mình đang chạy trên máy tính. Test có thể tự đặt nhiệt độ/độ ẩm, điện áp ADC, trạng thái WiFi, tua đồng hồ `millis()`, rồi xem lại chính xác những gì firmware đã in ra OLED/Serial hoặc ghi xuống chân GPIO. Vì chạy trên code production nên mọi kiểm tra ở đây có giá trị như khi nạp lên kit.
+
+### 15.1. mock.h — lời hứa (API) và các biến trạng thái (dòng 1–67)
+
+`mock.h` là bản "hợp đồng" giữa bộ test và `mock.cpp`: nó liệt kê các biến test được phép đọc/ghi và các hàm test được phép gọi. Toàn bộ biến chia sẻ ở đây chỉ **khai báo** (`extern`), còn **định nghĩa thật** nằm trong `mock.cpp`.
+
+**Khối 1 — Phần mở đầu (dòng 1–5)**
+
+```cpp
+#pragma once
+// API mock phần cứng điều khiển được cho bộ test chạy trên host.
+// Các test link firmware THẬT (SmartFarm.ino + src/*.cpp) với các
+// mock này, nên mọi kiểm tra đều chạy trên code production. Xem test/README.md.
+#include <cstdint>
+```
+
+- Dòng 1: `#pragma once` — chỉ cho phép mỗi file include `mock.h` một lần, tránh khai báo trùng.
+- Dòng 2–4: comment nêu rõ triết lý: test link **firmware thật** với mock, nên kết quả test phản ánh đúng code production.
+- Dòng 5: `#include <cstdint>` — cung cấp `uint8_t`, `uint32_t` cho các mảng bên dưới.
+- Dòng 6: dòng trống phân nhóm (các dòng trống tương tự: 19, 31, 36, 42, 47, 57, 62).
+
+**Khối 2 — Trạng thái phần cứng giả lập (dòng 7–18)**
+
+```cpp
+// ── Trạng thái phần cứng giả lập ──
+extern float mockDhtTemp, mockDhtHum;   // giá trị đọc từ DHT11
+extern int mockAdc[40];                 // giá trị analogRead theo chân
+extern uint8_t mockDigital[40];         // giá trị digitalRead theo chân
+extern uint32_t mockPinLevel[40];       // mức digitalWrite ghi lại theo chân
+extern int mockServoAngle;              // góc servo.write() lần cuối
+extern uint32_t mockPwm[40];            // giá trị ledcWrite() lần cuối theo kênh/chân
+extern int mockBuzzerToneHz;            // tần số tone(), 0 = im lặng
+extern uint32_t mockPixel[8];           // màu NeoPixel đã ghi
+extern int mockWifiStatus;              // kết quả WiFi.status()
+extern const char *mockWifiIp;          // chuỗi WiFi.localIP()
+extern bool mockDisplayBeginOk;         // kết quả display.begin() (false = thiếu OLED)
+```
+
+- Dòng 8: `mockDhtTemp`, `mockDhtHum` — nhiệt độ/độ ẩm mà `DHT::readTemperature()`/`readHumidity()` sẽ trả về; test gán trước khi gọi `readSensors()`.
+- Dòng 9: `mockAdc[40]` — bảng giá trị `analogRead()` theo chân 0..39; test gán ví dụ `mockAdc[LDR_PIN] = 3000` để giả lập trời sáng/tối.
+- Dòng 10: `mockDigital[40]` — giá trị `digitalRead()` trả về (dùng cho cảm biến PIR, chạm...).
+- Dòng 11: `mockPinLevel[40]` — mức mà firmware đã ghi ra chân bằng `digitalWrite()`; đây là căn cứ để test xác nhận bơm/quạt/relay bật hay tắt.
+- Dòng 12: `mockServoAngle` — góc của lần `servo.write()` gần nhất, test đối chiếu cửa máng ăn/cối xay gió xoay đúng.
+- Dòng 13: `mockPwm[40]` — giá trị `ledcWrite()` gần nhất, đánh theo **kênh** (core 2.x) hoặc theo **chân** (core 3.x) nên mảng 40 phần tử phủ được cả hai cách.
+- Dòng 14: `mockBuzzerToneHz` — tần số `tone()`; bằng 0 nghĩa là đang im lặng (đã `noTone()`).
+- Dòng 15: `mockPixel[8]` — màu (4 byte) của 8 bóng NeoPixel đã ghi qua `setPixelColor()`.
+- Dòng 16: `mockWifiStatus` — mã mà `WiFi.status()` trả về; test đổi giữa `WL_CONNECTED` và `WL_DISCONNECTED` để thử mất mạng/nối lại.
+- Dòng 17: `mockWifiIp` — chuỗi IP mà `WiFi.localIP()` hiển thị (cả trên OLED lẫn trang web).
+- Dòng 18: `mockDisplayBeginOk` — kết quả `display.begin()`; đặt `false` để giả lập "không tìm thấy màn hình OLED" (test I11: boot suy giảm, mã lỗi 101/102).
+
+**Vì sao `extern` ở `mock.h` mà phần định nghĩa lại nằm ở `mock.cpp`?**
+
+- `extern` chỉ là **lời hứa**: "biến này có thật ở đâu đó, đừng cấp phát bộ nhớ ở đây". Nhờ vậy mọi file include `mock.h` (firmware lẫn test) đều nhìn thấy **cùng một** biến duy nhất.
+- Nếu bỏ `extern`, viết thẳng `float mockDhtTemp;` trong header thì mỗi file `.cpp` include header sẽ tự tạo một bản sao riêng. Test gán giá trị vào bản sao của test, firmware lại đọc bản sao của firmware — test mất tác dụng.
+- Vì thế `mock.cpp` (dòng 18–29) là nơi **định nghĩa thật** (không có `static`) cho tất cả biến này: đúng một nơi cấp phát, mọi nơi khác dùng chung.
+- Ngược lại, các biến chỉ phục vụ nội bộ `mock.cpp` thì mới khai báo `static` (chỉ file đó thấy): `sMillis` (dòng 16), `sIoLog` (dòng 54), `sSerialOut`/`sSerialIn` (dòng 120–121), `sRoutes`/`sRouteCount` (dòng 151–152), `sArgs`/`sArgCount` (dòng 155–156), `sLastType`/`sLastBody`/`sLastCode` (dòng 158–159), `sOledText`/`sOledLines`/`sOledRow` (dòng 232–234), `sPrefs` (dòng 268). Khi test cần đọc/đổi chúng, `mock.cpp` mở hàm truy cập tương ứng: `mockMillis()` (dòng 49), `mockIoLog()` (dòng 63), `mockSerialOutput()` (dòng 145), `mockOledText()` (dòng 258), `mockServerLastBody()` (dòng 229)...
+- Tóm lại: biến chia sẻ = `extern` ở header + định nghĩa (không `static`) ở `.cpp`; biến riêng tư = `static` ở `.cpp` + hàm truy cập trong cùng `.cpp`.
+
+**Khối 3 — Bộ đếm instrumentation (dòng 20–30)**
+
+```cpp
+// ── Bộ đếm instrumentation (test chuyên sâu) ──
+extern int mockDigitalWriteCount;       // số lần gọi digitalWrite()
+extern int mockLedcWriteCount;          // số lần gọi ledcWrite()
+extern int mockInvalidPixelWrites;      // setPixelColor với index ngoài phạm vi
+extern int mockInvalidPwmWrites;        // ledcWrite với kênh/chân ngoài phạm vi
+extern int mockServoWriteCount;         // số lần gọi servo.write()
+extern int mockServoMinSeen;            // góc nhỏ nhất từng ghi (9999 nếu chưa có)
+extern int mockServoMaxSeen;            // góc lớn nhất từng ghi (-1 nếu chưa có)
+extern int mockToneCalls, mockNoToneCalls;
+extern int mockWifiBeginCalls, mockWifiDisconnectCalls, mockWifiReconnectCalls;
+extern int mockWdtInitCalls, mockWdtAddCalls, mockWdtResetCalls;
+```
+
+- "instrumentation" nghĩa là **đo lường/đếm** — bộ đếm giúp test kiểm tra những hành vi mà giá trị trạng thái không thể hiện hết: firmware có gọi thừa không, có ghi sai vùng nhớ không, servo có vượt giới hạn cơ khí không...
+- Dòng 21–22: đếm số lần `digitalWrite()` / `ledcWrite()` — test tính bất biến (idempotency) đối chiếu: gọi `setFan(true)` hai lần chỉ được ghi chân một lần.
+- Dòng 23–24: đếm các lần ghi **sai phạm vi** (index NeoPixel ngoài 0..7, kênh/chân PWM >= 40) — nếu khác 0 là có bug tràn mảng; lỗi này không làm sập chương trình nhưng test phát hiện được.
+- Dòng 25–27: số lần `servo.write()`, góc nhỏ nhất/lớn nhất từng ghi; 9999 và -1 là hai giá trị "sentinel" (mốc đánh dấu) nghĩa là "chưa ghi lần nào", để test bất biến góc servo luôn nằm trong 0–180.
+- Dòng 28: `mockToneCalls`, `mockNoToneCalls` — kiểm tra nhánh buzzer thụ động (`BUZZER_PASSIVE=1`) có gọi `tone()`/`noTone()` đúng không.
+- Dòng 29: `mockWifiBeginCalls`, `mockWifiDisconnectCalls`, `mockWifiReconnectCalls` — kiểm tra logic chống spam WiFi (đúng 10.000 ms mới thử nối lại, test D-series).
+- Dòng 30: `mockWdtInitCalls`, `mockWdtAddCalls`, `mockWdtResetCalls` — kiểm tra watchdog được cấu hình và được "cho ăn" (`reset`) đều đặn, kể cả khi boot suy giảm.
+
+**Khối 4 — Hàm điều khiển thời gian (dòng 32–35)**
+
+```cpp
+unsigned long mockMillis();
+void mockAdvance(unsigned long ms);
+void mockSetMillis(unsigned long ms);
+void mockReset();
+```
+
+- Dòng 32: `mockMillis()` — test đọc "đồng hồ giả" hiện tại (firmware thấy cùng giá trị qua `millis()`).
+- Dòng 33: `mockAdvance(ms)` — tua đồng hồ tiến thêm `ms` mili-giây, mô phỏng thời gian trôi mà không phải chờ thật.
+- Dòng 34: `mockSetMillis(ms)` — đặt đồng hồ về mốc tuyệt đối, dùng cho test tràn `millis()` (sau ~49,7 ngày) ở vòng D14.
+- Dòng 35: `mockReset()` — đưa **toàn bộ** trạng thái mock (chân, ADC, WiFi, counters, Serial, OLED, prefs, server...) về mặc định; test gọi trước mỗi test case để các test độc lập nhau.
+
+**Khối 5 — Serial (dòng 37–41)**
+
+```cpp
+// Serial
+void mockSerialPush(const char *s);
+const char *mockSerialOutput();
+int mockSerialPending();
+void mockSerialClear();
+```
+
+- Dòng 38: `mockSerialPush(s)` — bơm ký tự vào đầu thu (RX) như thể người dùng gõ qua Serial Monitor; firmware `Serial.read()` sẽ đọc được.
+- Dòng 39: `mockSerialOutput()` — trả về toàn bộ những gì firmware đã in ra (menu, log, chẩn đoán) để test so khớp.
+- Dòng 40: `mockSerialPending()` — số byte còn đang chờ trong hàng đợi RX.
+- Dòng 41: `mockSerialClear()` — xóa sạch cả bộ đệm in ra lẫn bộ đệm nhận vào.
+
+**Khối 6 — Log thứ tự gọi IO (dòng 43–46)**
+
+```cpp
+// Log thứ tự gọi IO cho test regression lỗi glitch lúc khởi động:
+// mỗi mục có dạng "W:26=1;" (digitalWrite) và "M:26;" (pinMode).
+const char *mockIoLog();
+void mockIoLogClear();
+```
+
+- Dòng 43–44: comment giải thích mục đích — bắt **đúng thứ tự** các lệnh chân khi khởi động, phục vụ test hồi quy lỗi glitch (chốt mức đầu ra **trước** `pinMode`). Mỗi sự kiện là một mẩu `"W:<chân>=<mức>;"` hoặc `"M:<chân>;"`.
+- Dòng 45: `mockIoLog()` — trả chuỗi log đã ghép, ví dụ `"W:26=0;M:26;W:26=0;..."`.
+- Dòng 46: `mockIoLogClear()` — xóa log (thường gọi trong `mockReset()` khi bắt đầu test mới).
+
+**Khối 7 — WebServer (dòng 48–56)**
+
+```cpp
+// WebServer
+void mockServerReset();
+int  mockServerRouteCount();
+bool mockServerHasRoute(const char *path);
+void mockServerSetArg(const char *name, const char *value);
+bool mockServerInvoke(const char *path);
+int  mockServerLastCode();
+const char *mockServerLastType();
+const char *mockServerLastBody();
+```
+
+- Dòng 49: `mockServerReset()` — quên hết route, tham số và response đã ghi (dùng trong `mockReset()`).
+- Dòng 50: `mockServerRouteCount()` — đếm số route firmware đã đăng ký `server.on(...)`; test I1 yêu cầu đủ 14 route.
+- Dòng 51: `mockServerHasRoute(path)` — kiểm tra một đường dẫn cụ thể đã được đăng ký chưa (ví dụ `/api`, `/on`, `/off`...).
+- Dòng 52: `mockServerSetArg(name, value)` — "tiêm" tham số request giả, ví dụ `mockServerSetArg("device", "pump")`, để handler đọc `server.arg("device")` như request thật.
+- Dòng 53: `mockServerInvoke(path)` — **gọi thẳng handler** của route, mô phỏng một request HTTP; trả `false` nếu đường dẫn chưa đăng ký.
+- Dòng 54–56: đọc kết quả response mà handler đã gửi: mã HTTP (`200`, `400`, `101`, `102`...), kiểu nội dung (`text/html`, `application/json`...) và thân phản hồi.
+
+**Khối 8 — OLED (dòng 58–61)**
+
+```cpp
+// OLED
+const char *mockOledText();
+const char *mockOledLine(int row);      // text ghi lại cho mỗi dòng text 8-px
+int mockOledLineCount();
+```
+
+- Dòng 59: `mockOledText()` — toàn bộ chữ đã in ra màn hình dưới dạng một luồng liền mạch.
+- Dòng 60: `mockOledLine(row)` — chữ của riêng dòng thứ `row` (mỗi dòng cao 8 pixel, hàng 0..7); dùng để test layout từng dòng và giới hạn 21 ký tự.
+- Dòng 61: `mockOledLineCount()` — số dòng text của màn hình; mock luôn trả 8 (màn 128×64).
+
+**Khối 9 — Hook hiện thực trong mock.cpp (dòng 63–67)**
+
+```cpp
+// Các hook hiện thực trong mock.cpp, được gọi từ các header mô phỏng
+void mockServoWrite(int angle);
+void mockNeoPixelSet(int index, uint32_t color);
+float mockPrefGet(const char *key, float dflt);
+void mockPrefPut(const char *key, float value);
+```
+
+- Đây là "cầu nối": các lớp trong header mô phỏng (`ESP32Servo.h`, `Adafruit_NeoPixel.h`, `Preferences.h`) viết hàm inline rất mỏng rồi gọi các hook này; thân thật nằm ở `mock.cpp`, nên test điều khiển/đọc lại được.
+- Dòng 64: `mockServoWrite(angle)` — `Servo::write()` (header `ESP32Servo.h`) gọi vào đây.
+- Dòng 65: `mockNeoPixelSet(index, color)` — `Adafruit_NeoPixel::setPixelColor()` gọi vào đây (có kiểm tra index 0..7).
+- Dòng 66–67: `mockPrefGet`/`mockPrefPut` — `Preferences::getFloat/putFloat...` (header `Preferences.h`) quy đổi mọi kiểu về `float` rồi gọi vào đây, giả lập vùng nhớ flash/NVS.
+
+### 15.2. mock.cpp — phần hiện thực (dòng 1–326)
+
+Đây là "phần thân" của bản hợp đồng: mọi hàm/biến khai báo ở `mock.h` (và các hook của header mô phỏng) đều được hiện thực tại đây.
+
+**Khối 1 — Include (dòng 1–14)**
+
+```cpp
+#include "mock.h"
+#include "Arduino.h"
+#include "DHT.h"
+#include "ESP32Servo.h"
+#include "Adafruit_NeoPixel.h"
+#include "Adafruit_SSD1306.h"
+#include "WebServer.h"
+#include "Wire.h"
+#include "WiFi.h"
+#include "esp_task_wdt.h"
+
+#include <cstdarg>
+#include <string>
+#include <vector>
+```
+
+- Dòng 1: include `mock.h` trước để nắm "lời hứa" API.
+- Dòng 2–10: các header mô phỏng cùng thư mục; cần đủ để hiện thực/tham chiếu các lớp DHT, Servo, NeoPixel, SSD1306, WebServer, Wire, WiFi, watchdog.
+- Dòng 12: `<cstdarg>` — cần `va_list`, `va_start`, `vsnprintf` cho `SerialStub::printf`.
+- Dòng 13–14: `<string>` cho mọi bộ đệm (`std::string`); `<vector>` được include kèm nhưng file hiện không dùng trực tiếp.
+
+**Khối 2 — Đồng hồ giả (dòng 16)**
+
+```cpp
+static unsigned long sMillis = 0;
+```
+
+- Dòng 16: đồng hồ duy nhất của thế giới giả, khởi đầu 0; `static` để chỉ `mock.cpp` được sửa trực tiếp, test phải đi qua `mockMillis()`/`mockAdvance()`/`mockSetMillis()`.
+
+**Khối 3 — Định nghĩa trạng thái chia sẻ (dòng 18–29)**
+
+```cpp
+float mockDhtTemp = 25.0f;
+float mockDhtHum = 60.0f;
+int mockAdc[40] = {0};
+uint8_t mockDigital[40] = {0};
+uint32_t mockPinLevel[40] = {0};
+int mockServoAngle = 0;
+uint32_t mockPwm[40] = {0};
+int mockBuzzerToneHz = 0;
+uint32_t mockPixel[8] = {0};
+int mockWifiStatus = WL_CONNECTED;
+const char *mockWifiIp = "192.168.1.50";
+bool mockDisplayBeginOk = true;
+```
+
+- Dòng 18–19: định nghĩa thật của `extern` ở `mock.h:8`; mặc định 25 °C / 60 % — hợp lý để test nào quên đặt vẫn chạy.
+- Dòng 20–26: các mảng và biến trạng thái được khởi tạo 0; riêng `mockPixel[8]` đúng 8 bóng như phần cứng dự án dùng.
+- Dòng 27: `WL_CONNECTED` (= 3, định nghĩa trong `mocks/WiFi.h:7`) — mặc định coi như đã có mạng.
+- Dòng 28: IP mặc định `"192.168.1.50"` để OLED/trang chủ có nội dung in ra khi test không cần tự đặt.
+- Dòng 29: mặc định `true` — màn hình "tồn tại"; test I11 sẽ đổi thành `false`.
+
+**Khối 4 — Định nghĩa bộ đếm (dòng 31–40)**
+
+```cpp
+int mockDigitalWriteCount = 0;
+int mockLedcWriteCount = 0;
+int mockInvalidPixelWrites = 0;
+int mockInvalidPwmWrites = 0;
+int mockServoWriteCount = 0;
+int mockServoMinSeen = 9999;
+int mockServoMaxSeen = -1;
+int mockToneCalls = 0, mockNoToneCalls = 0;
+int mockWifiBeginCalls = 0, mockWifiDisconnectCalls = 0, mockWifiReconnectCalls = 0;
+int mockWdtInitCalls = 0, mockWdtAddCalls = 0, mockWdtResetCalls = 0;
+```
+
+- Dòng 31–35: các counter "đếm từ 0".
+- Dòng 36–37: hai mốc min/max servo khởi tạo ngược đời có chủ đích: `9999` (không góc nào nhỏ hơn nó) và `-1` (không góc nào lớn hơn nó); sau lần ghi đầu tiên chúng tự chỉnh về giá trị thật.
+- Dòng 38–40: các counter còn lại, gộp nhiều biến trên một dòng theo nhóm chức năng.
+
+**Khối 5 — Ba đối tượng toàn cục (dòng 42–44)**
+
+```cpp
+TwoWire Wire;
+WiFiStub WiFi;
+SerialStub Serial;
+```
+
+- Dòng 42–44: `Arduino.h:97`, `Arduino.h:102`, `WiFi.h:31` chỉ **khai báo** `extern` ba đối tượng này; đây là nơi **định nghĩa** chúng. Firmware gọi `Serial.println(...)`, `Wire.begin(...)`, `WiFi.status()` đều trỏ về đúng ba đối tượng duy nhất này.
+
+**Khối 6 — Lõi Arduino: `millis`/`delay` giả (dòng 46–51)**
+
+```cpp
+// ── Lõi Arduino ──
+unsigned long millis() { return sMillis; }
+void delay(unsigned long ms) { sMillis += ms; }
+unsigned long mockMillis() { return sMillis; }
+void mockAdvance(unsigned long ms) { sMillis += ms; }
+void mockSetMillis(unsigned long ms) { sMillis = ms; }
+```
+
+- Dòng 47: `millis()` — firmware gọi hàm này như thật, nhưng giá trị lấy từ đồng hồ giả `sMillis`.
+- Dòng 48: `delay(ms)` — **không ngủ thật**, chỉ cộng thẳng `ms` vào đồng hồ rồi trả về ngay. Nhờ vậy các test "chờ" 10.000 ms hay 30.700 ms vẫn chạy xong trong tích tắc, mà mốc thời gian vẫn chính xác từng mili-giây (test D-series kiểm chống dội 300 ms, cửa ăn 2000 ms, nhịp thở 30 ms...).
+- Dòng 49–51: ba hàm điều khiển dành riêng cho test; `mockAdvance` và `delay` cho kết quả giống nhau nhưng tách tên để phân biệt "firmware chờ" với "test tua".
+
+**Khối 7 — Log thứ tự IO (dòng 53–64)**
+
+```cpp
+// ── Log thứ tự gọi IO ──
+static std::string sIoLog;
+
+static void ioLogAppend(char kind, uint8_t pin, int value) {
+  char b[24];
+  if (kind == 'W') snprintf(b, sizeof(b), "W:%u=%d;", (unsigned)pin, value);
+  else             snprintf(b, sizeof(b), "M:%u;", (unsigned)pin);
+  sIoLog += b;
+}
+
+const char *mockIoLog() { return sIoLog.c_str(); }
+void mockIoLogClear() { sIoLog.clear(); }
+```
+
+- Dòng 54: `sIoLog` — chuỗi ghép dần tất cả sự kiện chân, `static` nên chỉ hàm trong file này thấy.
+- Dòng 56–61: `ioLogAppend` — hàm phụ định dạng một mẩu log: loại `'W'` (write) thành `"W:<chân>=<mức>;"`, loại khác (thực tế là `'M'` — mode) thành `"M:<chân>;"`; dùng `snprintf` vào buffer 24 byte rồi nối vào `sIoLog`.
+- Dòng 63: `mockIoLog()` — trả con trỏ tới chuỗi log để test so khớp; vì các sự kiện nối theo đúng thứ tự gọi nên bắt được lỗi glitch khởi động.
+- Dòng 64: `mockIoLogClear()` — xóa log để bắt đầu giai đoạn theo dõi mới.
+
+**Khối 8 — Chân vào/ra và ADC (dòng 66–73)**
+
+```cpp
+void pinMode(uint8_t pin, uint8_t) { ioLogAppend('M', pin, 0); }
+void digitalWrite(uint8_t pin, uint8_t value) {
+  if (pin < 40) mockPinLevel[pin] = value;
+  mockDigitalWriteCount++;
+  ioLogAppend('W', pin, value);
+}
+int digitalRead(uint8_t pin) { return pin < 40 ? mockDigital[pin] : 0; }
+int analogRead(uint8_t pin) { return pin < 40 ? mockAdc[pin] : 0; }
+```
+
+- Dòng 66: `pinMode` — chỉ ghi log `'M'`; tham số thứ hai (INPUT/OUTPUT) không đặt tên vì mock không có phần cứng thật để đổi chiều chân.
+- Dòng 67–71: `digitalWrite` — nếu chân hợp lệ (< 40) ghi mức vào `mockPinLevel` (test đọc lại được), luôn tăng `mockDigitalWriteCount`, và ghi log kèm mức. Chân >= 40 không làm tràn mảng.
+- Dòng 72: `digitalRead` — trả đúng `mockDigital[pin]` mà test đã gán; chân ngoài phạm vi trả 0 thay vì đọc bừa.
+- Dòng 73: `analogRead` — trả đúng `mockAdc[pin]`. **Chú ý: mock KHÔNG thêm jitter/nhiễu ngẫu nhiên** — giá trị đọc ra chính xác bằng thứ test gán, nhờ vậy test biên so sánh được đúng tại các mốc như 2999 vs 3000. Tính ngẫu nhiên (fuzz) do `test_main.cpp` tự thêm bằng `<random>`, không nằm trong mock.
+
+**Khối 9 — PWM (LEDC) cho cả core 2.x lẫn 3.x (dòng 74–81)**
+
+```cpp
+void ledcSetup(uint8_t, double, uint8_t) {}
+void ledcAttachPin(uint8_t, uint8_t) {}
+void ledcWrite(uint8_t ch, uint32_t value) {
+  mockLedcWriteCount++;
+  if (ch >= 40) { mockInvalidPwmWrites++; return; }
+  mockPwm[ch] = value;
+}
+void ledcAttach(uint8_t, uint32_t, uint8_t) {}
+```
+
+- Dòng 74–75: `ledcSetup`, `ledcAttachPin` — no-op (không làm gì), chỉ để đủ hàm cho đường core 2.x.
+- Dòng 76–80: `ledcWrite` — tăng counter, chặn "kênh/chân" ngoài phạm vi (tăng `mockInvalidPwmWrites` rồi thoát, bắt bug tràn mảng), còn lại lưu giá trị vào `mockPwm[ch]` để test đọc độ sáng/stato LED xanh.
+- Dòng 81: `ledcAttach` — no-op cho đường core 3.x.
+- Vì sao đủ cả hai: `SmartFarm.ino:93–98` chọn `ledcAttach(BLUE_LED_PIN, ...)` khi core >= 3, ngược lại `ledcSetup(...) + ledcAttachPin(...)`; `src/actuators.cpp:62–68` tương tự với `ledcWrite` (core 3 truyền **chân**, core 2 truyền **kênh** `LED_PWM_CHANNEL = 15`). Mock phải cung cấp đủ cả hai bộ hàm để cả 4 bản build trong `--full` đều link được; test đọc `mockPwm[BLUE_LED_PIN]` hoặc `mockPwm[LED_PWM_CHANNEL]` tùy phiên bản (`test_main.cpp:82,84`). Mặc định `test/mocks/esp_arduino_version.h` đặt major = 3.
+
+**Khối 10 — Buzzer: `tone`/`noTone` (dòng 82–89)**
+
+```cpp
+void tone(uint8_t, unsigned int frequency, unsigned long) {
+  mockToneCalls++;
+  mockBuzzerToneHz = (int)frequency;
+}
+void noTone(uint8_t) {
+  mockNoToneCalls++;
+  mockBuzzerToneHz = 0;
+}
+```
+
+- Dòng 82–85: `tone` — đếm số lần gọi, lưu tần số vào `mockBuzzerToneHz`; chân và thời lượng bỏ qua. Chỉ dùng khi build `BUZZER_PASSIVE=1` (buzzer thụ động cần xung vuông — xem `src/actuators.cpp:24–27`).
+- Dòng 86–89: `noTone` — đếm và trả `mockBuzzerToneHz` về 0 (im lặng).
+- Với `BUZZER_PASSIVE=0` (mặc định), `actuators.cpp` gọi `digitalWrite(BUZZER_PIN, ...)` thay vì `tone`, nên kiểm qua `mockPinLevel`/`mockIoLog`; bản build `passive-lowrelay` kiểm tra nhánh thụ động qua hai hàm này.
+
+**Khối 11 — WiFi (dòng 91–94)**
+
+```cpp
+// ── WiFi ──
+void WiFiStub::begin(const char *, const char *) { mockWifiBeginCalls++; }
+void WiFiStub::disconnect() { mockWifiDisconnectCalls++; }
+void WiFiStub::reconnect() { mockWifiReconnectCalls++; }
+```
+
+- Dòng 92: `WiFi.begin()` chỉ đếm — không có kết nối thật nào xảy ra.
+- Dòng 93: `WiFi.disconnect()` đếm số lần ngắt.
+- Dòng 94: `WiFi.reconnect()` đếm số lần thử nối lại — căn cứ kiểm tra chống spam (10.000 ms/lần).
+- Các hàm còn lại (`status()`, `localIP()`, `macAddress()`, `RSSI()`, `setSleep()`) được viết inline trong `mocks/WiFi.h`: `status()` đọc thẳng `mockWifiStatus`, `localIP()` đọc `mockWifiIp`. Muốn giả lập mất mạng, test chỉ cần gán `mockWifiStatus = WL_DISCONNECTED`.
+
+**Khối 12 — Watchdog `esp_task_wdt` (dòng 96–101)**
+
+```cpp
+// ── esp_task_wdt ──
+int esp_task_wdt_init(const esp_task_wdt_config_t *) { mockWdtInitCalls++; return 0; }
+int esp_task_wdt_init(uint32_t, bool) { mockWdtInitCalls++; return 0; }
+int esp_task_wdt_add(void *) { mockWdtAddCalls++; return 0; }
+int esp_task_wdt_reset() { mockWdtResetCalls++; return 0; }
+int esp_task_wdt_deinit() { return 0; }
+```
+
+- Dòng 97–98: hai **overload** (hàm cùng tên khác tham số) của `esp_task_wdt_init`: bản core 3 nhận con trỏ `esp_task_wdt_config_t` (struct định nghĩa ở `mocks/esp_task_wdt.h:4–8`), bản core cũ nhận `(timeout, panic)`. Cả hai đều đếm và trả 0 (thành công).
+- Dòng 99: `esp_task_wdt_add` đếm — mô phỏng đăng ký task với watchdog.
+- Dòng 100: `esp_task_wdt_reset` đếm — mỗi lần "cho chó ăn"; test I11 xác nhận watchdog vẫn được cho ăn ngay cả khi boot suy giảm (thiếu OLED + hết hạn WiFi).
+- Dòng 101: `deinit` trả 0, không đếm vì firmware thường không dùng.
+
+**Khối 13 — Cảm biến DHT (dòng 103–105)**
+
+```cpp
+// ── DHT ──
+float DHT::readTemperature() { return mockDhtTemp; }
+float DHT::readHumidity() { return mockDhtHum; }
+```
+
+- Dòng 104–105: hai hàm đọc DHT trả đúng giá trị test đã đặt (mặc định 25/60); mọi logic làm tròn, phát hiện giá trị lỗi NaN... đều nằm ở firmware thật `src/sensors.cpp`, không nằm ở mock.
+
+**Khối 14 — Hook Servo / NeoPixel (dòng 107–117)**
+
+```cpp
+// ── Hook Servo / NeoPixel ──
+void mockServoWrite(int angle) {
+  mockServoAngle = angle;
+  mockServoWriteCount++;
+  if (angle < mockServoMinSeen) mockServoMinSeen = angle;
+  if (angle > mockServoMaxSeen) mockServoMaxSeen = angle;
+}
+void mockNeoPixelSet(int index, uint32_t color) {
+  if (index < 0 || index >= 8) { mockInvalidPixelWrites++; return; }
+  mockPixel[index] = color;
+}
+```
+
+- Dòng 108–113: `mockServoWrite` — được `Servo::write()` trong `mocks/ESP32Servo.h:9` gọi. Nó lưu góc, đếm, rồi tự cập nhật góc nhỏ nhất/lớn nhất từng thấy — test dùng để chứng minh servo không bao giờ vượt 0–180 (bất biến fuzz D-series).
+- Dòng 114–117: `mockNeoPixelSet` — được `Adafruit_NeoPixel::setPixelColor()` trong `mocks/Adafruit_NeoPixel.h:14` gọi. Index ngoài 0..7 bị chặn và tăng `mockInvalidPixelWrites`; hợp lệ thì lưu màu thô (đúng công thức `(r<<16)|(g<<8)|b` mà header dùng ở dòng 15–17).
+
+**Khối 15 — Ghi lại Serial (dòng 119–147)**
+
+```cpp
+// ── Ghi lại output Serial ──
+static std::string sSerialOut;
+static std::string sSerialIn;
+
+void mockSerialWriteStr(const char *s) { if (s) sSerialOut += s; }
+void mockSerialPrintLong(long v) { char b[24]; snprintf(b, sizeof(b), "%ld", v); sSerialOut += b; }
+void mockSerialPrintFloat(double v, int digits) { char b[40]; snprintf(b, sizeof(b), "%.*f", digits, v); sSerialOut += b; }
+void mockSerialPrintOther() { sSerialOut += "<obj>"; }
+
+int SerialStub::available() { return (int)sSerialIn.size(); }
+int SerialStub::read() {
+  if (sSerialIn.empty()) return -1;
+  int c = (unsigned char)sSerialIn.front();
+  sSerialIn.erase(0, 1);
+  return c;
+}
+void SerialStub::printf(const char *fmt, ...) {
+  char buf[256];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  sSerialOut += buf;
+}
+
+void mockSerialPush(const char *s) { if (s) sSerialIn += s; }
+const char *mockSerialOutput() { return sSerialOut.c_str(); }
+int mockSerialPending() { return (int)sSerialIn.size(); }
+void mockSerialClear() { sSerialOut.clear(); sSerialIn.clear(); }
+```
+
+- Dòng 120–121: hai bộ đệm `static`: `sSerialOut` (firmware in ra) và `sSerialIn` (test bơm vào như bàn phím).
+- Dòng 123–126: bốn hàm mà `SerialStub` trong `mocks/Arduino.h:72–82` chuyển tiếp tới: chuỗi thì nối thẳng (có kiểm tra null), số dài in `%ld`, số thực in `%.*f` với số chữ số thập phân yêu cầu, kiểu không hỗ trợ thì ghi `"<obj>"` để test vẫn nhận biết đã có lệnh in.
+- Dòng 128: `available()` — số byte đang chờ đọc.
+- Dòng 129–134: `read()` — lấy ký tự **đầu hàng đợi**, xóa nó khỏi đệm, trả `-1` khi rỗng (đúng quy ước Arduino). Ép `(unsigned char)` để byte `0xFF` vẫn là 255 chứ không thành -1 — chi tiết được test D-series kiểm với "byte rác 0xFF".
+- Dòng 135–142: `printf` — dùng `vsnprintf` đổ vào buffer 256 byte rồi nối vào `sSerialOut`; `va_list` cho phép nhận số tham số bất kỳ như printf thật.
+- Dòng 144–147: API cho test: bơm chuỗi vào RX, đọc toàn bộ output, xem còn bao nhiêu byte chờ, và xóa cả hai bộ đệm.
+
+**Khối 16 — Kho chứa route/arg/response của WebServer (dòng 149–159)**
+
+```cpp
+// ── mock WebServer ──
+struct Route { std::string path; void (*fn)(); };
+static Route sRoutes[24];
+static int sRouteCount = 0;
+
+struct Arg { std::string name; std::string value; };
+static Arg sArgs[16];
+static int sArgCount = 0;
+
+static std::string sLastType, sLastBody;
+static int sLastCode = 0;
+```
+
+- Dòng 150–152: `Route` gồm đường dẫn + **con trỏ hàm** handler (hàm không đối số, giống thư viện WebServer thật); mảng tĩnh 24 route là dư sức chứa 14 route firmware đăng ký.
+- Dòng 154–156: `Arg` gồm tên/giá trị tham số; tối đa 16 tham số cho một request giả.
+- Dòng 158–159: nơi lưu response gần nhất: kiểu nội dung, thân, mã HTTP (khởi tạo 0 = "chưa gửi gì").
+
+**Khối 17 — `WebServer::on` (dòng 161–170)**
+
+```cpp
+void WebServer::on(const char *path, void (*handler)()) {
+  for (int i = 0; i < sRouteCount; i++) {
+    if (sRoutes[i].path == path) { sRoutes[i].fn = handler; return; }
+  }
+  if (sRouteCount < 24) {
+    sRoutes[sRouteCount].path = path;
+    sRoutes[sRouteCount].fn = handler;
+    sRouteCount++;
+  }
+}
+```
+
+- Dòng 161–164: nếu đường dẫn đã có, chỉ **thay handler** rồi thoát — giữ hành vi idempotent (đăng ký lại không tạo route trùng, cần thiết vì nhiều test gọi lại phần setup).
+- Dòng 165–169: chưa có thì thêm vào cuối mảng và tăng đếm; mảng đầy thì bỏ qua an toàn (không tràn).
+
+**Khối 18 — `WebServer::send` (dòng 172–179)**
+
+```cpp
+void WebServer::send(int code, const char *type, const char *body) {
+  sLastCode = code; sLastType = type ? type : ""; sLastBody = body ? body : "";
+}
+void WebServer::send(int code, const char *type, const String &body) {
+  sLastCode = code; sLastType = type ? type : ""; sLastBody = body.std_str();
+}
+void WebServer::send(int code) { sLastCode = code; sLastType.clear(); sLastBody.clear(); }
+void WebServer::send_P(int code, const char *type, const char *body) { send(code, type, body); }
+```
+
+- Dòng 172–174: bản nhận `const char*` — chép mã/kiểu/thân, thay con trỏ null bằng chuỗi rỗng.
+- Dòng 175–177: bản nhận `const String&` — dùng `std_str()` (chuỗi `std::string` bên trong lớp `String` giả ở `mocks/Arduino.h:40`).
+- Dòng 178: bản chỉ có mã — dùng cho các phản hồi không thân (ví dụ mã 101/102 ở test boot suy giảm).
+- Dòng 179: `send_P` (bản PROGMEM của thư viện thật) chuyển tiếp nguyên xi sang `send`.
+
+**Khối 19 — `arg` và `hasArg` (dòng 181–192)**
+
+```cpp
+String WebServer::arg(const char *name) {
+  for (int i = 0; i < sArgCount; i++) {
+    if (sArgs[i].name == name) return String(sArgs[i].value.c_str());
+  }
+  return String("");
+}
+bool WebServer::hasArg(const char *name) {
+  for (int i = 0; i < sArgCount; i++) {
+    if (sArgs[i].name == name) return true;
+  }
+  return false;
+}
+```
+
+- Dòng 181–186: `arg` — tìm tham số theo tên, trả về `String` chứa giá trị; không thấy thì trả chuỗi rỗng (đúng hành vi WebServer thật, handler không cần kiểm null).
+- Dòng 187–192: `hasArg` — chỉ cần biết có/không, trả `bool`; dùng để kiểm nhánh "thiếu tham số" (mã lỗi 400...).
+
+**Khối 20 — Reset / đếm / kiểm route (dòng 194–205)**
+
+```cpp
+void mockServerReset() {
+  sRouteCount = 0;
+  sArgCount = 0;
+  sLastCode = 0; sLastType.clear(); sLastBody.clear();
+}
+int mockServerRouteCount() { return sRouteCount; }
+bool mockServerHasRoute(const char *path) {
+  for (int i = 0; i < sRouteCount; i++) {
+    if (sRoutes[i].path == (path ? path : "")) return true;
+  }
+  return false;
+}
+```
+
+- Dòng 194–198: `mockServerReset` — quên sạch route, tham số, response; được gọi ở cuối `mockReset()`.
+- Dòng 199: `mockServerRouteCount` — trả về số route; test I1 so với kỳ vọng 14.
+- Dòng 200–205: `mockServerHasRoute` — duyệt tìm đường dẫn, xử lý `path` null bằng chuỗi rỗng cho an toàn.
+
+**Khối 21 — Tiêm tham số request (dòng 206–215)**
+
+```cpp
+void mockServerSetArg(const char *name, const char *value) {
+  for (int i = 0; i < sArgCount; i++) {
+    if (sArgs[i].name == (name ? name : "")) { sArgs[i].value = value ? value : ""; return; }
+  }
+  if (sArgCount < 16) {
+    sArgs[sArgCount].name = name ? name : "";
+    sArgs[sArgCount].value = value ? value : "";
+    sArgCount++;
+  }
+}
+```
+
+- Dòng 206–209: tên đã tồn tại thì **cập nhật giá trị** — test có thể đổi tham số giữa các lần `mockServerInvoke` mà không cần reset.
+- Dòng 210–214: chưa có thì thêm mới nếu còn chỗ (tối đa 16); null được thay bằng chuỗi rỗng.
+
+**Khối 22 — Gọi handler và đọc response (dòng 216–229)**
+
+```cpp
+bool mockServerInvoke(const char *path) {
+  for (int i = 0; i < sRouteCount; i++) {
+    if (sRoutes[i].path == (path ? path : "")) {
+      sLastCode = 0; sLastType.clear(); sLastBody.clear();
+      sRoutes[i].fn();
+      sArgCount = 0;
+      return true;
+    }
+  }
+  return false;
+}
+int mockServerLastCode() { return sLastCode; }
+const char *mockServerLastType() { return sLastType.c_str(); }
+const char *mockServerLastBody() { return sLastBody.c_str(); }
+```
+
+- Dòng 216–220: tìm route khớp đường dẫn; không thấy trả `false` (test biết URL chưa được đăng ký).
+- Dòng 219: xóa response cũ trước khi chạy — nếu handler quên gửi gì thì `mockServerLastCode()` là 0, test phát hiện ngay.
+- Dòng 220: gọi `sRoutes[i].fn()` — đây chính là **handler thật của firmware** trong `src/webserver.cpp`, chạy với ADC/chân/thời gian giả.
+- Dòng 221: `sArgCount = 0` — tham số chỉ sống trong một request, tránh rò rỉ sang request sau.
+- Dòng 227–229: ba hàm đọc mã HTTP / kiểu nội dung / thân phản hồi mà handler vừa ghi.
+
+**Khối 23 — Bộ đệm OLED (dòng 231–239)**
+
+```cpp
+// ── mock OLED: một luồng + theo từng dòng text (setCursor y/8) ──
+static std::string sOledText;
+static std::string sOledLines[8];
+static int sOledRow = 0;
+
+static void oledAppend(const std::string &s) {
+  sOledText += s;
+  sOledLines[sOledRow] += s;
+}
+```
+
+- Dòng 232–234: ba biến `static`: cả màn hình như một luồng (`sOledText`), từng dòng riêng (`sOledLines[8]` ứng 8 dòng × 8 pixel = 64 pixel chiều cao), và dòng hiện tại (`sOledRow`).
+- Dòng 236–239: `oledAppend` — mỗi ký tự in ra được ghi đồng thời vào cả hai nơi; test có thể kiểm tổng thể hoặc kiểm layout từng dòng.
+
+**Khối 24 — `begin()` của OLED (dòng 241)**
+
+```cpp
+bool Adafruit_SSD1306::begin(int, int) { return mockDisplayBeginOk; }
+```
+
+- Dòng 241: trả về biến `mockDisplayBeginOk` (mặc định `true`). Test I11 đặt `false` trước khi gọi setup để giả lập **không tìm thấy màn hình** (lỗi I2C), kiểm tra nhánh boot suy giảm vẫn chạy an toàn, gửi mã lỗi 101/102 và cho watchdog ăn. Chi tiết thiết kế xem mục 15.3.
+
+**Khối 25 — `clearDisplay` và `setCursor` (dòng 243–252)**
+
+```cpp
+void Adafruit_SSD1306::clearDisplay() {
+  sOledText.clear();
+  for (int i = 0; i < 8; i++) sOledLines[i].clear();
+  sOledRow = 0;
+}
+void Adafruit_SSD1306::setCursor(int, int y) {
+  sOledRow = y / 8;
+  if (sOledRow < 0) sOledRow = 0;
+  if (sOledRow > 7) sOledRow = 7;
+}
+```
+
+- Dòng 243–247: `clearDisplay` — xóa cả luồng lẫn 8 dòng, đưa con trỏ về dòng 0 (giống màn hình xóa trắng).
+- Dòng 248–252: `setCursor` — bỏ qua tọa độ x (mock chỉ cần biết dòng), lấy `y / 8` vì mỗi dòng text cao 8 pixel; kẹp chỉ số vào 0..7 để không tràn mảng. Cách này khớp với firmware `src/oled.cpp` dùng các mốc y = 0, 8, 16, 24... cho từng dòng.
+
+**Khối 26 — Các overload `print` (dòng 253–257)**
+
+```cpp
+void Adafruit_SSD1306::print(const char *s) { oledAppend(s ? s : ""); }
+void Adafruit_SSD1306::print(char c) { oledAppend(std::string(1, c)); }
+void Adafruit_SSD1306::print(int v) { char b[16]; snprintf(b, sizeof(b), "%d", v); oledAppend(b); }
+void Adafruit_SSD1306::print(float v, int digits) { char b[40]; snprintf(b, sizeof(b), "%.*f", digits, v); oledAppend(b); }
+void Adafruit_SSD1306::print(const IPAddress &ip) { oledAppend(ip.toString().c_str()); }
+```
+
+- Dòng 253: chuỗi — null được thay bằng rỗng (firmware hay dùng `F("...")`, mà `F(x)` là macro `x` ở `mocks/Arduino.h:16`, nên vẫn vào overload này).
+- Dòng 254: một ký tự (`%` trong màn hình độ ẩm...).
+- Dòng 255: số nguyên (`Light: 3000`, `P:` chân...).
+- Dòng 256: số thực với số chữ số thập phân yêu cầu (`25.0`, `60`...).
+- Dòng 257: địa chỉ IP — gọi `ip.toString()`, mà `IPAddress::toString()` đọc `mockWifiIp` (định nghĩa ở `mocks/WiFi.h:16–19`), nên IP trên OLED do test quyết định.
+
+**Khối 27 — Hàm đọc nội dung OLED (dòng 258–260)**
+
+```cpp
+const char *mockOledText() { return sOledText.c_str(); }
+const char *mockOledLine(int row) { return (row >= 0 && row < 8) ? sOledLines[row].c_str() : ""; }
+int mockOledLineCount() { return 8; }
+```
+
+- Dòng 258: toàn bộ luồng ký tự — dùng cho so khớp thô hoặc đếm ký tự.
+- Dòng 259: nội dung một dòng (0..7), dòng ngoài phạm vi trả chuỗi rỗng thay vì đọc bừa.
+- Dòng 260: luôn trả 8 — cố định theo màn 128×64; test layout kiểm giới hạn 21 ký tự mỗi dòng.
+
+**Khối 28 — Kho "flash" Preferences (dòng 262–268)**
+
+```cpp
+// ── mock Preferences ──
+struct PrefEntry {
+  char key[16];
+  float value;
+  bool used;
+};
+static PrefEntry sPrefs[24];
+```
+
+- Dòng 262–268: `Preferences` của ESP32 ghi vào NVS (phân vùng flash); mock thay bằng mảng tĩnh 24 phần tử trong RAM. Mỗi mục gồm khóa tối đa 15 ký tự + `'\0'`, giá trị `float`, cờ `used` (true = ô đã dùng). Chỉ mục nhỏ (settings) mới lưu, nên 24 ô là đủ. Vì là biến `static`, chỉ `mock.cpp` truy cập; test đi qua `mockPrefGet`/`mockPrefPut` hoặc lớp `Preferences` giả.
+
+**Khối 29 — `mockPrefGet` (dòng 270–275)**
+
+```cpp
+float mockPrefGet(const char *key, float dflt) {
+  for (int i = 0; i < 24; i++) {
+    if (sPrefs[i].used && strcmp(sPrefs[i].key, key) == 0) return sPrefs[i].value;
+  }
+  return dflt;
+}
+```
+
+- Dòng 270–275: tìm khóa bằng `strcmp`; tìm thấy trả giá trị đã lưu, không thấy trả giá trị mặc định `dflt` — đúng hành vi `Preferences::getFloat(key, default)` thật.
+
+**Khối 30 — `mockPrefPut` (dòng 277–290)**
+
+```cpp
+void mockPrefPut(const char *key, float value) {
+  for (int i = 0; i < 24; i++) {
+    if (sPrefs[i].used && strcmp(sPrefs[i].key, key) == 0) { sPrefs[i].value = value; return; }
+  }
+  for (int i = 0; i < 24; i++) {
+    if (!sPrefs[i].used) {
+      strncpy(sPrefs[i].key, key, sizeof(sPrefs[i].key) - 1);
+      sPrefs[i].key[sizeof(sPrefs[i].key) - 1] = '\0';
+      sPrefs[i].value = value;
+      sPrefs[i].used = true;
+      return;
+    }
+  }
+}
+```
+
+- Dòng 278–280: khóa đã tồn tại thì **ghi đè giá trị** (giống flash ghi lại cùng key).
+- Dòng 281–289: chưa có thì tìm ô trống đầu tiên, sao chép khóa bằng `strncpy` (chừa 1 byte cho ký tự kết thúc), tự đặt `'\0'` ở byte cuối để chuỗi luôn hợp lệ dù khóa dài quá 15 ký tự; lưu giá trị, đánh dấu `used`.
+- Hết 24 ô thì hàm im lặng bỏ qua — không crash. Lớp `Preferences` giả (`mocks/Preferences.h:12–16`) chuyển `putInt`/`putBool` thành `float` trước khi gọi vào đây, nên mock chỉ cần một kiểu lưu.
+- Lưu ý: đây là "flash giả" trong RAM — `mockReset()` xóa sạch; nhờ vậy mỗi test bắt đầu với cấu hình trắng, còn test về bền vững cài đặt chỉ cần không gọi reset giữa chừng.
+
+**Khối 31 — `mockReset()` (dòng 292–326)**
+
+```cpp
+void mockReset() {
+  sMillis = 0;
+  mockDhtTemp = 25.0f;
+  mockDhtHum = 60.0f;
+  memset(mockAdc, 0, sizeof(mockAdc));
+  memset(mockDigital, 0, sizeof(mockDigital));
+  memset(mockPinLevel, 0, sizeof(mockPinLevel));
+  memset(mockPwm, 0, sizeof(mockPwm));
+  memset(mockPixel, 0, sizeof(mockPixel));
+  memset(sPrefs, 0, sizeof(sPrefs));
+  mockServoAngle = 0;
+  mockBuzzerToneHz = 0;
+  mockWifiStatus = WL_CONNECTED;
+  mockWifiIp = "192.168.1.50";
+  mockDisplayBeginOk = true;
+
+  mockDigitalWriteCount = 0;
+  mockLedcWriteCount = 0;
+  mockInvalidPixelWrites = 0;
+  mockInvalidPwmWrites = 0;
+  mockServoWriteCount = 0;
+  mockServoMinSeen = 9999;
+  mockServoMaxSeen = -1;
+  mockToneCalls = mockNoToneCalls = 0;
+  mockWifiBeginCalls = mockWifiDisconnectCalls = mockWifiReconnectCalls = 0;
+  mockWdtInitCalls = mockWdtAddCalls = mockWdtResetCalls = 0;
+
+  sSerialOut.clear();
+  sSerialIn.clear();
+  sOledText.clear();
+  for (int i = 0; i < 8; i++) sOledLines[i].clear();
+  sOledRow = 0;
+  sIoLog.clear();
+  mockServerReset();
+}
+```
+
+- Dòng 293: đưa đồng hồ giả về 0 — mỗi test bắt đầu ở "thời điểm 0".
+- Dòng 294–295: DHT về mặc định 25 °C / 60 %.
+- Dòng 296–301: xóa toàn bộ mảng trạng thái bằng `memset` (ADC, chân đọc, mức ghi, PWM, màu pixel, sPrefs) — nhanh và không sót phần tử.
+- Dòng 302–306: servo, buzzer, WiFi, IP, màn hình OLED về mặc định.
+- Dòng 308–317: tất cả counter về 0; hai sentinel servo được đặt lại (`9999`/`-1`) để phép so min/max bắt đầu sạch.
+- Dòng 319–320: xóa bộ đệm Serial (cả in ra lẫn nhận vào).
+- Dòng 321–323: xóa toàn bộ nội dung OLED (luồng + 8 dòng) và đưa con trỏ về dòng 0.
+- Dòng 324: xóa log thứ tự IO.
+- Dòng 325: gọi `mockServerReset()` để xóa route/arg/response.
+- Ghi chú: `mock.cpp` không có hàm `setup()` riêng — giá trị mặc định được gán ngay khi khởi tạo biến toàn cục (dòng 18–40), còn `mockReset()` là "nút reset" để test chạy độc lập. Một số thứ **không** bị reset vì không nằm trong file này: các hằng cấu hình firmware, và bộ nhớ cấp phát động của firmware (firmware không dùng).
+
+### 15.3. Adafruit_SSD1306.h — giả lập màn hình OLED (dòng 1–26)
+
+Toàn bộ file:
+
+```cpp
+#pragma once
+#include "Arduino.h"
+#include "Wire.h"
+#include "WiFi.h"
+
+#define SSD1306_SWITCHCAPVCC 2
+#define SSD1306_WHITE 1
+
+// mock OLED: ghi lại mọi nội dung được in, cả dạng một luồng và theo từng dòng text
+// (y của setCursor chọn dòng, y/8). Xem mock.cpp/mock.h.
+class Adafruit_SSD1306 {
+public:
+  Adafruit_SSD1306(int, int, TwoWire *, int) {}
+  bool begin(int, int);
+  void clearDisplay();
+  void display() {}
+  void setTextColor(int) {}
+  void setCursor(int x, int y);
+  void setTextSize(int) {}
+  void print(const char *s);
+  void print(char c);
+  void print(int v);
+  void print(float v, int digits);
+  void print(const IPAddress &ip);
+  template <typename T> void print(T) { print("<obj>"); }
+};
+```
+
+- Dòng 1: `#pragma once` — include một lần.
+- Dòng 2: `Arduino.h` — cần `String`, kiểu số, macro... cho phần khai báo bên dưới.
+- Dòng 3: `Wire.h` — vì constructor nhận con trỏ `TwoWire *`.
+- Dòng 4: `WiFi.h` — vì có `print(const IPAddress &ip)` (lớp `IPAddress` định nghĩa ở đó).
+- Dòng 6: `SSD1306_SWITCHCAPVCC` = 2 — hằng số thật của thư viện Adafruit, firmware truyền vào `display.begin(...)`; mock cần định nghĩa đủ để biên dịch, giá trị không quan trọng.
+- Dòng 7: `SSD1306_WHITE` = 1 — tương tự cho `display.setTextColor(...)`; mock bỏ qua màu.
+- Dòng 9–10: comment mô tả cách mock ghi nội dung và quy ước dòng text 8 pixel.
+- Dòng 11: khai báo lớp `Adafruit_SSD1306` trùng tên lớp thật — nhờ vậy firmware `#include <Adafruit_SSD1306.h>` (firmware không hề sửa) sẽ lấy bản này khi `test/mocks/` đứng trước trong đường dẫn include.
+- Dòng 12: `public:` — mọi thứ bên dưới đều gọi được từ firmware.
+- Dòng 13: constructor 4 tham số `(int, int, TwoWire *, int)` đúng chữ ký thư viện thật (rộng, cao, bus I2C, chân reset), nhưng thân rỗng — không có màn hình thật để khởi tạo.
+- Dòng 14: `bool begin(int, int);` — **chỉ khai báo, không viết thân trong header**. Đây là điểm mấu chốt: thân hàm nằm ở `mock.cpp:241` và trả về biến `mockDisplayBeginOk`. Nếu viết inline `{ return true; }` như các hàm khác thì kết quả luôn cố định, test không thể giả lập "không tìm thấy màn hình"; tách sang `mock.cpp` cho phép test đặt `mockDisplayBeginOk = false` để chạy nhánh suy giảm (I11: thiếu OLED, firmware phải gửi mã lỗi 101/102 mà vẫn chạy tiếp và cho watchdog ăn).
+- Dòng 15: `clearDisplay()` — khai báo; thân ở `mock.cpp:243` vì phải xóa các bộ đệm trạng thái.
+- Dòng 16: `display()` — inline rỗng; firmware gọi để "đẩy" nội dung ra màn hình nhưng mock ghi nhận ngay lúc `print`, nên không cần làm gì.
+- Dòng 17: `setTextColor(int)` — inline rỗng; mock không mô phỏng màu.
+- Dòng 18: `setCursor(int x, int y)` — khai báo; thân ở `mock.cpp:248` vì mock cần `y` để biết đang ghi dòng nào (dòng text = `y / 8`).
+- Dòng 19: `setTextSize(int)` — inline rỗng; các test đều giả định cỡ chữ 1 (mỗi dòng 8 pixel, 21 ký tự).
+- Dòng 20–24: năm overload `print` cho `const char*`, `char`, `int`, `float` (kèm số chữ số thập phân), `IPAddress` — đều **chỉ khai báo**, thân ở `mock.cpp:253–257` để ghi vào bộ đệm OLED. Nhờ có đủ overload mà `display.print(F("..."))`, `display.print(t, 1)`, `display.print(water)`... trong `src/oled.cpp` biên dịch y như với thư viện thật.
+- Dòng 25: template `print(T)` — "lưới an toàn" cho kiểu nào không có overload riêng (ví dụ `unsigned`): gọi `print("<obj>")`, tức vẫn vào overload chuỗi và ghi dấu vết, không gây lỗi biên dịch. Đây là kỹ thuật **catch-all template** (bắt tất cả các kiểu còn lại).
+- Dòng 26: đóng lớp.
+
+Tóm lại, ba file này khớp nhau thành một cơ chế thống nhất: `mock.h` hứa API cho test, `mock.cpp` giữ toàn bộ trạng thái và hiện thực mọi hàm (kể cả `Adafruit_SSD1306::begin`), còn các header mô phỏng như `Adafruit_SSD1306.h` chỉ khai báo/thin-inline để firmware thật biên dịch được nguyên vẹn trên PC.
+### 15.4. Arduino.h — giả lập thư viện Arduino lõi (dòng 1–102)
+
+`test/mocks/Arduino.h` là bản thay thế (mock) cho `Arduino.h` thật. Khi build test trên PC, cờ `-I"$MOCKS"` trong `run_tests.sh` (dòng 35) khiến mọi `#include <Arduino.h>` trỏ vào file này thay vì toolchain ESP32, nhờ đó firmware thật chạy được ngay trên máy tính. File chỉ **khai báo** API và viết sẵn vài hàm inline; trạng thái (thời gian, chân, Serial...) nằm hết trong `test/mocks/mock.cpp`.
+
+#### Khối 1 — Mở đầu và các include (dòng 1–9)
+
+```cpp
+#pragma once
+// Mô phỏng phía host cho API lõi Arduino mà dự án này dùng.
+// Build thẳng trên PC: không cần ESP32 toolchain. Xem test/README.md.
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <string>
+#include <math.h>
+```
+
+- Dòng 1: `#pragma once` — chỉ thị "chỉ include file này một lần", tránh khai báo trùng khi nhiều file cùng include.
+- Dòng 2–3: chú thích tiếng Việt nói rõ đây là mock chạy trên host, không cần toolchain ESP32.
+- Dòng 4: `<cstdint>` — cung cấp `uint8_t`, `uint32_t`... dùng trong các khai báo chân/pin bên dưới.
+- Dòng 5: `<cstdio>` — cung cấp `snprintf` (dùng trong `String` và các mock).
+- Dòng 6: `<cstring>` — cung cấp các hàm C như `strcmp`, `strncpy` mà các file firmware/mock dùng, giống việc `Arduino.h` thật kéo theo `string.h`.
+- Dòng 7: `<cstdlib>` — cung cấp `atoi`, `atof` cho `String::toInt()`/`toFloat()`.
+- Dòng 8: `<string>` — `std::string` là bộ nhớ nền của lớp `String` giả.
+- Dòng 9: `<math.h>` — hàm toán học, đảm bảo firmware include `Arduino.h` là có sẵn như trên Arduino thật.
+
+#### Khối 2 — Hằng số và macro (dòng 11–17)
+
+```cpp
+#define HIGH 1
+#define LOW 0
+#define INPUT 0
+#define OUTPUT 1
+#define PROGMEM
+#define F(x) x
+#define constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
+```
+
+- Dòng 11: `HIGH 1` — mức logic cao, giống Arduino thật; firmware so sánh `digitalRead(...) == HIGH` (ví dụ `src/sensors.cpp:38-39`).
+- Dòng 12: `LOW 0` — mức logic thấp.
+- Dòng 13: `INPUT 0` — chế độ chân vào; firmware dùng cho TOUCH/PIR (`SmartFarm.ino:89-90`).
+- Dòng 14: `OUTPUT 1` — chế độ chân ra; mock `pinMode` bỏ qua giá trị này nên con số chỉ cần biên dịch được. File **không** định nghĩa `PULLUP`/`INPUT_PULLUP` vì firmware không dùng điện trở kéo nội.
+- Dòng 15: `PROGMEM` — trên ESP32 macro này đánh dấu dữ liệu nằm trong flash; trên PC để trống, nên `static const char ROOT_HTML[] PROGMEM` (webserver.cpp:12) thành mảng thường.
+- Dòng 16: `F(x) x` — trên Arduino `F()` giữ chuỗi trong flash; trên PC chỉ là chính chuỗi đó, nên `Serial.print(F("..."))` hoạt động y hệt.
+- Dòng 17: `constrain(amt, low, high)` — macro kẹp giá trị trong khoảng, công thức giống hệt Arduino; firmware dùng để chặn ngưỡng nhập từ web (`src/webserver.cpp:389-401`).
+
+#### Khối 3 — Lớp String giả (dòng 19–47)
+
+```cpp
+class String {
+public:
+  String() {}
+  String(const char *s) : s_(s ? s : "") {}
+  String(const std::string &s) : s_(s) {}
+  String(int v) { char b[16]; snprintf(b, sizeof(b), "%d", v); s_ = b; }
+  String(long v) { char b[24]; snprintf(b, sizeof(b), "%ld", v); s_ = b; }
+  String(unsigned int v) { char b[16]; snprintf(b, sizeof(b), "%u", v); s_ = b; }
+  String(unsigned long v) { char b[24]; snprintf(b, sizeof(b), "%lu", v); s_ = b; }
+  String(float v, int digits = 2) { char b[32]; snprintf(b, sizeof(b), "%.*f", digits, (double)v); s_ = b; }
+  String(double v, int digits = 2) { char b[32]; snprintf(b, sizeof(b), "%.*f", digits, v); s_ = b; }
+  void reserve(unsigned n) { s_.reserve(n); }
+  int toInt() const { return atoi(s_.c_str()); }
+  float toFloat() const { return (float)atof(s_.c_str()); }
+  const char *c_str() const { return s_.c_str(); }
+  unsigned length() const { return (unsigned)s_.size(); }
+  char charAt(unsigned i) const { return i < s_.size() ? s_[i] : 0; }
+  String &operator+=(const char *o) { s_ += (o ? o : ""); return *this; }
+  String &operator+=(const String &o) { s_ += o.s_; return *this; }
+  bool operator==(const char *o) const { return s_ == (o ? o : ""); }
+  bool operator==(const String &o) const { return s_ == o.s_; }
+  const std::string &std_str() const { return s_; }
+private:
+  std::string s_;
+};
+inline String operator+(const String &a, const char *b) { return String(a.std_str() + (b ? b : "")); }
+inline String operator+(const char *a, const String &b) { return String(std::string(a ? a : "") + b.std_str()); }
+inline String operator+(const String &a, const String &b) { return String(a.std_str() + b.std_str()); }
+inline String operator+(const String &a, int b) { return String(a.std_str() + String(b).std_str()); }
+```
+
+- Dòng 19: `class String` — tên trùng lớp `String` thật để firmware không phải sửa gì. Điểm khác biệt: bản thật tự quản lý bộ nhớ heap, bản giả bọc `std::string`.
+- Dòng 21: hàm tạo mặc định — chuỗi rỗng.
+- Dòng 22: hàm tạo từ `const char*`, có kiểm tra `s ? s : ""` để con trỏ NULL không gây sập.
+- Dòng 23: hàm tạo từ `std::string` — dùng nội bộ khi ghép chuỗi.
+- Dòng 24–27: hàm tạo từ `int`/`long`/`unsigned int`/`unsigned long`, định dạng bằng `snprintf` với đúng ký hiệu `%d`/`%ld`/`%u`/`%lu` (buffer đủ lớn).
+- Dòng 28–29: từ `float`/`double` với số chữ số thập phân mặc định 2 (`digits = 2`), in bằng `%.*f`; `float` phải ép sang `double` vì `snprintf` nhận tham số biến đổi.
+- Dòng 30: `reserve(n)` — xin trước dung lượng, tương đương `String::reserve` thật (tránh cấp phát lại nhiều lần).
+- Dòng 31: `toInt()` — đổi chuỗi thành số nguyên bằng `atoi`; web server dùng khi đọc tham số `r`, `g`, `b`, `angle`, `light` (`src/webserver.cpp:318-320,356,392`).
+- Dòng 32: `toFloat()` — đổi chuỗi thành số thực bằng `atof`; dùng cho các ngưỡng (`src/webserver.cpp:389-394`).
+- Dòng 33: `c_str()` — trả con trỏ ký tự bên trong để truyền cho hàm kiểu `printf`.
+- Dòng 34: `length()` — số ký tự của chuỗi.
+- Dòng 35: `charAt(i)` — lấy ký tự tại vị trí `i`, ngoài phạm vi trả về 0 (giống String thật).
+- Dòng 36–37: `operator+=` — nối thêm `const char*` (an toàn NULL) hoặc `String` khác.
+- Dòng 38–39: `operator==` — so sánh với `const char*` (an toàn NULL) hoặc `String`; nhờ đó `server.arg("on") == "true"` (webserver.cpp:300) chạy đúng.
+- Dòng 40: `std_str()` — "cửa sau" lấy `std::string` bên trong; dùng khi ghép chuỗi và trong mock WebServer.
+- Dòng 42: `std::string s_` — toàn bộ dữ liệu của String giả nằm ở đây (private).
+- Dòng 44–47: các `operator+` tự do (không phải thành viên) cho mọi tổ hợp cần dùng: String+cstr, cstr+String, String+String, String+int. Nhờ vậy biểu thức cộng chuỗi viết như Arduino thật.
+
+#### Khối 4 — Khai báo API phần cứng lõi (dòng 49–60)
+
+```cpp
+unsigned long millis();
+void delay(unsigned long);
+void pinMode(uint8_t, uint8_t);
+void digitalWrite(uint8_t, uint8_t);
+int digitalRead(uint8_t);
+int analogRead(uint8_t);
+void ledcSetup(uint8_t, double, uint8_t);
+void ledcAttachPin(uint8_t, uint8_t);
+void ledcWrite(uint8_t, uint32_t);
+void ledcAttach(uint8_t, uint32_t, uint8_t);
+void tone(uint8_t, unsigned int, unsigned long = 0);
+void noTone(uint8_t);
+```
+
+Đây là **khai báo** (chỉ có tên hàm, dấu `;`); phần thân nằm trong `mock.cpp`:
+
+- Dòng 49: `millis()` — trả "đồng hồ" ảo `sMillis` (mock.cpp:47). Test có thể đặt/đẩy thời gian bằng `mockSetMillis`/`mockAdvance`, nhờ đó mô phỏng nhiều giờ trong vài mili-giây thật.
+- Dòng 50: `delay(ms)` — bản mock **không chờ** mà cộng thẳng `ms` vào `sMillis` (mock.cpp:48); logic đếm thời gian của firmware vẫn chạy đúng mà test không bị treo.
+- Dòng 51: `pinMode` — mock ghi log `"M:pin;"` (mock.cpp:66) để test kiểm tra thứ tự "chốt mức ra trước khi pinMode" (chống glitch lúc khởi động).
+- Dòng 52: `digitalWrite` — mock lưu mức vào `mockPinLevel[pin]`, tăng `mockDigitalWriteCount` và ghi log `"W:pin=value;"` (mock.cpp:67-71).
+- Dòng 53: `digitalRead` — trả `mockDigital[pin]` (mock.cpp:72); test đặt trước để giả lập TOUCH/PIR.
+- Dòng 54: `analogRead` — trả `mockAdc[pin]` (mock.cpp:73); test giả lập ánh sáng/độ ẩm đất/mực nước.
+- Dòng 55–56: `ledcSetup`, `ledcAttachPin` — API PWM của core 2.x; mock để rỗng (mock.cpp:74-75).
+- Dòng 57: `ledcWrite` — mock tăng `mockLedcWriteCount`, lưu giá trị vào `mockPwm[ch]`, kênh `>= 40` bị đếm vào `mockInvalidPwmWrites` (mock.cpp:76-80).
+- Dòng 58: `ledcAttach` — API PWM mới của core 3.x (firmware gọi trong `SmartFarm.ino:94` khi `ESP_ARDUINO_VERSION_MAJOR >= 3`); mock để rỗng (mock.cpp:81).
+- Dòng 59: `tone(pin, freq, duration = 0)` — tiếng còi; mock lưu tần số vào `mockBuzzerToneHz` và tăng `mockToneCalls` (mock.cpp:82-85).
+- Dòng 60: `noTone` — tắt còi; mock tăng `mockNoToneCalls` và đưa tần số về 0 (mock.cpp:86-89).
+
+#### Khối 5 — Hook ghi Serial (dòng 62–66)
+
+```cpp
+// Hook ghi lại output Serial (hiện thực trong mock.cpp)
+void mockSerialWriteStr(const char *s);
+void mockSerialPrintLong(long v);
+void mockSerialPrintFloat(double v, int digits);
+void mockSerialPrintOther();
+```
+
+- Dòng 62: chú thích nói rõ các hàm này được "cài" trong `mock.cpp`.
+- Dòng 63–66: bốn hàm ghi nhận output Serial: chuỗi, số nguyên dài, số thực kèm số chữ số, và "kiểu khác". Chúng được **khai báo ở đây nhưng định nghĩa ở mock.cpp** (dòng 123–126) để chuỗi ghi nhận `sSerialOut` là biến private trong mock.cpp, và test đọc lại qua `mockSerialOutput()`.
+
+#### Khối 6 — `SerialStub` (dòng 68–97)
+
+```cpp
+struct SerialStub {
+  void begin(unsigned long) {}
+  int available();
+  int read();
+  void print(char c) { char b[2] = {c, 0}; mockSerialWriteStr(b); }
+  void print(const char *s) { mockSerialWriteStr(s); }
+  void print(char *s) { mockSerialWriteStr(s); }
+  void print(const String &s) { mockSerialWriteStr(s.c_str()); }
+  void print(int v) { mockSerialPrintLong(v); }
+  void print(unsigned int v) { mockSerialPrintLong((long)v); }
+  void print(long v) { mockSerialPrintLong(v); }
+  void print(unsigned long v) { mockSerialPrintLong((long)v); }
+  void print(float v, int digits = 2) { mockSerialPrintFloat(v, digits); }
+  void print(double v, int digits = 2) { mockSerialPrintFloat(v, digits); }
+  template <typename T> void print(T) { mockSerialPrintOther(); }
+  void println() { mockSerialWriteStr("\n"); }
+  void println(char c) { print(c); mockSerialWriteStr("\n"); }
+  void println(const char *s) { print(s); mockSerialWriteStr("\n"); }
+  void println(char *s) { print(s); mockSerialWriteStr("\n"); }
+  void println(const String &s) { print(s); mockSerialWriteStr("\n"); }
+  void println(int v) { print(v); mockSerialWriteStr("\n"); }
+  void println(unsigned int v) { print(v); mockSerialWriteStr("\n"); }
+  void println(long v) { print(v); mockSerialWriteStr("\n"); }
+  void println(unsigned long v) { print(v); mockSerialWriteStr("\n"); }
+  void println(float v, int digits = 2) { print(v, digits); mockSerialWriteStr("\n"); }
+  void println(double v, int digits = 2) { print(v, digits); mockSerialWriteStr("\n"); }
+  template <typename T> void println(T) { mockSerialPrintOther(); mockSerialWriteStr("\n"); }
+  void printf(const char *fmt, ...);
+};
+extern SerialStub Serial;
+```
+
+- Dòng 68: `struct SerialStub` — "giả lập" đối tượng `Serial`; tên khác `Serial` thật để tránh trùng, nhưng biến toàn cục bên dưới vẫn tên là `Serial`.
+- Dòng 69: `begin(baud)` để rỗng — trên PC tốc độ truyền không có ý nghĩa.
+- Dòng 70–71: `available()`/`read()` chỉ khai báo; `mock.cpp:128-134` hiện thực một hàng đợi nhập `sSerialIn` — test bơm ký tự bằng `mockSerialPush` để giả lập menu Serial (SmartFarm.ino:166-167).
+- Dòng 72: `print(char)` — gói ký tự thành chuỗi 2 phần tử rồi ghi.
+- Dòng 73: `print(const char*)` — ghi chuỗi trực tiếp.
+- Dòng 74: `print(char*)` — overload **quan trọng**: biến `char stamp[40]` (logger.cpp:37) khi truyền vào hàm sẽ "phân rã" thành `char*`. Nếu chỉ có bản `const char*`, template `print(T)` phía dưới khớp chính xác `T = char*` (không cần thêm `const`) nên sẽ thắng và in ra `<obj>` (xem dòng 82 và `mockSerialPrintOther`), mất nội dung thật. Có overload riêng thì `char*` khớp thẳng và đi vào `mockSerialWriteStr`. `println(char*)` ở dòng 86 có lý do y hệt.
+- Dòng 75: `print(const String&)` — chuyển qua `c_str()`.
+- Dòng 76–81: các bản `int`, `unsigned int`, `long`, `unsigned long`, `float`, `double` — dùng `mockSerialPrintLong`/`mockSerialPrintFloat` để in đúng định dạng như Serial thật (số thực có mặc định 2 chữ số).
+- Dòng 82: `template <typename T> print(T)` — "lưới hứng" cho mọi kiểu còn lại (ví dụ `IPAddress` nếu lọt vào đây): in đại diện `<obj>` và vẫn ghi nhận; nhờ nó firmware lạ vẫn biên dịch được. Chính vì có template này nên mọi overload cụ thể ở trên mới cần thiết.
+- Dòng 83: `println()` — chỉ xuống dòng.
+- Dòng 84–94: các `println` lần lượt gọi `print` tương ứng rồi thêm `"\n"`; bản `println(char*)` (dòng 86) bảo vệ trường hợp mảng `char[]` như đã nói.
+- Dòng 95: `printf(fmt, ...)` — khai báo; `mock.cpp:135-142` dùng `vsnprintf` để định dạng rồi ghi vào `sSerialOut` (firmware gọi rất nhiều, ví dụ logger.cpp:59,65,117).
+- Dòng 97: `extern SerialStub Serial` — biến toàn cục; định nghĩa thật ở `mock.cpp:44`, nên mọi file firmware đều dùng chung một đối tượng.
+
+#### Khối 7 — `TwoWire`/`Wire` (dòng 99–102)
+
+```cpp
+struct TwoWire {
+  void begin(int, int) {}
+};
+extern TwoWire Wire;
+```
+
+- Dòng 99–101: `TwoWire::begin(SDA, SCL)` để rỗng — firmware chỉ gọi `Wire.begin(OLED_SDA, OLED_SCL)` (SmartFarm.ino:109) để "mở bus I2C"; trên PC không có bus thật, nội dung OLED được giả lập ở tầng `Adafruit_SSD1306` trong mock.cpp.
+- Dòng 102: `extern TwoWire Wire` — biến toàn cục, định nghĩa ở `mock.cpp:42`; có nó thì `#include <Wire.h>` (globals.h:6) biên dịch được trên PC (xem mục 15.5, file `Wire.h`).
+
+### 15.5. Các header giả lập còn lại
+
+Nhóm file dưới đây thay thế các thư viện ESP32/Arduino (NeoPixel, DHT, Servo, Preferences, WebServer, WiFi, Wire, watchdog, version core). Chúng dùng chung một mẫu thiết kế: **header chỉ khai báo lớp/hàm với API trùng thư viện thật**, còn **trạng thái và phần định nghĩa nằm trong `test/mocks/mock.cpp`** (và được lộ ra cho test qua `test/mocks/mock.h`). Làm vậy để: (1) nhiều file cùng include mà không bị định nghĩa trùng, (2) trạng thái giả lập chỉ có một bản duy nhất, (3) test có thể đọc/đặt trạng thái đó.
+
+#### 15.5.1. `Adafruit_NeoPixel.h` (18 dòng)
+
+```cpp
+#pragma once
+#include "Arduino.h"
+
+#define NEO_GRB 0x52
+#define NEO_KHZ800 0x0000
+
+void mockNeoPixelSet(int index, uint32_t color);
+
+class Adafruit_NeoPixel {
+public:
+  Adafruit_NeoPixel(int, int, int) {}
+  void begin() {}
+  void show() {}
+  void setPixelColor(int index, uint32_t color) { mockNeoPixelSet(index, color); }
+  uint32_t Color(uint8_t r, uint8_t g, uint8_t b) {
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+  }
+};
+```
+
+- Dòng 1–2: `#pragma once` và include `Arduino.h` (cần `uint32_t`).
+- Dòng 4–5: hai hằng số copy từ thư viện thật (`NEO_GRB = 0x52`, `NEO_KHZ800 = 0x0000`) để dòng `Adafruit_NeoPixel strip(RGB_COUNT, RGB_PIN, NEO_GRB + NEO_KHZ800)` (globals.cpp:24) biên dịch được; giá trị chỉ là tham số, mock không dùng.
+- Dòng 7: khai báo hook `mockNeoPixelSet` — định nghĩa ở `mock.cpp:114-117`.
+- Dòng 11: hàm tạo nhận (số LED, chân, loại) nhưng bỏ qua — mock không cần chân thật.
+- Dòng 12–13: `begin()`/`show()` rỗng — `show()` thật mới là lúc dữ liệu được "chốt" ra LED; mock lưu màu ngay khi `setPixelColor` nên test đọc được tức thì.
+- Dòng 14: `setPixelColor` gọi hook; hook lưu màu vào `mockPixel[8]` (mock.cpp:26) và đếm các lần ghi sai chỉ số vào `mockInvalidPixelWrites` (mock.cpp:115).
+- Dòng 15–17: `Color(r,g,b)` đóng gói 24 bit theo đúng công thức thư viện thật `0xRRGGBB`; nhờ vậy test so sánh được với các giá trị như `0xFF0000` (đỏ).
+
+#### 15.5.2. `DHT.h` (13 dòng)
+
+```cpp
+#pragma once
+#include "Arduino.h"
+
+#define DHT11 11
+#define DHT22 22
+
+class DHT {
+public:
+  DHT(uint8_t, uint8_t) {}
+  void begin() {}
+  float readTemperature();
+  float readHumidity();
+};
+```
+
+- Dòng 1–2: `#pragma once` + include `Arduino.h`.
+- Dòng 4–5: mã loại cảm biến `DHT11 = 11`, `DHT22 = 22` — trùng giá trị thư viện thật; firmware tạo `DHT dht(DHT_PIN, DHT_TYPE)` (globals.cpp:22).
+- Dòng 9: hàm tạo (chân, loại) bỏ qua tham số.
+- Dòng 10: `begin()` rỗng (thật ra chỉ khởi tạo chân).
+- Dòng 11–12: `readTemperature()`/`readHumidity()` **chỉ khai báo**; định nghĩa ở `mock.cpp:104-105`, trả về hai biến `mockDhtTemp`/`mockDhtHum` (mock.cpp:18-19). Test đặt hai biến này để giả lập ngày nóng/lạnh, độ ẩm cao/thấp rồi kiểm tra logic tưới/quạt.
+
+#### 15.5.3. `ESP32Servo.h` (10 dòng)
+
+```cpp
+#pragma once
+#include "Arduino.h"
+
+void mockServoWrite(int angle);
+
+class Servo {
+public:
+  void attach(int) {}
+  void write(int angle) { mockServoWrite(angle); }
+};
+```
+
+- Dòng 1–2: `#pragma once` + include `Arduino.h`.
+- Dòng 4: hook `mockServoWrite` — định nghĩa ở `mock.cpp:108-113`.
+- Dòng 8: `attach(chân)` rỗng — trên PC không cần gắn chân PWM thật.
+- Dòng 9: `write(góc)` gọi hook; hook lưu `mockServoAngle` (mock.cpp:23), đếm `mockServoWriteCount` và ghi nhận góc nhỏ nhất/lớn nhất (`mockServoMinSeen`/`mockServoMaxSeen`, mock.cpp:36-37). Test dùng để kiểm tra quét servo, cửa cho ăn, cối xay gió nằm trong 0–180°.
+
+#### 15.5.4. `Preferences.h` (17 dòng)
+
+```cpp
+#pragma once
+#include "Arduino.h"
+
+float mockPrefGet(const char *key, float dflt);
+void  mockPrefPut(const char *key, float value);
+
+class Preferences {
+public:
+  bool begin(const char *, bool) { return true; }
+  void end() {}
+  void putFloat(const char *key, float value) { mockPrefPut(key, value); }
+  void putInt(const char *key, int value) { mockPrefPut(key, (float)value); }
+  void putBool(const char *key, bool value) { mockPrefPut(key, value ? 1.0f : 0.0f); }
+  float getFloat(const char *key, float dflt) { return mockPrefGet(key, dflt); }
+  int getInt(const char *key, int dflt) { return (int)mockPrefGet(key, (float)dflt); }
+  bool getBool(const char *key, bool dflt) { return mockPrefGet(key, dflt ? 1.0f : 0.0f) != 0; }
+};
+```
+
+- Dòng 1–2: `#pragma once` + include `Arduino.h`.
+- Dòng 4–5: hai hook `mockPrefGet`/`mockPrefPut` — định nghĩa ở `mock.cpp:270-290`.
+- Dòng 8: `begin(tên vùng, chỉ đọc)` luôn trả `true` — coi như bộ nhớ NVS luôn mở được; firmware khỏi phải xử lý lỗi.
+- Dòng 9: `end()` rỗng.
+- Dòng 10–12: `putFloat`/`putInt`/`putBool` đều quy về `mockPrefPut`: số nguyên ép sang `float`, `bool` thành `1.0f`/`0.0f`. Một kho `float` duy nhất cho mọi kiểu giúp đơn giản.
+- Dòng 14–16: `getFloat`/`getInt`/`getBool` đọc qua `mockPrefGet`; `int` ép ngược lại, `bool` là "khác 0". Nếu khóa chưa có thì trả về giá trị mặc định `dflt` (mock.cpp:274).
+- Trạng thái: bảng `sPrefs[24]` (khóa `char[16]` + giá trị) ở `mock.cpp:263-268`; `mockReset()` xóa sạch bảng (mock.cpp:301) để mô phỏng "mất điện về mặc định định mức" giữa các test.
+
+#### 15.5.5. `WebServer.h` (18 dòng)
+
+```cpp
+#pragma once
+#include "Arduino.h"
+
+// mock WebServer: các route được ghi lại và test có thể gọi,
+// tham số request được inject, response được ghi lại (xem mock.cpp/mock.h).
+class WebServer {
+public:
+  WebServer(int) {}
+  void on(const char *path, void (*handler)());
+  void begin() {}
+  void handleClient() {}
+  void send(int code, const char *type, const char *body);
+  void send(int code, const char *type, const String &body);
+  void send(int code);
+  void send_P(int code, const char *type, const char *body);
+  String arg(const char *name);
+  bool hasArg(const char *name);
+};
+```
+
+- Dòng 1–2: `#pragma once` + include `Arduino.h`.
+- Dòng 4–5: chú thích mô tả triết lý mock: route được ghi nhận, test gọi lại được, tham số được "tiêm" (inject) từ test, phản hồi được ghi lại.
+- Dòng 8: hàm tạo nhận cổng nhưng bỏ qua.
+- Dòng 9: `on(path, handler)` chỉ khai báo; `mock.cpp:161-170` lưu vào bảng `sRoutes[24]`, nếu trùng path thì cập nhật handler. Nhờ đó test I1 boot đếm đủ 14 route.
+- Dòng 10–11: `begin()`/`handleClient()` rỗng — không có socket thật.
+- Dòng 12–15: bốn biến thể `send` chỉ khai báo; `mock.cpp:172-179` ghi mã HTTP, content-type, body vào `sLastCode`/`sLastType`/`sLastBody`. Có hai bản body vì firmware dùng cả chuỗi `const char*` (trang HTML, webserver.cpp:229) lẫn `String` (JSON sinh động, webserver.cpp:264). `send_P` chuyển tiếp sang `send` thường (mock.cpp:179).
+- Dòng 16–17: `arg`/`hasArg` chỉ khai báo; `mock.cpp:181-192` tra bảng tham số `sArgs[16]` do test "tiêm" bằng `mockServerSetArg` — `arg` trả chuỗi rỗng nếu không có, thay vì NULL.
+- Trạng thái nằm ở `mock.cpp:150-159`; test gọi route bằng `mockServerInvoke` (mock.cpp:216-226), hàm này gọi handler rồi xóa tham số (giống một request kết thúc).
+
+#### 15.5.6. `WiFi.h` (31 dòng)
+
+```cpp
+#pragma once
+#include "Arduino.h"
+
+#define WL_IDLE_STATUS 0
+#define WL_NO_SSID_AVAIL 1
+#define WL_SCAN_COMPLETED 2
+#define WL_CONNECTED 3
+#define WL_CONNECT_FAILED 4
+#define WL_CONNECTION_LOST 5
+#define WL_DISCONNECTED 6
+
+extern int mockWifiStatus;
+extern const char *mockWifiIp;
+extern int mockWifiBeginCalls, mockWifiDisconnectCalls, mockWifiReconnectCalls;
+
+class IPAddress {
+public:
+  String toString() const { return String(mockWifiIp); }
+};
+
+struct WiFiStub {
+  int status() { return mockWifiStatus; }
+  IPAddress localIP() { return IPAddress(); }
+  String macAddress() { return String("AA:BB:CC:DD:EE:FF"); }
+  int RSSI() { return -55; }
+  void begin(const char *, const char *);
+  void disconnect();
+  void reconnect();
+  void setSleep(bool) {}
+};
+extern WiFiStub WiFi;
+```
+
+- Dòng 1–2: `#pragma once` + include `Arduino.h`.
+- Dòng 4–10: các mã trạng thái `WL_*` copy từ thư viện WiFi thật. Giá trị phải khớp vì firmware so sánh `WiFi.status() == WL_CONNECTED` (oled.cpp:59, wifi.cpp:12); test đặt `mockWifiStatus` bằng `WL_DISCONNECTED`... để giả lập mất mạng.
+- Dòng 12: `mockWifiStatus` — trạng thái WiFi hiện tại (định nghĩa `mock.cpp:27`).
+- Dòng 13: `mockWifiIp` — chuỗi địa chỉ IP (định nghĩa `mock.cpp:28`).
+- Dòng 14: ba bộ đếm số lần gọi `begin`/`disconnect`/`reconnect` (định nghĩa `mock.cpp:39`), dùng cho test chống spam WiFi (đợi 10 giây).
+- Dòng 16–19: lớp `IPAddress` tối giản với `toString()` dựng `String` từ `mockWifiIp` — đủ dùng cho `WiFi.localIP().toString()` (logger.cpp:117).
+- Dòng 22: `status()` đọc biến trạng thái.
+- Dòng 23: `localIP()` trả `IPAddress()` (nó đọc `mockWifiIp` khi cần).
+- Dòng 24: `macAddress()` trả chuỗi cố định — chỉ để hiển thị/log.
+- Dòng 25: `RSSI()` trả `-55` cố định — mức tín hiệu chỉ mang tính hiển thị.
+- Dòng 26–28: `begin`/`disconnect`/`reconnect` chỉ khai báo; `mock.cpp:92-94` chỉ tăng bộ đếm, không làm gì khác.
+- Dòng 29: `setSleep()` rỗng.
+- Dòng 31: `extern WiFiStub WiFi` — định nghĩa `mock.cpp:43`; tên trùng biến `WiFi` thật nên firmware không cần sửa.
+
+#### 15.5.7. `Wire.h` (2 dòng)
+
+```cpp
+#pragma once
+#include "Arduino.h"
+```
+
+- Dòng 1: `#pragma once`.
+- Dòng 2: include `Arduino.h` — vì lớp `TwoWire` và biến `Wire` đã được định nghĩa ngay trong `Arduino.h` (dòng 99–102). File này tồn tại chỉ để dòng `#include <Wire.h>` (globals.h:6) trỏ đúng vào mock. Không cần mô phỏng bus I2C thật vì nội dung OLED được giả lập ở tầng `Adafruit_SSD1306` trong mock.cpp.
+
+#### 15.5.8. `esp_task_wdt.h` (14 dòng)
+
+```cpp
+#pragma once
+#include <cstdint>
+
+struct esp_task_wdt_config_t {
+  uint32_t timeout_ms;
+  uint32_t idle_core_mask;
+  bool trigger_panic;
+};
+
+int esp_task_wdt_init(const esp_task_wdt_config_t *config);
+int esp_task_wdt_init(uint32_t timeout_s, bool panic);
+int esp_task_wdt_add(void *handle);
+int esp_task_wdt_reset();
+int esp_task_wdt_deinit();
+```
+
+- Dòng 1–2: `#pragma once` + `<cstdint>` cho `uint32_t`.
+- Dòng 4–8: `esp_task_wdt_config_t` mô phỏng struct cấu hình watchdog của ESP-IDF gồm 3 trường: thời gian chờ (ms), mặt nạ core nhàn rỗi, cờ "panic khi hết hạn". Firmware (core 3.x) tạo biến này rồi gọi `esp_task_wdt_init(&wdtCfg)` (SmartFarm.ino:67-73).
+- Dòng 10: overload nhận con trỏ cấu hình — nhánh core 3.x.
+- Dòng 11: overload nhận `(timeout_s, panic)` — nhánh core 2.x (SmartFarm.ino:75). Có hai bản để firmware biên dịch với cả hai dòng core.
+- Dòng 12–14: `add`/`reset`/`deinit` — thêm task, "cho ăn" watchdog, hủy. Tất cả trả `int` (đơn giản hóa `esp_err_t`).
+- Cả năm hàm chỉ khai báo; `mock.cpp:97-101` định nghĩa chúng: luôn trả 0 (thành công), tăng `mockWdtInitCalls`/`mockWdtAddCalls`/`mockWdtResetCalls`. Watchdog giả không bao giờ "cắn", nhưng bộ đếm giúp test kiểm tra firmware có khởi tạo và định kỳ reset nó (ví dụ test I11 sau khi thiếu OLED).
+
+#### 15.5.9. `esp_arduino_version.h` (4 dòng)
+
+```cpp
+#pragma once
+#ifndef ESP_ARDUINO_VERSION_MAJOR
+#define ESP_ARDUINO_VERSION_MAJOR 3
+#endif
+```
+
+- Dòng 1: `#pragma once`.
+- Dòng 2–4: nếu biến `ESP_ARDUINO_VERSION_MAJOR` chưa được định nghĩa thì gán mặc định bằng 3. Trên ESP32 thật, header này do core cung cấp; trên PC, mock đóng vai trò đó. `run_tests.sh` vẫn truyền `-DESP_ARDUINO_VERSION_MAJOR=2`/`=3` khi build (dòng 50–54), và định nghĩa từ dòng lệnh thắng vì `#ifndef` kiểm tra trước. Có biến này thì các nhánh `#if ESP_ARDUINO_VERSION_MAJOR >= 3` (SmartFarm.ino:67,93; actuators.cpp:63) mới chọn đúng API (ledcAttach hay ledcSetup/ledcAttachPin).
+
+---
+
+## PHẦN 16 — test/run_tests.sh (script build & chạy)
+
+`test/run_tests.sh` là điểm vào duy nhất để build và chạy bộ test trên máy tính: nó biên dịch firmware thật (`SmartFarm.ino` + `src/*.cpp`) cùng mock phần cứng, rồi chạy một trong các cấu hình. Chế độ `--quick` chạy 1 bản build, `--full` chạy 4 bản build (core 3 mặc định, core 2 đảo cảm biến, còi thụ động + relay mức thấp, ASan+UBSan), còn `--coverage` build với `gcov` để đo độ phủ theo dòng và chặn nếu dưới ngưỡng `COVERAGE_MIN` (mặc định 80%). Nhờ `set -e`, chỉ cần một bản build/test lỗi là script dừng ngay với mã thoát khác 0 — tiện cho cả người chạy tay lẫn CI.
+
+### 16.1. run_tests.sh — giải thích từng dòng (dòng 1–159)
+
+#### Khối 1 — Shebang và mô tả cách dùng (dòng 1–13)
+
+```bash
+#!/usr/bin/env bash
+# Trình chạy test chuyên sâu phía host cho firmware Smart Farm QE002.
+#
+# Biên dịch firmware THẬT (SmartFarm.ino + src/*.cpp) dựa trên các
+# mock phần cứng có thể điều khiển trong test/mocks/ và chạy bộ test.
+#
+# Cách dùng:
+#   ./test/run_tests.sh --quick      một bản build (mặc định core 3.x, cấu hình kit mặc định)
+#   ./test/run_tests.sh --full       bốn bản build: core3, core2+inverts,
+#                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan
+#   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng
+#
+# Yêu cầu: g++ với C++17, bash. Không cần toolchain ESP32.
+```
+
+- Dòng 1: shebang — bảo hệ điều hành chạy file này bằng `bash` tìm qua biến môi trường `PATH` (`env bash`).
+- Dòng 2: chú thích mục đích: trình chạy test chuyên sâu phía host cho firmware Smart Farm QE002.
+- Dòng 3–6: giải thích script biên dịch firmware **thật** dựa trên mock phần cứng điều khiển được trong `test/mocks/`.
+- Dòng 7–11: liệt kê ba chế độ chạy: `--quick` (1 bản build, core 3.x mặc định), `--full` (4 bản build: core3, core2 kèm đảo cảm biến, còi thụ động + relay kích mức thấp, ASan+UBSan), `--coverage` (build với gcov, in độ phủ theo dòng).
+- Dòng 12–13: yêu cầu môi trường: `g++` chuẩn C++17 và `bash`; không cần toolchain ESP32.
+
+#### Khối 2 — `set` an toàn và các đường dẫn (dòng 14–20)
+
+```bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEST_DIR="$ROOT/test"
+MOCKS="$TEST_DIR/mocks"
+BUILD="$TEST_DIR/build"
+mkdir -p "$BUILD"
+```
+
+- Dòng 14: `set -euo pipefail` — ba tùy chọn an toàn: `-e` dừng ngay khi một lệnh lỗi; `-u` báo lỗi khi dùng biến chưa khai báo; `-o pipefail` khiến cả đường ống (`|`) thất bại nếu bất kỳ lệnh nào trong đó thất bại. Nhờ vậy lỗi build/test không bị "chìm".
+- Dòng 16: `ROOT` — thư mục gốc repo: lấy thư mục chứa script (`${BASH_SOURCE[0]}` là đường dẫn file này), đi lên một cấp (`/..`), rồi `pwd` để có đường dẫn tuyệt đối; `cd` chạy trong subshell nên không đổi thư mục hiện tại.
+- Dòng 17: `TEST_DIR="$ROOT/test"`.
+- Dòng 18: `MOCKS="$TEST_DIR/mocks"` — nơi chứa các header/nguồn giả lập.
+- Dòng 19: `BUILD="$TEST_DIR/build"` — thư mục chứa file build tạm (đã nằm trong `.gitignore`).
+- Dòng 20: `mkdir -p` tạo thư mục build nếu chưa có; `-p` không báo lỗi khi thư mục đã tồn tại.
+
+#### Khối 3 — Danh sách nguồn, cờ biên dịch (dòng 22–36)
+
+```bash
+SRC=(
+  "$ROOT/src/actuators.cpp"
+  "$ROOT/src/config.cpp"
+  "$ROOT/src/control.cpp"
+  "$ROOT/src/demo.cpp"
+  "$ROOT/src/globals.cpp"
+  "$ROOT/src/logger.cpp"
+  "$ROOT/src/oled.cpp"
+  "$ROOT/src/sensors.cpp"
+  "$ROOT/src/settings.cpp"
+  "$ROOT/src/webserver.cpp"
+  "$ROOT/src/wifi.cpp"
+)
+FLAGS=(-std=gnu++17 -Wall -Wextra -Wshadow -Wundef -I"$MOCKS" -I"$ROOT/src")
+FILES=("$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}" -x c++ "$ROOT/SmartFarm.ino")
+```
+
+- Dòng 22–34: mảng `SRC` liệt kê đủ 11 file nguồn production trong `src/` — đây là code thật của firmware.
+- Dòng 35: `FLAGS` gồm: `-std=gnu++17` (chuẩn C++17), `-Wall -Wextra` (bật cảnh báo), `-Wshadow` (cảnh báo biến che khuất), `-Wundef` (cảnh báo dùng macro chưa định nghĩa trong `#if`), `-I"$MOCKS"` **đặt trước** `-I"$ROOT/src"` để `#include <Arduino.h>` trỏ vào mock chứ không phải thư viện thật.
+- Dòng 36: `FILES` là danh sách đầy đủ đưa cho `g++`: test chính, `mock.cpp`, toàn bộ `SRC`, rồi `-x c++` + `SmartFarm.ino`. Hai điểm đáng chú ý: (1) `-x c++` báo cho g++ "file tiếp theo là C++" vì đuôi `.ino` không được nhận diện mặc định; (2) thứ tự đặt sao cho `-x` chỉ ảnh hưởng đúng file `.ino` ở cuối.
+
+#### Khối 4 — Chế độ chạy và ngưỡng phủ (dòng 38–39)
+
+```bash
+MODE="${1:---full}"
+COVERAGE_MIN="${COVERAGE_MIN:-80}"
+```
+
+- Dòng 38: `MODE="${1:---full}"` — lấy tham số dòng lệnh thứ nhất; nếu người dùng không truyền gì thì mặc định là `--full` (chạy đủ 4 bản build).
+- Dòng 39: `COVERAGE_MIN="${COVERAGE_MIN:-80}"` — ngưỡng độ phủ tối thiểu, mặc định 80%; có thể ghi đè bằng biến môi trường khi chạy, ví dụ `COVERAGE_MIN=90 ./test/run_tests.sh --coverage`.
+
+#### Khối 5 — Hàm `build_and_run` (dòng 41–48)
+
+```bash
+build_and_run() {
+  local name="$1"; shift
+  local bin="$BUILD/$name.bin"
+  echo "=== Build: $name ==="
+  g++ "${FLAGS[@]}" "$@" -o "$bin" "${FILES[@]}"
+  "$bin"
+  echo
+}
+```
+
+- Dòng 41: định nghĩa hàm `build_and_run`.
+- Dòng 42: `local name="$1"` nhận tên bản build; `shift` bỏ tham số đầu để `$@` còn lại là các cờ `-D...` riêng cho cấu hình đó.
+- Dòng 43: đường dẫn file thực thi, ví dụ `test/build/core3.bin`.
+- Dòng 44: in dấu `=== Build: ... ===` để người đọc biết đang ở bản build nào.
+- Dòng 45: gọi `g++` với cờ chung (`FLAGS`), cờ riêng cấu hình (`"$@"`), `-o` file ra, rồi danh sách `FILES`. Lưu ý mọi biến đều để trong dấu ngoặc kép + `[@]` để đường dẫn có khoảng trắng vẫn an toàn.
+- Dòng 46: chạy file vừa build. Nếu test thất bại, `set -e` (dòng 14) dừng script ngay — không có dòng "PASSED" nào được in.
+- Dòng 47: in một dòng trống ngăn cách giữa các bản build.
+
+#### Khối 6 — Ba cấu hình thường (dòng 50–54)
+
+```bash
+run_default()  { build_and_run core3 -DESP_ARDUINO_VERSION_MAJOR=3; }
+run_core2()    { build_and_run core2-invert -DESP_ARDUINO_VERSION_MAJOR=2 \
+                   -DINVERT_LIGHT=1 -DINVERT_SOIL=1 -DINVERT_WATER=1; }
+run_buzzer()   { build_and_run passive-lowrelay -DESP_ARDUINO_VERSION_MAJOR=3 \
+                   -DBUZZER_PASSIVE=1 -DRELAY_ACTIVE_LOW=1; }
+```
+
+- Dòng 50: `run_default` — bản `core3`, mô phỏng kit mặc định chạy ESP32 Arduino core 3.x (định nghĩa `ESP_ARDUINO_VERSION_MAJOR=3`).
+- Dòng 51–52: `run_core2` — bản `core2-invert`, chạy core 2.x và bật đồng thời `INVERT_LIGHT`, `INVERT_SOIL`, `INVERT_WATER` để kiểm tra nhánh đảo chiều cảm biến (tức điện áp tăng khi trời tối/đất khô...). Dấu `\` cuối dòng 51 là nối dòng lệnh.
+- Dòng 53–54: `run_buzzer` — bản `passive-lowrelay`, còi thụ động dùng `tone()` (`BUZZER_PASSIVE=1`) và relay kích mức thấp (`RELAY_ACTIVE_LOW=1`); đây là hai biến thể phần cứng khác kit mặc định.
+
+#### Khối 7 — Bản build ASan + UBSan (dòng 55–64)
+
+```bash
+run_asan() {
+  local bin="$BUILD/asan.bin"
+  echo "=== Build: asan+ubsan ==="
+  g++ "${FLAGS[@]}" -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -DESP_ARDUINO_VERSION_MAJOR=3 -o "$bin" "${FILES[@]}"
+  # Một số phiên desktop đặt biến LD_PRELOAD (ví dụ libgtk-nocsd); runtime
+  # sanitizer phải là thư viện được nạp đầu tiên, nên bỏ LD_PRELOAD cho lần chạy này.
+  env -u LD_PRELOAD "$bin"
+  echo
+}
+```
+
+- Dòng 55: định nghĩa hàm `run_asan`.
+- Dòng 56–57: file ra `asan.bin` và dòng thông báo build.
+- Dòng 58–59: biên dịch kèm `-g` (giữ thông tin gỡ lỗi để sanitizer in đúng số dòng), `-fsanitize=address,undefined` (bật AddressSanitizer phát hiện truy cập bộ nhớ sai và UndefinedBehaviorSanitizer phát hiện hành vi không xác định), `-fno-omit-frame-pointer` (giữ con trỏ khung để stack trace đầy đủ), cấu hình core 3.
+- Dòng 60–61: chú thích giải thích vì sao chạy bằng `env -u LD_PRELOAD`: một số phiên desktop đặt `LD_PRELOAD` (ví dụ `libgtk-nocsd`) khiến thư viện khác được nạp trước runtime của ASan; ASan bắt buộc phải nạp đầu tiên, nên phải **bỏ biến này cho riêng lệnh chạy** (`-u` = unset), không ảnh hưởng phần còn lại của script.
+- Dòng 62: chạy binary với `LD_PRELOAD` đã bỏ; nếu sanitizer phát hiện lỗi, mã thoát khác 0 và `set -e` dừng script.
+- Dòng 63: dòng trống ngăn cách.
+
+#### Khối 8 — Coverage: build từng file với gcov (dòng 66–84)
+
+```bash
+run_coverage() {
+  local cov="$BUILD/cov"
+  rm -rf "$cov"
+  mkdir -p "$cov"
+  echo "=== Build: coverage (gcov) ==="
+  local objs=()
+  local f o
+  # gcov tạo file ghi chú bằng cách thay phần mở rộng của file object bằng
+  # .gcno, nên đặt tên object như "control.o" (không phải "control.cpp.o").
+  for f in "$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}"; do
+    o="$cov/$(basename "${f%.cpp}").o"
+    g++ "${FLAGS[@]}" --coverage -c "$f" -o "$o"
+    objs+=("$o")
+  done
+  g++ "${FLAGS[@]}" --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.o"
+  objs+=("$cov/SmartFarm.o")
+  g++ --coverage -o "$cov/test.bin" "${objs[@]}"
+  "$cov/test.bin" | tail -n 1
+  echo
+```
+
+- Dòng 66: định nghĩa hàm `run_coverage`.
+- Dòng 67–69: xóa sạch rồi tạo lại thư mục `test/build/cov` — tránh dữ liệu phủ cũ lẫn vào kết quả mới.
+- Dòng 70: thông báo đang build chế độ coverage.
+- Dòng 71–72: mảng `objs` chứa các file object và hai biến vòng lặp `f`, `o`.
+- Dòng 73–74: chú thích then chốt: `gcov` tìm file ghi chú `.gcno` bằng cách thay đuôi của file object, nên object phải tên `control.o` — nếu đặt `control.cpp.o` thì gcov (được gọi trên `control.cpp`) sẽ tìm `control.gcno` và không thấy. Vì vậy `o="$cov/$(basename "${f%.cpp}").o"` cắt đuôi `.cpp` trước khi thêm `.o`.
+- Dòng 75–79: vòng lặp biên dịch từng file test, mock và 11 file `src/` thành object riêng với cờ `--coverage` (tương đương `-fprofile-arcs -ftest-coverage`, sinh `.gcno` lúc biên dịch và `.gcda` lúc chạy), rồi thêm đường dẫn object vào mảng `objs`.
+- Dòng 80–81: biên dịch `SmartFarm.ino` với `-x c++` thành `SmartFarm.o` và thêm vào `objs`.
+- Dòng 82: liên kết tất cả object thành `test.bin`; bước link cũng cần `--coverage` để nối runtime gcov.
+- Dòng 83: chạy test, nhưng chỉ giữ **dòng cuối** nhờ `tail -n 1` — vì binary in rất nhiều dòng kết quả, dòng cuối là dòng tổng kết. `pipefail` (dòng 14) đảm bảo nếu test thất bại thì cả đường ống thất bại.
+- Dòng 84: dòng trống ngăn cách.
+
+#### Khối 9 — Sinh file `.gcov` (dòng 86–90)
+
+```bash
+  echo "=== Coverage (production code: src/*.cpp + SmartFarm.ino) ==="
+  ( cd "$cov"
+    for f in "$ROOT/src/"*.cpp "$ROOT/SmartFarm.ino"; do
+      gcov -o "$cov" "$f" > /dev/null 2>&1 || true
+    done )
+```
+
+- Dòng 86: thông báo phạm vi đo: chỉ code production (`src/*.cpp` + `SmartFarm.ino`), không tính `test_main.cpp`/`mock.cpp`.
+- Dòng 87: mở subshell (`(...)`) rồi `cd` vào thư mục `cov` — gcov ghi file `.gcov` vào thư mục hiện hành, và subshell giúp không đổi thư mục của script chính.
+- Dòng 88–90: với từng file nguồn production, gọi `gcov -o "$cov"` (chỉ cho gcov biết nơi chứa `.gcno`/`.gcda`) và bỏ toàn bộ output thường lẫn output lỗi (`> /dev/null 2>&1`). `|| true` để một lần gcov "càu nhàu" không làm `set -e` dừng script; kết quả được đọc ở bước sau qua các file `.gcov`.
+
+#### Khối 10 — Đọc từng file `.gcov` và tính độ phủ (dòng 92–124)
+
+```bash
+  local total=0 covered=0
+  printf "%-30s %8s %8s %8s\n" "File" "Lines" "Hit" "Cover"
+  local gc base stats hit tot pct
+  for gc in "$cov"/*.gcov; do
+    [ -e "$gc" ] || continue
+    base="$(basename "$gc" .gcov)"
+    case "$base" in
+      actuators.cpp|config.cpp|control.cpp|demo.cpp|globals.cpp|logger.cpp|\
+      oled.cpp|sensors.cpp|settings.cpp|webserver.cpp|wifi.cpp|SmartFarm.ino) ;;
+      *) continue ;;
+    esac
+    stats="$(awk -F: '
+      $2 ~ /^[ ]*[0-9]+$/ {
+        line=$2 + 0;
+        if (line == 0) next;
+        c=$1; gsub(/ /,"",c);
+        if (c == "-") next;              # không thực thi (chú thích, dòng trống, })
+        total++;
+        if (c != "#####" && c != "=====" && (c+0) > 0) covered++;
+      }
+      END { printf "%d %d", covered, total }
+    ' "$gc")"
+    hit="${stats%% *}"
+    tot="${stats##* }"
+    total=$((total + tot))
+    covered=$((covered + hit))
+    if [ "$tot" -gt 0 ]; then
+      pct="$(awk -v c="$hit" -v t="$tot" 'BEGIN { printf "%.1f", 100.0*c/t }')"
+    else
+      pct="n/a"
+    fi
+    printf "%-30s %8d %8d %7s%%\n" "$base" "$tot" "$hit" "$pct"
+  done
+```
+
+- Dòng 92: khởi tạo hai biến tổng `total` (dòng thực thi được) và `covered` (dòng đã chạy).
+- Dòng 93: in tiêu đề bảng canh cột bằng `printf`: `File`, `Lines`, `Hit`, `Cover`.
+- Dòng 94: khai báo các biến cục bộ dùng trong vòng lặp.
+- Dòng 95: duyệt mọi file `.gcov` mà gcov vừa sinh.
+- Dòng 96: nếu mẫu không khớp file nào (không có `.gcov`), `continue` để bỏ qua — vì bash có thể giữ nguyên chuỗi `"$cov"/*.gcov` khi không khớp.
+- Dòng 97: lấy tên file bỏ đuôi `.gcov`, ví dụ `control.cpp`.
+- Dòng 98–102: bộ lọc `case` — chỉ xử lý 12 tên thuộc code production (`actuators.cpp` ... `wifi.cpp`, `SmartFarm.ino`); mọi file khác (như `test_main.cpp.gcov`, `mock.cpp.gcov`) bị `continue` bỏ qua, đảm bảo độ phủ phản ánh đúng firmware.
+- Dòng 103–113: đoạn `awk -F:` phân tích file `.gcov`. Mỗi dòng gcov có dạng `số_lần_chạy:số_dòng:nội_dung`, nên `$1` là số lần chạy, `$2` là số dòng.
+  - Dòng 104: chỉ xử lý dòng mà cột 2 là số thuần (dòng nguồn thật); các dòng tiêu đề kiểu `function ...` bị loại.
+  - Dòng 105–106: bỏ dòng số 0 (dòng tổng kết của gcov).
+  - Dòng 107: lấy cột đếm và xóa khoảng trắng đệm.
+  - Dòng 108: nếu cột đếm là `-` thì bỏ qua — đây là các dòng **không thực thi được** (chú thích, dòng trống, dấu `}`...). Vì sao phải bỏ: nếu tính cả chúng, mẫu số độ phủ bị thổi phồng và chỉ số không còn phản ánh số dòng thực sự chạy.
+  - Dòng 109: `total++` — đếm một dòng thực thi được.
+  - Dòng 110: `covered++` khi dòng không phải `#####` (chưa chạy), không phải `=====` (đường đặc biệt) và số lần chạy lớn hơn 0.
+  - Dòng 112: `END` in ra hai số `covered total` cách nhau bằng dấu cách.
+- Dòng 114–117: cắt chuỗi `stats` bằng tham số mở rộng của bash (`%% *` lấy từ cuối, `##* ` lấy từ đầu) rồi cộng dồn vào tổng toàn cục.
+- Dòng 118–122: nếu file có ít nhất một dòng thực thi được thì tính phần trăm một chữ số thập phân bằng awk; nếu không thì ghi `n/a` để tránh chia cho 0.
+- Dòng 123: in một hàng của bảng: tên file, tổng dòng, số dòng đã chạy, phần trăm.
+
+#### Khối 11 — Dòng TOTAL và kiểm tra ngưỡng (dòng 126–137)
+
+```bash
+  local overall
+  if [ "$total" -gt 0 ]; then
+    overall="$(awk -v c="$covered" -v t="$total" 'BEGIN { printf "%.1f", 100.0*c/t }')"
+  else
+    overall="0.0"
+  fi
+  echo "--------------------------------------------------------"
+  printf "%-30s %8d %8d %7s%%\n" "TOTAL" "$total" "$covered" "$overall"
+  awk -v p="$overall" -v m="$COVERAGE_MIN" 'BEGIN { exit (p+0 >= m+0) ? 0 : 1 }' || {
+    echo "ERROR: coverage ${overall}% is below the ${COVERAGE_MIN}% threshold (set COVERAGE_MIN to override)"
+    exit 1
+  }
+```
+
+- Dòng 126–131: tính `overall` — phần trăm phủ toàn dự án; nếu tổng số dòng bằng 0 thì gán `"0.0"` cho an toàn.
+- Dòng 132: in dải phân cách.
+- Dòng 133: in hàng `TOTAL` với tổng dòng, tổng dòng đã chạy và phần trăm chung.
+- Dòng 134: `awk` so sánh số học `overall >= COVERAGE_MIN`; nếu đạt thì thoát 0, không đạt thì thoát 1. `p+0`/`m+0` ép chuỗi thành số. Nếu awk thoát 1, khối sau dấu `||` chạy.
+- Dòng 135–136: in thông báo lỗi kèm gợi ý đặt `COVERAGE_MIN` để hạ/đổi ngưỡng, rồi `exit 1` — test coi như thất bại.
+
+#### Khối 12 — Bộ chọn chế độ chạy (dòng 140–159)
+
+```bash
+case "$MODE" in
+  --quick)
+    run_default
+    echo "QUICK: PASSED"
+    ;;
+  --full)
+    run_default
+    run_core2
+    run_buzzer
+    run_asan
+    echo "FULL: ALL 4 BUILDS PASSED"
+    ;;
+  --coverage)
+    run_coverage
+    ;;
+  *)
+    echo "Usage: $0 [--quick|--full|--coverage]" >&2
+    exit 2
+    ;;
+esac
+```
+
+- Dòng 140: `case "$MODE"` — rẽ nhánh theo chế độ đã lấy ở dòng 38.
+- Dòng 141–143: `--quick` — chỉ chạy bản core3; nếu xong không lỗi thì in `QUICK: PASSED`. Vì có `set -e`, dòng này chỉ tới được khi test đã qua.
+- Dòng 145–150: `--full` — lần lượt chạy đủ 4 bản build (core3, core2-invert, passive-lowrelay, asan+ubsan) rồi in `FULL: ALL 4 BUILDS PASSED`. Bất kỳ bản nào lỗi sẽ dừng ngay trước khi in dòng này.
+- Dòng 152–153: `--coverage` — gọi `run_coverage`.
+- Dòng 155–157: nhánh còn lại (`*`) — in hướng dẫn dùng ra **stderr** (`>&2`) rồi thoát mã 2 (mã quy ước "dùng sai tham số").
+- Dòng 159: `esac` kết thúc `case`.
+
+---
+
+## PHẦN 17 — Bảng mã lỗi và thuật ngữ
+
+### 17.1. Bảng mã lỗi (in ra dạng `[MA LOI: xxx]`)
 
 | Mã | Ý nghĩa | Xử lý |
 |---|---|---|
@@ -2668,7 +7250,7 @@ biên dịch **code thật** (`SmartFarm.ino` + `src/*.cpp`). Nhờ vậy:
 | 401 | Mất WiFi, đang nối lại | Chỉ ghi 1 lần mỗi đợt; tự nối lại |
 | 501 | Cảm biến DHT11 lỗi liên tục (>5 lần) | Kiểm tra dây/chân 23; giá trị cũ được dùng tạm |
 
-### 14.2. Bảng chân — bản đầy đủ kèm tên biến trong code
+### 17.2. Bảng chân — bản đầy đủ kèm tên biến trong code
 
 | Tên trong code | Chân | Ghi chú |
 |---|---|---|
@@ -2687,7 +7269,7 @@ biên dịch **code thật** (`SmartFarm.ino` + `src/*.cpp`). Nhờ vậy:
 | `WATER_PIN` | 36 | Mực nước |
 | `OLED_SDA/SCL` | 21 / 22 | I2C màn hình |
 
-### 14.3. Câu hỏi thường gặp khi đọc code
+### 17.3. Câu hỏi thường gặp khi đọc code
 
 - **"Vì sao dùng `now - last >= X` mà không phải `now >= last + X`?"** — Vì `millis()` sẽ tràn số
   về 0 sau ~49 ngày. Phép trừ của số không dấu luôn cho kết quả đúng kể cả khi tràn, còn phép

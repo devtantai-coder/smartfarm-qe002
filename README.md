@@ -390,7 +390,7 @@ Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch
 
 Bộ test bao phủ: logic bơm/quạt/đèn/chạm/còi, so sánh ngưỡng đúng biên, thời gian chính xác từng ms, 14 route HTTP, hợp đồng JSON 21 khóa, menu serial, trình diễn 15 bước, bền vững sau khi mất điện, fuzz 90.000 bước với các bất biến an toàn, và cả trường hợp `millis()` tràn số. Chi tiết xem `test/README.md`.
 
-Muốn hiểu **từng dòng code** làm gì (giải thích tiếng Việt, trích dẫn theo số dòng), xem [`GIAI_THICH_CODE.md`](GIAI_THICH_CODE.md).
+Muốn hiểu **từng dòng code** làm gì (giải thích tiếng Việt, trích dẫn theo số dòng), xem [`GIAI_THICH_CODE.md`](GIAI_THICH_CODE.md) — đã phủ toàn bộ `SmartFarm.ino`, `src/`, trang web nhúng và cả bộ test (`test/`).
 
 ---
 
