@@ -27,6 +27,7 @@
 #include "demo.h"
 #include "settings.h"
 #include "oled.h"
+#include "config.h"
 
 // Các entry point thật của firmware (SmartFarm.ino)
 void setup();
@@ -102,8 +103,25 @@ static void checkBuzzer(bool on) {
 #endif
 }
 
+#ifdef SMARTFARM_TEST_HOOKS
+// Hook do firmware cung cấp (chỉ tồn tại ở bản build test): trả các biến
+// static trong src/ về trạng thái vừa cấp điện → test độc lập thứ tự hơn.
+void testResetActuatorStatics();
+void testResetControlStatics();
+void testResetDemoStatics();
+void testResetSensorStatics();
+void testResetWifiStatics();
+#endif
+
 static void resetState() {
   mockReset();
+#ifdef SMARTFARM_TEST_HOOKS
+  testResetActuatorStatics();
+  testResetControlStatics();
+  testResetDemoStatics();
+  testResetSensorStatics();
+  testResetWifiStatics();
+#endif
   soilThresholdLow = 400; soilThresholdHigh = 700; waterThresholdLow = 200;
   lightThreshold = 500; tempThresholdHigh = 30; tempThresholdLow = 25;
   pumpAuto = lightAuto = rgbAuto = fanAuto = true;
@@ -145,6 +163,7 @@ static int invoke(const char *path,
                   const char *a1 = nullptr, const char *v1 = nullptr,
                   const char *a2 = nullptr, const char *v2 = nullptr,
                   const char *a3 = nullptr, const char *v3 = nullptr) {
+  if (WEB_TOKEN[0] != '\0') mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
   if (a1) mockServerSetArg(a1, v1);
   if (a2) mockServerSetArg(a2, v2);
   if (a3) mockServerSetArg(a3, v3);
@@ -1608,6 +1627,7 @@ static void fuzzRun(unsigned seed, int iters) {
         for (int a = 0; a < na; a++) {
           mockServerSetArg(argNames[rng() % nNames], argVals[rng() % nVals]);
         }
+        if (WEB_TOKEN[0] != '\0') mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
         bool found = mockServerInvoke(routes[rng() % nRoutes]);
         CHECK(found);
         int code = mockServerLastCode();
@@ -1639,6 +1659,7 @@ static void fuzzRun(unsigned seed, int iters) {
         startDemo();
         break;
       case 6:
+        if (WEB_TOKEN[0] != '\0') mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
         mockServerInvoke("/demo");
         break;
       case 7:
@@ -1649,6 +1670,7 @@ static void fuzzRun(unsigned seed, int iters) {
         char v[16];
         snprintf(v, sizeof(v), "%d", (int)(rng() % 5000) - 100);
         mockServerSetArg(argNames[6 + rng() % 6], v);
+        if (WEB_TOKEN[0] != '\0') mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
         mockServerInvoke("/threshold");
         break;
       }
@@ -1839,6 +1861,93 @@ static void testDemoBreathingRestore() {
   setBreatheLed(false);
 }
 
+// D15: chặn CSRF — trang web khác không được điều khiển thiết bị
+static void testWebSecurity() {
+  printf("D15 http: CSRF guard (Origin/Referer/Sec-Fetch-Site)\n");
+  mockServerReset();
+  setup();
+
+  const String me = String("http://") + String(mockWifiIp);
+
+  // Yêu cầu không kèm header (curl, app tự viết) vẫn được phép
+  bool before = relayState;
+  CHECK_EQ(invoke("/toggle", "id", "pump"), 200);
+  CHECK(relayState != before);
+
+  // Origin lạ (trang web khác gọi fetch/XHR) → 403, trạng thái không đổi
+  before = relayState;
+  mockServerSetHeader("Origin", "http://evil.example");
+  CHECK_EQ(invoke("/toggle", "id", "pump"), 403);
+  CHECK(relayState == before);
+  CHECK_STR(mockServerLastBody(), "forbidden");
+
+  // Referer lạ (thẻ <img> không gửi Origin) → 403
+  mockServerSetHeader("Referer", "http://evil.example/attack.html");
+  CHECK_EQ(invoke("/feed"), 403);
+  CHECK(!feedRunning());
+
+  // Sec-Fetch-Site: cross-site → 403 (trình duyệt hiện đại)
+  mockServerSetHeader("Sec-Fetch-Site", "cross-site");
+  CHECK_EQ(invoke("/demo"), 403);
+  CHECK(!demoRunning());
+
+  // Tên miền giả mạo kiểu "http://<ip>.evil.com" không được lọt qua
+  mockServerSetHeader("Origin", (me + ".evil.com").c_str());
+  CHECK_EQ(invoke("/toggle", "id", "fan"), 403);
+
+  // Yêu cầu cùng nguồn (từ chính trang của thiết bị) được phép
+  mockServerSetHeader("Origin", me.c_str());
+  mockServerSetHeader("Referer", (me + "/").c_str());
+  mockServerSetHeader("Sec-Fetch-Site", "same-origin");
+  CHECK_EQ(invoke("/windmill", "on", "true"), 200);
+  CHECK(windmillOn);
+
+  resetState();
+}
+
+// D16: token web tùy chọn (chỉ chạy ở bản build có đặt WEB_TOKEN)
+static void testWebToken() {
+  printf("D16 http: optional WEB_TOKEN guard\n");
+  if (WEB_TOKEN[0] == '\0') {
+    printf("      (bỏ qua: bản build này không đặt WEB_TOKEN)\n");
+    return;
+  }
+  mockServerReset();
+  setup();
+
+  // Không kèm token → 401, trạng thái không đổi
+  bool before = relayState;
+  mockServerSetArg("id", "pump");
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 401);
+  CHECK_STR(mockServerLastBody(), "unauthorized");
+  CHECK(relayState == before);
+
+  // Token sai qua query → 401
+  mockServerSetArg("id", "pump");
+  mockServerSetArg("token", "sai-token");
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 401);
+  CHECK(relayState == before);
+
+  // Token đúng qua query → 200
+  mockServerSetArg("id", "pump");
+  mockServerSetArg("token", WEB_TOKEN);
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 200);
+  CHECK(relayState != before);
+
+  // Token đúng qua header X-Auth-Token → 200
+  before = relayState;
+  mockServerSetArg("id", "pump");
+  mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 200);
+  CHECK(relayState != before);
+
+  resetState();
+}
+
 // I11: boot suy giảm - thiếu OLED và timeout kết nối WiFi
 static void testBootDegraded() {
   printf("I11 boot: missing OLED + WiFi timeout\n");
@@ -1915,6 +2024,8 @@ int main() {
   testRebootPersistence();
   testFuzzSoak();
   testClockWrap();
+  testWebSecurity();
+  testWebToken();
   testBootDegraded();
 
   printf("=== %d checks, %d failures ===\n", gChecks, gFails);

@@ -50,6 +50,7 @@ void mockServerReset();
 int  mockServerRouteCount();
 bool mockServerHasRoute(const char *path);
 void mockServerSetArg(const char *name, const char *value);
+void mockServerSetHeader(const char *name, const char *value);
 bool mockServerInvoke(const char *path);
 int  mockServerLastCode();
 const char *mockServerLastType();

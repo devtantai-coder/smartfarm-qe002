@@ -10,6 +10,7 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <esp_task_wdt.h>
+#include <ArduinoOTA.h>
 
 #include "src/config.h"
 #include "src/globals.h"
@@ -136,6 +137,27 @@ void setup() {
     LOG_ERROR_CODE(102, "WiFi timeout - retrying in background");
   }
 
+  // OTA: cập nhật firmware qua mạng (Arduino IDE / web upload)
+  ArduinoOTA.setHostname("smartfarm");
+  ArduinoOTA.onStart([]() {
+    Serial.println(F("OTA: start"));
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println(F("\nOTA: end"));
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("OTA: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("OTA: error[%u] ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println(F("Auth Failed"));
+    else if (error == OTA_BEGIN_ERROR) Serial.println(F("Begin Failed"));
+    else if (error == OTA_CONNECT_ERROR) Serial.println(F("Connect Failed"));
+    else if (error == OTA_RECEIVE_ERROR) Serial.println(F("Receive Failed"));
+    else if (error == OTA_END_ERROR) Serial.println(F("End Failed"));
+  });
+  ArduinoOTA.begin();
+
   // Các route của web server
   server.on("/", handleRoot);
   server.on("/api", handleApi);
@@ -151,6 +173,10 @@ void setup() {
   server.on("/demo", handleDemo);
   server.on("/threshold", handleThreshold);
   server.on("/favicon.ico", handleFavicon);
+  // WebServer chỉ giữ các header đã đăng ký (mặc định chỉ vài header trình duyệt);
+  // phải khai báo để guardWeb() đọc được Origin/Referer/Sec-Fetch-Site/X-Auth-Token.
+  static const char *watchedHeaders[] = {"Origin", "Referer", "Sec-Fetch-Site", "X-Auth-Token"};
+  server.collectHeaders(watchedHeaders, 4);
   server.begin();
 
   LOG_INFO("System ready");
@@ -160,6 +186,7 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();
   server.handleClient();
+  ArduinoOTA.handle();
   manageWiFi();
 
   // Nhập lệnh debug qua Serial

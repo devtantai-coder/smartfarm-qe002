@@ -105,3 +105,9 @@ void setPumpAuto(bool on) { pumpAuto = on; }
 void setFanAuto(bool on)  { fanAuto = on; }
 void setLightAuto(bool on){ lightAuto = on; }
 void setBreatheAuto(bool on) { breatheAuto = on; }
+
+#ifdef SMARTFARM_TEST_HOOKS
+// Chỉ dùng cho bộ test trên máy tính: đưa biến static về trạng thái vừa cấp điện
+// để các test không phụ thuộc vào thứ tự chạy.
+void testResetActuatorStatics() { sBuzzerOn = false; }
+#endif

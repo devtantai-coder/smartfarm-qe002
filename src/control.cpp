@@ -9,6 +9,7 @@
 static bool sWaterAlarm = false;
 static bool sMotionAlarm = false;
 static bool sPirLitLed = false;   // true = cảnh báo PIR là thứ đã bật LED
+static bool sPrevTouch = false;   // trạng thái chạm lần trước (chống dội)
 
 // ── Bơm: độ ẩm đất + an toàn nước ──
 void controlPump() {
@@ -107,7 +108,6 @@ void controlBreathe() {
 
 // ── Chạm: bật/tắt blue LED thủ công, mỗi lần nhấn đổi một lần (bài 4) ──
 void controlTouch() {
-  static bool sPrevTouch = false;
   if (gTouch && !sPrevTouch) {
     unsigned long now = millis();
     if (now - lastTouch >= TOUCH_DEBOUNCE) {
@@ -210,3 +210,19 @@ void controlFeed() {
 }
 
 bool feedRunning() { return sFeedActive; }
+
+#ifdef SMARTFARM_TEST_HOOKS
+// Chỉ dùng cho bộ test: đưa các biến static về trạng thái vừa cấp điện
+// để mỗi test độc lập với thứ tự chạy.
+void testResetControlStatics() {
+  sWaterAlarm = false;
+  sMotionAlarm = false;
+  sPirLitLed = false;
+  sPrevTouch = false;
+  sWindmillAngle = 0;
+  sWindmillDir = 1;
+  sWindmillUpdate = 0;
+  sFeedActive = false;
+  sFeedStart = 0;
+}
+#endif

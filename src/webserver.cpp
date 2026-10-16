@@ -15,8 +15,9 @@ static const char ROOT_HTML[] PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="no-referrer">
 <title>Smart Farm IoT</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" referrerpolicy="no-referrer">
 <style>
 :root{--primary:#2e7d32;--primary-dark:#1b5e20;--accent:#1565c0;--danger:#c62828;--bg:#f8fafc;--card-bg:#fff;--text:#1f2937;--muted:#6b7280;--border:#e5e7eb;--radius:14px;--shadow:0 4px 6px -1px rgba(0,0,0,.08),0 2px 4px -1px rgba(0,0,0,.04)}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -180,6 +181,8 @@ header h1 span{color:var(--primary);font-weight:800}
 <div class="refresh">Cập nhật mỗi 2 giây &bull; Smart Farm QE002 ACEBOTT</div>
 </div>
 <script>
+const TOKEN=new URLSearchParams(location.search).get('token')||'';
+function api(u){return TOKEN?(u+(u.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(TOKEN)):u}
 async function fetchData(){
 try{
 const r=await fetch('/api');
@@ -209,14 +212,14 @@ document.getElementById('badgeRgbAuto').textContent=d.rgbAuto?'Tự động: B�
 document.getElementById('badgeRgbAuto').className='badge '+(d.rgbAuto?'on':'off');
 }catch(e){console.error(e)}
 }
-async function toggleDevice(id){await fetch('/toggle?id='+id);fetchData()}
-async function ledSet(on){await fetch(on?'/on':'/off');fetchData()}
-async function toggleWindmill(){const s=window.__sf||{};await fetch('/windmill?on='+(s.windmill?'false':'true'));fetchData()}
-async function feedNow(){await fetch('/feed');fetchData()}
-async function runDemo(){if(!confirm('Chạy trình diễn lần lượt các hoạt động (khoảng 40 giây)?'))return;await fetch('/demo');fetchData()}
-async function setAutoMode(id,on){await fetch('/auto?id='+id+'&on='+on);fetchData()}
-async function setRgb(r,g,b){await fetch('/rgb?r='+r+'&g='+g+'&b='+b);fetchData()}
-async function setServo(v){document.getElementById('servoLabel').textContent=v;await fetch('/servo?angle='+v)}
+async function toggleDevice(id){await fetch(api('/toggle?id='+id));fetchData()}
+async function ledSet(on){await fetch(api(on?'/on':'/off'));fetchData()}
+async function toggleWindmill(){const s=window.__sf||{};await fetch(api('/windmill?on='+(s.windmill?'false':'true')));fetchData()}
+async function feedNow(){await fetch(api('/feed'));fetchData()}
+async function runDemo(){if(!confirm('Chạy trình diễn lần lượt các hoạt động (khoảng 40 giây)?'))return;await fetch(api('/demo'));fetchData()}
+async function setAutoMode(id,on){await fetch(api('/auto?id='+id+'&on='+on));fetchData()}
+async function setRgb(r,g,b){await fetch(api('/rgb?r='+r+'&g='+g+'&b='+b));fetchData()}
+async function setServo(v){document.getElementById('servoLabel').textContent=v;await fetch(api('/servo?angle='+v))}
 setInterval(fetchData,2000);
 fetchData();
 </script>
@@ -224,8 +227,71 @@ fetchData();
 </html>
 )rawliteral";
 
+// ── Bảo vệ web ──
+// 1) Chống CSRF: trình duyệt gửi kèm Origin/Referer khi trang khác gọi vào
+//    thiết bị; chỉ chấp nhận yêu cầu cùng nguồn với IP của thiết bị.
+// 2) Token tùy chọn: nếu WEB_TOKEN được đặt trong config.h, mọi lệnh đổi
+//    trạng thái phải kèm đúng token (header X-Auth-Token hoặc ?token=...).
+static bool sameOriginCStr(const char* url, const char* origin) {
+  if (url == nullptr || url[0] == '\0') return true;
+  size_t olen = strlen(origin);
+  if (strncmp(url, origin, olen) != 0) return false;
+  char c = url[olen];
+  return c == '\0' || c == '/' || c == ':' || c == '?';
+}
+
+static bool guardWeb() {
+  char me[64];
+  snprintf(me, sizeof(me), "http://%s", WiFi.localIP().toString().c_str());
+
+  if (server.hasHeader("Origin")) {
+    char origin[128];
+    strncpy(origin, server.header("Origin").c_str(), sizeof(origin) - 1);
+    origin[sizeof(origin) - 1] = '\0';
+    if (!sameOriginCStr(origin, me)) {
+      server.send(403, "text/plain", "forbidden");
+      return false;
+    }
+  }
+  if (server.hasHeader("Referer")) {
+    char referer[128];
+    strncpy(referer, server.header("Referer").c_str(), sizeof(referer) - 1);
+    referer[sizeof(referer) - 1] = '\0';
+    if (!sameOriginCStr(referer, me)) {
+      server.send(403, "text/plain", "forbidden");
+      return false;
+    }
+  }
+  if (server.hasHeader("Sec-Fetch-Site")) {
+    char site[32];
+    strncpy(site, server.header("Sec-Fetch-Site").c_str(), sizeof(site) - 1);
+    site[sizeof(site) - 1] = '\0';
+    if (strcmp(site, "cross-site") == 0) {
+      server.send(403, "text/plain", "forbidden");
+      return false;
+    }
+  }
+  if (WEB_TOKEN[0] != '\0') {
+    char token[64];
+    if (server.hasHeader("X-Auth-Token")) {
+      strncpy(token, server.header("X-Auth-Token").c_str(), sizeof(token) - 1);
+    } else if (server.hasArg("token")) {
+      strncpy(token, server.arg("token").c_str(), sizeof(token) - 1);
+    } else {
+      token[0] = '\0';
+    }
+    token[sizeof(token) - 1] = '\0';
+    if (strcmp(token, WEB_TOKEN) != 0) {
+      server.send(401, "text/plain", "unauthorized");
+      return false;
+    }
+  }
+  return true;
+}
+
 void handleRoot() {
   MOD_DEBUG(Webserver, "GET /");
+  server.sendHeader("X-Frame-Options", "DENY");   // chống nhúng iframe (clickjacking)
   server.send_P(200, "text/html", ROOT_HTML);
 }
 
@@ -234,34 +300,29 @@ void handleApi() {
   MOD_DEBUG(Webserver, "GET /api");
 
   // Dùng giá trị global đã lọc — không đọc cảm biến thô ở đây
-  // DHT11 cần 1s giữa các lần đọc; đọc ở đây sẽ trả về dữ liệu cũ
-  String json;
-  json.reserve(520);
-  json += "{";
-  json += "\"temp\":" + String(gTemp, 1) + ",";
-  json += "\"hum\":" + String(gHum, 1) + ",";
-  json += "\"light\":" + String(gLight) + ",";
-  json += "\"soil\":" + String(gSoil) + ",";
-  json += "\"water\":" + String(gWater) + ",";
-  json += "\"weather\":" + String((int)weatherStatus()) + ",";
-  json += "\"pir\":" + String(gPir ? "true" : "false") + ",";
-  json += "\"touch\":" + String(gTouch ? "true" : "false") + ",";
-  json += "\"relay\":" + String(relayState ? "true" : "false") + ",";
-  json += "\"fan\":" + String(fanState ? "true" : "false") + ",";
-  json += "\"led\":" + String(blueLedState ? "true" : "false") + ",";
-  json += "\"breathe\":" + String(breatheLedState ? "true" : "false") + ",";
-  json += "\"windmill\":" + String(windmillOn ? "true" : "false") + ",";
-  json += "\"feed\":" + String(feedRunning() ? "true" : "false") + ",";
-  json += "\"demo\":" + String(demoRunning() ? "true" : "false") + ",";
-  json += "\"demoStep\":\"" + String(demoRunning() ? demoStepName() : "") + "\",";
-  json += "\"pumpAuto\":" + String(pumpAuto ? "true" : "false") + ",";
-  json += "\"lightAuto\":" + String(lightAuto ? "true" : "false") + ",";
-  json += "\"rgbAuto\":" + String(rgbAuto ? "true" : "false") + ",";
-  json += "\"fanAuto\":" + String(fanAuto ? "true" : "false") + ",";
-  json += "\"breatheAuto\":" + String(breatheAuto ? "true" : "false");
-  json += "}";
+  // (DHT11 cần 1 giây giữa hai lần đọc; đọc thêm sẽ trả dữ liệu cũ)
+  // Dựng JSON bằng snprintf vào buffer cố định — không tự nối String trong handler
+  // và không cấp phát heap thêm (send() của thư viện vẫn tạo String nội bộ một lần).
+  char buf[512];
+  snprintf(buf, sizeof(buf),
+           "{\"temp\":%.1f,\"hum\":%.1f,\"light\":%d,\"soil\":%d,\"water\":%d,"
+           "\"weather\":%d,\"pir\":%s,\"touch\":%s,\"relay\":%s,\"fan\":%s,"
+           "\"led\":%s,\"breathe\":%s,\"windmill\":%s,\"feed\":%s,\"demo\":%s,"
+           "\"demoStep\":\"%s\",\"pumpAuto\":%s,\"lightAuto\":%s,\"rgbAuto\":%s,"
+           "\"fanAuto\":%s,\"breatheAuto\":%s}",
+           (double)gTemp, (double)gHum, (int)gLight, (int)gSoil, (int)gWater,
+           (int)weatherStatus(),
+           gPir ? "true" : "false", gTouch ? "true" : "false",
+           relayState ? "true" : "false", fanState ? "true" : "false",
+           blueLedState ? "true" : "false", breatheLedState ? "true" : "false",
+           windmillOn ? "true" : "false", feedRunning() ? "true" : "false",
+           demoRunning() ? "true" : "false",
+           demoRunning() ? demoStepName() : "",
+           pumpAuto ? "true" : "false", lightAuto ? "true" : "false",
+           rgbAuto ? "true" : "false", fanAuto ? "true" : "false",
+           breatheAuto ? "true" : "false");
 
-  server.send(200, "application/json", json);
+  server.send(200, "application/json", buf);
 }
 
 static uint8_t clampByte(long v) {
@@ -272,6 +333,7 @@ static uint8_t clampByte(long v) {
 
 // ── Bật/tắt thiết bị (thao tác thủ công sẽ tắt chế độ tự động tương ứng) ──
 void handleToggle() {
+  if (!guardWeb()) return;
   String id = server.arg("id");
   if (id == "pump") {
     setPumpAuto(false);
@@ -296,6 +358,7 @@ void handleToggle() {
 
 // ── Chế độ tự động ──
 void handleAuto() {
+  if (!guardWeb()) return;
   String id = server.arg("id");
   bool on = server.arg("on") == "true";
   if (id == "pump") setPumpAuto(on);
@@ -315,6 +378,7 @@ void handleAuto() {
 
 // ── Màu RGB ──
 void handleRgb() {
+  if (!guardWeb()) return;
   uint8_t r = clampByte(server.arg("r").toInt());
   uint8_t g = clampByte(server.arg("g").toInt());
   uint8_t b = clampByte(server.arg("b").toInt());
@@ -326,6 +390,7 @@ void handleRgb() {
 
 // ── Đèn thở ──
 void handleBreatheLed() {
+  if (!guardWeb()) return;
   bool want = !breatheLedState;
   setBreatheAuto(false);
   setBreatheLed(want);
@@ -336,6 +401,7 @@ void handleBreatheLed() {
 // ── Bật/tắt LED từ xa (hoạt động 12: GET /on và GET /off) ──
 // Thao tác thủ công sẽ tắt chế độ tự động đèn để automation không tranh giành điều khiển.
 void handleLedOn() {
+  if (!guardWeb()) return;
   MOD_DEBUG(Webserver, "GET /on");
   setLightAuto(false);
   setBlueLed(true);
@@ -344,6 +410,7 @@ void handleLedOn() {
 }
 
 void handleLedOff() {
+  if (!guardWeb()) return;
   MOD_DEBUG(Webserver, "GET /off");
   setLightAuto(false);
   setBlueLed(false);
@@ -353,6 +420,7 @@ void handleLedOff() {
 
 // ── Servo ──
 void handleServo() {
+  if (!guardWeb()) return;
   int angle = server.arg("angle").toInt();
   if (angle < 0) angle = 0;
   if (angle > 180) angle = 180;
@@ -365,6 +433,7 @@ void handleServo() {
 
 // ── Cối xay gió (hoạt động 6): servo quay liên tục ──
 void handleWindmill() {
+  if (!guardWeb()) return;
   bool on = server.arg("on") == "true";
   setWindmill(on);
   server.send(200, "text/plain", on ? "windmill on" : "windmill off");
@@ -372,12 +441,14 @@ void handleWindmill() {
 
 // ── Cửa cho ăn (hoạt động 10): mở máng ăn trong FEED_DURATION ──
 void handleFeed() {
+  if (!guardWeb()) return;
   startFeed();
   server.send(200, "text/plain", "feeding");
 }
 
 // ── Demo hoạt động (HD2-HD12) ──
 void handleDemo() {
+  if (!guardWeb()) return;
   MOD_DEBUG(Webserver, "GET /demo");
   startDemo();
   server.send(200, "text/plain", "demo started");
@@ -385,6 +456,7 @@ void handleDemo() {
 
 // ── Ngưỡng: cập nhật ngưỡng điều khiển từ web (giới hạn trong khoảng hợp lệ) ──
 void handleThreshold() {
+  if (!guardWeb()) return;
   bool changed = false;
   if (server.hasArg("soilLow"))  { soilThresholdLow  = constrain(server.arg("soilLow").toFloat(),  0.0f, 4095.0f); changed = true; }
   if (server.hasArg("soilHigh")) { soilThresholdHigh = constrain(server.arg("soilHigh").toFloat(), 0.0f, 4095.0f); changed = true; }

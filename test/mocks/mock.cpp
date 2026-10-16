@@ -155,6 +155,16 @@ struct Arg { std::string name; std::string value; };
 static Arg sArgs[16];
 static int sArgCount = 0;
 
+// Header của request giả (test tự đặt trước khi gọi route — dùng để thử CSRF/token)
+struct Header { std::string name; std::string value; };
+static Header sHeaders[8];
+static int sHeaderCount = 0;
+
+// Danh sách header sketch đăng ký qua collectHeaders() — mô phỏng đúng WebServer
+// thật: header không đăng ký thì handler không đọc được (hasHeader luôn false).
+static std::string sCollected[8];
+static int sCollectedCount = 0;
+
 static std::string sLastType, sLastBody;
 static int sLastCode = 0;
 
@@ -169,6 +179,21 @@ void WebServer::on(const char *path, void (*handler)()) {
   }
 }
 
+void WebServer::collectHeaders(const char *keys[], size_t count) {
+  sCollectedCount = 0;
+  for (size_t i = 0; i < count && sCollectedCount < 8; i++) {
+    sCollected[sCollectedCount++] = keys[i] ? keys[i] : "";
+  }
+}
+
+static bool headerCollected(const char *name) {
+  const char *n = name ? name : "";
+  for (int i = 0; i < sCollectedCount; i++) {
+    if (sCollected[i] == n) return true;
+  }
+  return false;
+}
+
 void WebServer::send(int code, const char *type, const char *body) {
   sLastCode = code; sLastType = type ? type : ""; sLastBody = body ? body : "";
 }
@@ -177,6 +202,7 @@ void WebServer::send(int code, const char *type, const String &body) {
 }
 void WebServer::send(int code) { sLastCode = code; sLastType.clear(); sLastBody.clear(); }
 void WebServer::send_P(int code, const char *type, const char *body) { send(code, type, body); }
+void WebServer::sendHeader(const char *name, const char *value) { (void)name; (void)value; }
 
 String WebServer::arg(const char *name) {
   for (int i = 0; i < sArgCount; i++) {
@@ -191,9 +217,26 @@ bool WebServer::hasArg(const char *name) {
   return false;
 }
 
+String WebServer::header(const char *name) {
+  if (!headerCollected(name)) return String("");
+  for (int i = 0; i < sHeaderCount; i++) {
+    if (sHeaders[i].name == name) return String(sHeaders[i].value.c_str());
+  }
+  return String("");
+}
+bool WebServer::hasHeader(const char *name) {
+  if (!headerCollected(name)) return false;
+  for (int i = 0; i < sHeaderCount; i++) {
+    if (sHeaders[i].name == name) return true;
+  }
+  return false;
+}
+
 void mockServerReset() {
   sRouteCount = 0;
   sArgCount = 0;
+  sHeaderCount = 0;
+  sCollectedCount = 0;   // "khởi động lại" → setup() sẽ collectHeaders lại
   sLastCode = 0; sLastType.clear(); sLastBody.clear();
 }
 int mockServerRouteCount() { return sRouteCount; }
@@ -213,12 +256,23 @@ void mockServerSetArg(const char *name, const char *value) {
     sArgCount++;
   }
 }
+void mockServerSetHeader(const char *name, const char *value) {
+  for (int i = 0; i < sHeaderCount; i++) {
+    if (sHeaders[i].name == (name ? name : "")) { sHeaders[i].value = value ? value : ""; return; }
+  }
+  if (sHeaderCount < 8) {
+    sHeaders[sHeaderCount].name = name ? name : "";
+    sHeaders[sHeaderCount].value = value ? value : "";
+    sHeaderCount++;
+  }
+}
 bool mockServerInvoke(const char *path) {
   for (int i = 0; i < sRouteCount; i++) {
     if (sRoutes[i].path == (path ? path : "")) {
       sLastCode = 0; sLastType.clear(); sLastBody.clear();
       sRoutes[i].fn();
       sArgCount = 0;
+      sHeaderCount = 0;   // header chỉ có giá trị cho đúng một lần gọi
       return true;
     }
   }

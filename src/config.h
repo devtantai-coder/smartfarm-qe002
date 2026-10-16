@@ -92,4 +92,13 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 #define FEED_CLOSE_ANGLE   0     // vị trí đóng cửa máng ăn
 #endif
 
+// ── Bảo vệ web ──
+// Token tùy chọn cho các lệnh đổi trạng thái (bật/tắt, chỉnh ngưỡng...).
+// Để trống "" = không yêu cầu token (chỉ nên dùng trong mạng gia đình tin cậy).
+// Đặt token rồi nạp lại firmware; mở web kèm token một lần để trang tự nhớ:
+//   http://<ip-thiết-bị>/?token=MAT-KHAU-CUA-BAN
+#ifndef WEB_TOKEN
+#define WEB_TOKEN ""
+#endif
+
 #endif

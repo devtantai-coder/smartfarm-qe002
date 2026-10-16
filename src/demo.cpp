@@ -127,3 +127,13 @@ void updateDemo() {
   demoLogStep();
   demoAction(STEPS[sStep].in);
 }
+
+#ifdef SMARTFARM_TEST_HOOKS
+// Chỉ dùng cho bộ test: đưa trình diễn về trạng thái vừa cấp điện.
+void testResetDemoStatics() {
+  sRunning = false;
+  sStep = 0;
+  sStepStart = 0;
+  sSweepUpdate = 0;
+}
+#endif

@@ -37,6 +37,10 @@ public:
   String &operator+=(const String &o) { s_ += o.s_; return *this; }
   bool operator==(const char *o) const { return s_ == (o ? o : ""); }
   bool operator==(const String &o) const { return s_ == o.s_; }
+  bool operator!=(const char *o) const { return s_ != (o ? o : ""); }
+  bool operator!=(const String &o) const { return s_ != o.s_; }
+  bool startsWith(const char *o) const { return s_.rfind(o ? o : "", 0) == 0; }
+  bool startsWith(const String &o) const { return s_.rfind(o.s_, 0) == 0; }
   const std::string &std_str() const { return s_; }
 private:
   std::string s_;

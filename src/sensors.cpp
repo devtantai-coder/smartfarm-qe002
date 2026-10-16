@@ -98,3 +98,15 @@ Weather weatherStatus() {
   if (dark)   return humid ? WEATHER_RAIN : WEATHER_CLOUDY;
   return WEATHER_NORMAL;
 }
+
+#ifdef SMARTFARM_TEST_HOOKS
+// Chỉ dùng cho bộ test: xoá cửa sổ lọc trung bình về trạng thái vừa cấp điện.
+void testResetSensorStatics() {
+  for (uint8_t i = 0; i < SENSOR_FILTER_SIZE; i++) {
+    sTempBuf[i] = sHumBuf[i] = 0;
+    sLightBuf[i] = sSoilBuf[i] = sWaterBuf[i] = 0;
+  }
+  sBufIdx = 0;
+  sBufFilled = false;
+}
+#endif

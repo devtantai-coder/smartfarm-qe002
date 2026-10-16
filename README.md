@@ -218,6 +218,8 @@ Góc servo cũng chỉnh được để khớp cơ khí (tránh kẹt bánh răn
 
 **Cách kiểm tra nhanh chiều cảm biến:** mở Serial Monitor (115200), gõ `1` (menu debug cảm biến), che sáng / đổ nước / chạm đất và xem giá trị trên dòng `Light/Soil/Water` tăng hay giảm, rồi đặt cờ tương ứng và nạp lại.
 
+**Bảo mật web (tùy chọn):** Đặt `WEB_TOKEN` trong `src/config.h` để bật mật khẩu cho mọi lệnh đổi trạng thái (để trống `""` = tắt bảo vệ, mặc định). Sau khi nạp, mở `http://<IP>/?token=mat-khau-cua-ban` một lần để trang tự nhớ token, hoặc gửi kèm header `X-Auth-Token`. Code cũng tự chặn CSRF: yêu cầu có Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` bị trả 403 (nhờ `server.collectHeaders()` trong `setup()` — đã có sẵn); trang chủ gửi `X-Frame-Options: DENY` và meta `no-referrer` để tránh lộ token qua URL. Token truyền bằng HTTP thường nên chỉ chống lẫn nhau trong LAN, không thay thế HTTPS.
+
 ### Bước 4: Chọn board và cổng
 - **Tools → Board:** ESP32 Dev Module
 - **Tools → Port:** Cổng USB của ESP32 (ví dụ: `/dev/ttyUSB0`)
@@ -282,6 +284,9 @@ Màn hình OLED hiển thị 8 dòng: tên hệ thống, trạng thái thời ti
 | Watchdog an toàn | Nạp watchdog trong lúc chờ WiFi, tự khởi động lại nếu chương trình treo | `SmartFarm.ino` |
 | Servo dùng chung an toàn | Cối xay gió, cho ăn và điều khiển servo thủ công tự loại trừ nhau, không tranh chấp servo | `control.cpp: setWindmill(), startFeed()`, `webserver.cpp: handleServo()` |
 | Demo không xung đột | Khi chạy trình diễn, toàn bộ điều khiển tự động tạm dừng; kết thúc demo tự tắt mọi thiết bị | `SmartFarm.ino`, `demo.cpp` |
+| Mật khẩu web tùy chọn | Đặt `WEB_TOKEN` trong `src/config.h` để mọi lệnh đổi trạng thái phải kèm token đúng (header `X-Auth-Token` hoặc `?token=`); để trống = tắt (mặc định) | `src/config.h`, `webserver.cpp: guardWeb()` |
+| Chống CSRF | Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` bị trả 403; yêu cầu cùng nguồn được phép | `webserver.cpp: guardWeb()`, `SmartFarm.ino: collectHeaders()` |
+| Chống clickjacking/lộ token | Trang chủ gửi `X-Frame-Options: DENY` và meta `no-referrer` nên token không lộ qua URL khi mở tài nguyên ngoài | `webserver.cpp: handleRoot()` |
 
 ---
 
@@ -379,16 +384,16 @@ LOG_DEBUG("Extra detail only at DEBUG level");    // Chỉ hiển thị nếu c�
 
 ## 15. Kiểm thử tự động trên máy tính (không cần phần cứng)
 
-Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy hơn **772.000 lượt kiểm tra**:
+Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy **772.318 lượt kiểm tra** trên mỗi bản build thường (bản `webtoken` kiểm tra thêm bảo vệ token: 772.331 lượt):
 
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh (core 3.x, cấu hình kit)
-./test/run_tests.sh --full       # 4 bản build: core 3.x, core 2.x + cảm biến đảo,
-                                 # còi passive + relay active-LOW, ASan + UBSan
-./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh bằng gcov
+./test/run_tests.sh --full       # 5 bản build: core 3.x, core 2.x + cảm biến đảo,
+                                 # còi passive + relay active-LOW, ASan + UBSan, token web
+./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh bằng gcov (hiện 99,8%)
 ```
 
-Bộ test bao phủ: logic bơm/quạt/đèn/chạm/còi, so sánh ngưỡng đúng biên, thời gian chính xác từng ms, 14 route HTTP, hợp đồng JSON 21 khóa, menu serial, trình diễn 15 bước, bền vững sau khi mất điện, fuzz 90.000 bước với các bất biến an toàn, và cả trường hợp `millis()` tràn số. Chi tiết xem `test/README.md`.
+Bộ test bao phủ: logic bơm/quạt/đèn/chạm/còi, so sánh ngưỡng đúng biên, thời gian chính xác từng ms, 14 route HTTP, hợp đồng JSON 21 khóa, menu serial, trình diễn 15 bước, bền vững sau khi mất điện, fuzz 90.000 bước với các bất biến an toàn, trường hợp `millis()` tràn số, chặn CSRF và bảo vệ token web tùy chọn. Chi tiết xem `test/README.md`.
 
 Muốn hiểu **từng dòng code** làm gì (giải thích tiếng Việt, trích dẫn theo số dòng), xem [`GIAI_THICH_CODE.md`](GIAI_THICH_CODE.md) — đã phủ toàn bộ `SmartFarm.ino`, `src/`, trang web nhúng và cả bộ test (`test/`).
 

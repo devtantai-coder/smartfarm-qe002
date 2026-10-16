@@ -6,8 +6,8 @@
 #
 # Cách dùng:
 #   ./test/run_tests.sh --quick      một bản build (mặc định core 3.x, cấu hình kit mặc định)
-#   ./test/run_tests.sh --full       bốn bản build: core3, core2+inverts,
-#                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan
+#   ./test/run_tests.sh --full       năm bản build: core3, core2+inverts,
+#                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan, web token
 #   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng
 #
 # Yêu cầu: g++ với C++17, bash. Không cần toolchain ESP32.
@@ -32,7 +32,7 @@ SRC=(
   "$ROOT/src/webserver.cpp"
   "$ROOT/src/wifi.cpp"
 )
-FLAGS=(-std=gnu++17 -Wall -Wextra -Wshadow -Wundef -I"$MOCKS" -I"$ROOT/src")
+FLAGS=(-std=gnu++17 -Wall -Wextra -Wshadow -Wundef -DSMARTFARM_TEST_HOOKS -I"$MOCKS" -I"$ROOT/src")
 FILES=("$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}" -x c++ "$ROOT/SmartFarm.ino")
 
 MODE="${1:---full}"
@@ -52,6 +52,8 @@ run_core2()    { build_and_run core2-invert -DESP_ARDUINO_VERSION_MAJOR=2 \
                    -DINVERT_LIGHT=1 -DINVERT_SOIL=1 -DINVERT_WATER=1; }
 run_buzzer()   { build_and_run passive-lowrelay -DESP_ARDUINO_VERSION_MAJOR=3 \
                    -DBUZZER_PASSIVE=1 -DRELAY_ACTIVE_LOW=1; }
+run_token()    { build_and_run webtoken -DESP_ARDUINO_VERSION_MAJOR=3 \
+                   -DWEB_TOKEN='"token-bao-mat-test"'; }
 run_asan() {
   local bin="$BUILD/asan.bin"
   echo "=== Build: asan+ubsan ==="
@@ -70,14 +72,16 @@ run_coverage() {
   echo "=== Build: coverage (gcov) ==="
   local objs=()
   local f o
+  # Bản coverage chạy kèm token để phủ cả nhánh kiểm tra token (D16);
+  # nhánh không-token đã được phủ ở các bản build khác.
   # gcov tạo file ghi chú bằng cách thay phần mở rộng của file object bằng
   # .gcno, nên đặt tên object như "control.o" (không phải "control.cpp.o").
   for f in "$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}"; do
     o="$cov/$(basename "${f%.cpp}").o"
-    g++ "${FLAGS[@]}" --coverage -c "$f" -o "$o"
+    g++ "${FLAGS[@]}" -DWEB_TOKEN='"token-bao-mat-test"' --coverage -c "$f" -o "$o"
     objs+=("$o")
   done
-  g++ "${FLAGS[@]}" --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.o"
+  g++ "${FLAGS[@]}" -DWEB_TOKEN='"token-bao-mat-test"' --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.o"
   objs+=("$cov/SmartFarm.o")
   g++ --coverage -o "$cov/test.bin" "${objs[@]}"
   "$cov/test.bin" | tail -n 1
@@ -147,7 +151,8 @@ case "$MODE" in
     run_core2
     run_buzzer
     run_asan
-    echo "FULL: ALL 4 BUILDS PASSED"
+    run_token
+    echo "FULL: ALL 5 BUILDS PASSED"
     ;;
   --coverage)
     run_coverage
