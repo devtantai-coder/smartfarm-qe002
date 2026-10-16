@@ -205,6 +205,7 @@ void loop() {
   // Automation logic (paused while the activity demo is running)
   if (demoRunning()) {
     updateDemo();
+    controlBreathe();   // keep the HD3 breathing step animating during the demo
   } else {
     controlPump();
     controlFan();

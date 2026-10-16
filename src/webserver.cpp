@@ -356,7 +356,8 @@ void handleServo() {
   int angle = server.arg("angle").toInt();
   if (angle < 0) angle = 0;
   if (angle > 180) angle = 180;
-  setWindmill(false);   // manual servo control releases the windmill/feed
+  setWindmill(false);   // manual servo control releases windmill and feed gate
+  stopFeed();
   servoAngle = angle;
   servo.write(servoAngle);
   server.send(200, "text/plain", "ok");
