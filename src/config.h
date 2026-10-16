@@ -17,8 +17,7 @@ extern const char *password;
 #define RELAY_PIN        26
 #define FAN_PIN          14
 #define BLUE_LED_PIN     27
-#define BREATHE_LED_PIN  12
-#define BREATHE_LED_CHANNEL 15   // high-speed LEDC channel (core 2.x); avoids servo timer conflict
+#define LED_PWM_CHANNEL  15      // LEDC channel for blue LED PWM (core 2.x); avoids servo timer conflict
 #define TOUCH_PIN        39
 #define PIR_PIN          33
 #define LDR_PIN          34
@@ -43,7 +42,6 @@ extern const unsigned long WIFI_CONNECT_TIMEOUT;
 extern const unsigned long WIFI_CHECK_INTERVAL;
 extern const unsigned long SENSOR_INTERVAL;
 extern const unsigned long OLED_INTERVAL;
-extern const unsigned long BUZZER_INTERVAL;
 extern const unsigned long TOUCH_DEBOUNCE;
 extern const unsigned long BREATHE_INTERVAL;
 

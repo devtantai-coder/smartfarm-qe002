@@ -98,6 +98,8 @@ header h1 span{color:var(--primary);font-weight:800}
 <h3><i class="fa-solid fa-lightbulb"></i> Đèn xanh</h3>
 <div class="btn-row">
 <button class="btn primary" onclick="toggleDevice('led')"><i class="fa-solid fa-power-off"></i> Bật/Tắt</button>
+<button class="btn secondary" onclick="ledSet(true)"><i class="fa-solid fa-play"></i> Bật</button>
+<button class="btn outline" onclick="ledSet(false)"><i class="fa-solid fa-stop"></i> Tắt</button>
 </div>
 <div class="badge off" id="badgeLed"><i class="fa-solid fa-circle"></i> Tắt</div>
 </div>
@@ -189,6 +191,7 @@ document.getElementById('badgeRgbAuto').className='badge '+(d.rgbAuto?'on':'off'
 }catch(e){console.error(e)}
 }
 async function toggleDevice(id){await fetch('/toggle?id='+id);fetchData()}
+async function ledSet(on){await fetch(on?'/on':'/off');fetchData()}
 async function setAutoMode(id,on){await fetch('/auto?id='+id+'&on='+on);fetchData()}
 async function setRgb(r,g,b){await fetch('/rgb?r='+r+'&g='+g+'&b='+b);fetchData()}
 async function setServo(v){document.getElementById('servoLabel').textContent=v;await fetch('/servo?angle='+v)}
@@ -301,6 +304,24 @@ void handleBreatheLed() {
   setBreatheLed(want);
   saveSettings();
   server.send(200, "text/plain", "ok");
+}
+
+// ── Remote LED on/off (activity 12: GET /on and GET /off) ──
+// Manual action disables light auto so the automation does not fight it.
+void handleLedOn() {
+  MOD_DEBUG(Webserver, "GET /on");
+  setLightAuto(false);
+  setBlueLed(true);
+  saveSettings();
+  server.send(200, "text/plain", "LED ON");
+}
+
+void handleLedOff() {
+  MOD_DEBUG(Webserver, "GET /off");
+  setLightAuto(false);
+  setBlueLed(false);
+  saveSettings();
+  server.send(200, "text/plain", "LED OFF");
 }
 
 // ── Servo ──

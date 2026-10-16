@@ -84,6 +84,8 @@ void debugActuators() {
   setRgb(0,255,0); delay(600);
   setRgb(0,0,255); delay(600);
   setRgb(0,0,0);
+  Serial.println(F("RGB plant pattern..."));
+  setRgbPlant(); delay(800); setRgb(0,0,0);
   Serial.println(F("Servo sweep..."));
   servo.write(0); delay(600);
   servo.write(90); delay(600);
@@ -103,7 +105,7 @@ void debugControl() {
 void debugWebserver() {
   Serial.println(F("\n--- WEBSERVER ---"));
   Serial.printf("WiFi:%s  IP:%s\n", WiFi.status()==WL_CONNECTED?"OK":"FAIL", WiFi.localIP().toString().c_str());
-  Serial.println(F("Routes: / /api /toggle /auto /rgb /servo /breathe /threshold"));
+  Serial.println(F("Routes: / /api /toggle /auto /rgb /breathe /on /off /servo /threshold"));
 }
 
 // ── Debug: WiFi ──

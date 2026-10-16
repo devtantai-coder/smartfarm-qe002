@@ -12,9 +12,10 @@ Bộ mạch sẽ giúp bạn quản lý một vườn trồng nhỏ tự động
 
 - **Giám sát môi trường:** Đo nhiệt độ, độ ẩm không khí, ánh sáng, độ ẩm đất, mức nước trong thùng.
 - **Phát hiện sự kiện:** Cảm biến chuyển động (PIR), nút chạm cảm ứng.
-- **Điều khiển tự động:** Bật máy bơm khi đất khô, tắt khi đất ẩm; bật đèn khi tối, tắt khi sáng; đổi màu đèn RGB theo ánh sáng.
-- **Báo động:** Kích hoạt còi và đèn xanh khi có chuyển động hoặc nước cạn.
-- **Điều khiển từ xa:** Truy cập qua trình duyệt trên điện thoại/máy tính qua WiFi để bật/tắt thiết bị, xem số liệu thời gian thực.
+- **Điều khiển tự động:** Bật máy bơm khi đất khô, tắt khi đất ẩm; bật đèn khi tối, tắt khi sáng; đèn RGB tăng trưởng (LED 1&3 đỏ, 2&4 xanh dương) khi tối.
+- **Đèn thông minh:** Nút chạm bật/tắt đèn LED xanh, hiệu ứng "đèn thở" PWM, PIR tự bật đèn khi có người và tắt khi người rời đi.
+- **Báo động:** Còi kêu liên tục khi nước cạn.
+- **Điều khiển từ xa:** Truy cập qua trình duyệt trên điện thoại/máy tính qua WiFi để bật/tắt thiết bị, xem số liệu thời gian thực (kể cả lệnh `/on`, `/off`).
 - **Lưu cài đặt:** Các chế độ tự động và ngưỡng cảnh báo được lưu vào bộ nhớ flash ESP32, không mất khi mất điện.
 
 ---
@@ -42,7 +43,8 @@ Dựa trên tài liệu "Bước 19: Sơ đồ đấu dây" và "Bước 20: Hư
 - GPIO 34, 35, 36 là kênh ADC1, an toàn dùng cùng lúc với WiFi.
 - GPIO 39 là input-only, không có pull-up nội bộ. Nút chạm cần điện trở pull-down phần cứng.
 - Servo SG90: dây đỏ→V, dây nâu→G, dây vàng→chân số 13.
-- GPIO 14 (quạt) và GPIO 12 (đèn thở PWM) là các chân **mở rộng** của dự án, không có trong sơ đồ gốc của kit.
+- Đèn LED xanh (GPIO 27) được điều khiển bằng PWM nên dùng chung cho cả 3 chế độ: bật/tắt (chạm, web, PIR), hiệu ứng đèn thở và web `/on` `/off`. Ba chế độ tự loại trừ nhau.
+- GPIO 14 (quạt) là chân **mở rộng** của dự án, không có trong sơ đồ gốc của kit.
 
 ---
 
@@ -58,7 +60,7 @@ Dựa trên tài liệu "Bước 19: Sơ đồ đấu dây" và "Bước 20: Hư
 | RGB LED Strip | Hiển thị trạng thái hệ thống, tạo ánh sáng bổ sung cho cây |
 | Servo SG90 | Mở/đóng cửa nhà kính, điều chỉnh mái che, điều khiển van nước |
 | P-Buzzer Module | Báo động khi có sự cố, thông báo cảm biến vượt ngưỡng |
-| Blue LED Module | Đèn LED màu xanh, báo trạng thái hệ thống |
+| Blue LED Module | Đèn LED màu xanh: báo trạng thái, đèn thở PWM, bật/tắt bằng chạm/PIR/web |
 | OLED Module | Hiển thị nhiệt độ, độ ẩm, độ ẩm đất, trạng thái thiết bị |
 | Touch Sensor | Cảm biến chạm để điều khiển hệ thống |
 | PIR Motion Sensor | Phát hiện người/động vật, kích hoạt cảnh báo hoặc bật đèn |
@@ -100,16 +102,16 @@ Dựa trên **Danh mục tổ chức hoạt động trải nghiệm STEM_STEAM**
 |-----------------|---------------|----------------------|---------------------|
 | Hoạt động 1 | Xây dựng lại nông trại | Lắp ráp phần cứng | - |
 | Hoạt động 2 | Thắp sáng nông trại | Bật đèn LED xanh (GPIO 27) | actuators.cpp |
-| Hoạt động 3 | Điều khiển LED | Hiệu ứng thở (PWM) | - (có thể mở rộng) |
-| Hoạt động 4 | Điều khiển ánh sáng LED | Nút chạm bật/tắt đèn | control.cpp (controlTouch) |
-| Hoạt động 5 | Báo động động vật | Cảm biến PIR báo động | control.cpp (controlAlerts) |
+| Hoạt động 3 | Điều khiển LED | Hiệu ứng đèn thở PWM trên đèn LED xanh GPIO 27 | control.cpp (controlBreathe), actuators.cpp (setLedPwm) |
+| Hoạt động 4 | Điều khiển ánh sáng LED | Nút chạm bật/tắt đèn LED xanh (nhấn lần đầu bật, nhấn lần nữa tắt) | control.cpp (controlTouch) |
+| Hoạt động 5 | Báo động động vật | PIR: có người thì bật đèn, người rời đi thì tắt đèn | control.cpp (controlAlerts) |
 | Hoạt động 6 | Cối xoay gió năng lượng mặt trời | - (mở rộng sau) | - |
 | Hoạt động 7 | Phát hiện độ ẩm đất, Tưới nước tự động | Cảm biến đất + bơm tự động | sensors.cpp, control.cpp (controlPump) |
-| Hoạt động 8 | Phát hiện mực nước | Cảm biến nước + còi báo | sensors.cpp, control.cpp (controlAlerts) |
-| Hoạt động 9 | Đèn tăng trưởng thực vật | Đèn RGB theo ánh sáng | control.cpp (controlRgb) |
+| Hoạt động 8 | Phát hiện mực nước | Cảm biến nước + còi kêu liên tục khi nước cạn | sensors.cpp, control.cpp (controlAlerts) |
+| Hoạt động 9 | Đèn tăng trưởng thực vật | Khi tối: LED 1&3 đỏ, LED 2&4 xanh dương; khi sáng: tắt | control.cpp (controlRgb), actuators.cpp (setRgbPlant) |
 | Hoạt động 10 | Cho ăn tự động | - (mở rộng sau) | - |
 | Hoạt động 11 | Màn hình OLED hiển thị thời tiết | OLED hiển thị T, H, ánh sáng | oled.cpp |
-| Hoạt động 12 | Internet điều khiển vạn vật từ xa | WebServer + API | webserver.cpp |
+| Hoạt động 12 | Internet điều khiển vạn vật từ xa | WebServer + API + lệnh `/on` `/off` bật/tắt đèn LED từ xa | webserver.cpp (handleLedOn/handleLedOff) |
 | Hoạt động 13 | Sử dụng smart phone để điều khiển nông trại | Giao diện web trên điện thoại | webserver.cpp |
 
 ---
@@ -213,10 +215,20 @@ Nhấn nút Upload (➡) hoặc **Sketch → Upload**.
 ### Bước 2: Truy cập giao diện web
 Trên điện thoại cùng mạng WiFi, mở trình duyệt, gõ địa chỉ IP. Trang web hiển thị:
 - **Cảm biến thực tế:** Nhiệt độ, độ ẩm không khí, ánh sáng, độ ẩm đất, mức nước, chuyển động, chạm.
-- **Điều khiển thiết bị:** Máy bơm, đèn xanh, màu RGB, servo (cửa).
+- **Điều khiển thiết bị:** Máy bơm, đèn xanh (Bật/Tắt nhanh + nút Bật/Tắt riêng), màu RGB, servo (cửa).
 - **Chế độ tự động:** Bật/tắt tự động cho bơm, đèn, RGB, quạt, đèn thở.
 
-> **Lưu ý:** Khi bạn nhấn nút **Bật/Tắt** trên web (hoặc dùng cảm biến chạm), chế độ **tự động** của thiết bị đó sẽ tự tắt để tránh việc hệ thống tự động bật/tắt "giằng co" với lệnh thủ công của bạn. Muốn quay lại tự động, hãy nhấn nút **Tự động** tương ứng.
+**Các lệnh API điều khiển từ xa (Hoạt động 12):**
+
+| Lệnh | Công dụng |
+|------|-----------|
+| `http://<IP>/on` | Bật đèn LED xanh từ xa |
+| `http://<IP>/off` | Tắt đèn LED xanh từ xa |
+| `http://<IP>/api` | Xem dữ liệu cảm biến dạng JSON |
+| `http://<IP>/toggle?id=led` | Đảo trạng thái đèn LED (pump/fan/breathe tương tự) |
+| `http://<IP>/auto?id=light&on=true` | Bật/tắt chế độ tự động cho đèn (pump/rgb/fan/breathe tương tự) |
+
+> **Lưu ý:** Khi bạn nhấn nút **Bật/Tắt** trên web (hoặc dùng cảm biến chạm, hoặc gõ `/on` `/off`), chế độ **tự động** của thiết bị đó sẽ tự tắt để tránh việc hệ thống tự động bật/tắt "giằng co" với lệnh thủ công của bạn. Muốn quay lại tự động, hãy nhấn nút **Tự động** tương ứng.
 
 ### Bước 3: Theo dõi OLED
 Màn hình OLED hiển thị: Nhiệt độ, độ ẩm, ánh sáng, độ ẩm đất, mức nước, trạng thái máy bơm.
@@ -229,9 +241,9 @@ Màn hình OLED hiển thị: Nhiệt độ, độ ẩm, ánh sáng, độ ẩm 
 |-----------|-------|-------------|
 | Kiểm tra nước trước khi bơm | Không bật máy bơm nếu nước cạn (bảo vệ bơm) | `control.cpp: controlPump()` |
 | Hysterese độ ẩm đất | Tránh bơm nhấp nháy khi đất dao động quanh ngưỡng | `control.cpp: controlPump()` |
-| Chống dội + phát hiện sườn nút chạm | Mỗi lần chạm chỉ đảo bơm đúng 1 lần và tự chuyển sang thủ công | `control.cpp: controlTouch()` |
-| Điều khiển thủ công tắt tự động | Bấm Bật/Tắt trên web sẽ tự tắt chế độ tự động của thiết bị đó | `webserver.cpp: handleToggle()` |
-| Còi báo theo trạng thái | Nước cạn kêu liên tục, chuyển động kêu ngắt quãng; chỉ ghi log 1 lần mỗi sự kiện (không spam Serial) | `control.cpp: controlAlerts()` |
+| Chống dội + phát hiện sườn nút chạm | Mỗi lần chạm chỉ bật/tắt đèn LED đúng 1 lần và tự chuyển sang thủ công | `control.cpp: controlTouch()` |
+| Điều khiển thủ công tắt tự động | Bấm Bật/Tắt trên web (hoặc `/on` `/off`) sẽ tự tắt chế độ tự động của thiết bị đó | `webserver.cpp: handleToggle(), handleLedOn(), handleLedOff()` |
+| Còi báo theo trạng thái | Nước cạn kêu còi liên tục; chỉ ghi log 1 lần mỗi sự kiện (không spam Serial) | `control.cpp: controlAlerts()` |
 | Bộ đệm trung bình động 5 mẫu | Lọc nhiễu cho toàn bộ cảm biến | `sensors.cpp` |
 | Tự kết nối lại WiFi | Thử lại ở mọi trạng thái mất mạng, không lặp log gây nhiễu | `wifi.cpp: manageWiFi()` |
 | Lưu cài đặt vào flash | Không mất cài đặt khi mất điện | `settings.cpp` |
@@ -277,7 +289,7 @@ Thông tin trong mỗi dòng log:
 | 201 | Nước cạn, tắt máy bơm để bảo vệ thiết bị | Thêm nước vào thùng, kiểm tra cảm biến mức nước (GPIO 36) |
 | 202 | Đất khô, bật máy bơm tưới | Thông báo bình thường, không cần can thiệp |
 | 203 | Đất đủ ẩm, tắt máy bơm | Thông báo bình thường, không cần can thiệp |
-| 301 | Có chuyển động phát hiện | Thông báo bình thường từ cảm biến PIR (GPIO 33) |
+| 301 | Có chuyển động phát hiện — tự bật đèn LED xanh, người rời đi thì tắt | Thông báo bình thường từ cảm biến PIR (GPIO 33) |
 | 302 | Nước cạn, kéo còi báo động liên tục | Thêm nước vào thùng ngay |
 | 401 | Mất WiFi, đang kết nối lại | Kiểm tra modem/tín hiệu; hệ thống tự thử lại mỗi 10 giây (chỉ ghi log 1 lần mỗi lần mất mạng) |
 | 501 | Cảm biến DHT11 lỗi liên tục | Kiểm tra dây tín hiệu GPIO 23, nguồn 3.3V của DHT11 hoặc thay cảm biến |
@@ -309,7 +321,8 @@ LOG_DEBUG("Extra detail only at DEBUG level");    // Chỉ hiển thị nếu c�
 | Không thấy địa chỉ IP | Sai WiFi hoặc tín hiệu yếu | Sửa `src/config.cpp`, đặt ESP32 gần modem |
 | OLED không hiển thị | Sai dây SDA/SCL hoặc địa chỉ I2C | Kiểm tra SDA→21, SCL→22, địa chỉ 0x3C |
 | Máy bơm không bật | Nước cạn hoặc sai chân relay | Kiểm tra nước trong bể, chân relay 26 |
-| Còi kêu liên tục | Nước cạn hoặc có chuyển động | Thêm nước hoặc kiểm tra PIR |
+| Còi kêu liên tục | Nước cạn trong bể | Thêm nước vào bể, kiểm tra cảm biến mực nước |
+| Đèn xanh không tắt khi có người | PIR còn giữ mức HIGH (thời gian trễ của cảm biến) | Bình thường; PIR chỉ trả về LOW sau khi người rời đi hết thời gian trễ |
 | Cảm biến đọc sai | Dây lỏng hoặc cảm biến hỏng | Kiểm tra dây nối, thử cảm biến khác |
 
 ---

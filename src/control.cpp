@@ -8,7 +8,6 @@
 // ── Alert state (edge-triggered logs, no serial spam) ──
 static bool sWaterAlarm = false;
 static bool sMotionAlarm = false;
-static unsigned long sMotionStart = 0;
 
 // ── Pump: soil moisture + water safety ──
 void controlPump() {
@@ -44,8 +43,10 @@ void controlFan() {
 }
 
 // ── Blue light: ambient light with hysteresis (threshold ± 50) ──
+// The blue LED is shared with the breathing effect, PIR and manual control:
+// skip auto control while any of them owns the LED, to avoid fighting.
 void controlLight() {
-  if (!lightAuto) return;
+  if (!lightAuto || breatheLedState || gPir) return;
   if (gLight < (lightThreshold - 50) && !blueLedState) {
     setBlueLed(true);
   } else if (gLight > (lightThreshold + 50) && blueLedState) {
@@ -53,14 +54,14 @@ void controlLight() {
   }
 }
 
-// ── RGB: red when dark, off when bright (with hysteresis) ──
+// ── RGB: plant growth light when dark (activity 9), off when bright ──
 void controlRgb() {
   if (!rgbAuto) return;
   static bool sRgbWasDark = false;
   bool isDark = gLight < (lightThreshold - 50);
   bool isBright = gLight > (lightThreshold + 50);
   if (isDark && !sRgbWasDark) {
-    setRgb(255, 0, 0);
+    setRgbPlant();
     sRgbWasDark = true;
   } else if (isBright && sRgbWasDark) {
     setRgb(0, 0, 0);
@@ -73,7 +74,7 @@ void controlBreathe() {
   if (!breatheLedState) {
     if (breatheBrightness != 0) {
       breatheBrightness = 0;
-      setBreathePwm(0);
+      setLedPwm(0);
     }
     return;
   }
@@ -91,31 +92,29 @@ void controlBreathe() {
     breatheDirection = 1;
   }
   breatheBrightness = (uint8_t)next;
-  setBreathePwm(breatheBrightness);
+  setLedPwm(breatheBrightness);
 }
 
-// ── Touch: manual pump toggle, one toggle per press (rising edge) ──
+// ── Touch: manual blue LED toggle, one toggle per press (activity 4) ──
 void controlTouch() {
   static bool sPrevTouch = false;
   if (gTouch && !sPrevTouch) {
     unsigned long now = millis();
     if (now - lastTouch >= TOUCH_DEBOUNCE) {
-      if (pumpAuto) {  // manual action disables auto to avoid fighting
-        pumpAuto = false;
+      if (lightAuto) {  // manual action disables auto to avoid fighting
+        lightAuto = false;
         saveSettings();
       }
-      setRelay(!relayState);
+      setBlueLed(!blueLedState);
       lastTouch = now;
-      LOG_INFO("Touch: manual pump toggle");
+      LOG_INFO("Touch: LED toggle");
     }
   }
   sPrevTouch = gTouch;
 }
 
-// ── Alerts: low-water alarm (priority, continuous) + PIR beep ──
+// ── Alerts: low-water continuous buzzer (priority) + PIR night light ──
 void controlAlerts() {
-  unsigned long now = millis();
-
   if (gWater < (int)waterThresholdLow) {
     digitalWrite(BUZZER_PIN, HIGH);
     if (!sWaterAlarm) {
@@ -129,17 +128,13 @@ void controlAlerts() {
     digitalWrite(BUZZER_PIN, LOW);
   }
 
-  if (gPir) {
+  // PIR (activity 5): light on while motion is detected, off when it stops
+  if (gPir && !sMotionAlarm) {
+    sMotionAlarm = true;
     setBlueLed(true);
-    if (!sMotionAlarm) {
-      sMotionAlarm = true;
-      sMotionStart = now;
-      LOG_ERROR_CODE(301, "Motion detected");
-    }
-    bool beepOn = ((now - sMotionStart) % BUZZER_INTERVAL) < (BUZZER_INTERVAL / 2);
-    digitalWrite(BUZZER_PIN, beepOn ? HIGH : LOW);
-  } else if (sMotionAlarm) {
+    LOG_ERROR_CODE(301, "Motion detected");
+  } else if (!gPir && sMotionAlarm) {
     sMotionAlarm = false;
-    digitalWrite(BUZZER_PIN, LOW);
+    setBlueLed(false);
   }
 }

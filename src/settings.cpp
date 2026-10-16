@@ -32,7 +32,7 @@ void loadSettings() {
   lightAuto         = preferences.getBool("lightAuto", true);
   rgbAuto           = preferences.getBool("rgbAuto", true);
   fanAuto           = preferences.getBool("fanAuto", true);
-  breatheAuto       = preferences.getBool("breatheAuto", true);
+  breatheAuto       = preferences.getBool("breatheAuto", false);  // opt-in (activity 3)
   preferences.end();
   LOG_INFO("Settings loaded from flash");
 }

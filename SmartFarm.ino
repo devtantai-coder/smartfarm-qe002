@@ -79,24 +79,22 @@ void setup() {
   // GPIO
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(FAN_PIN, OUTPUT);
-  pinMode(BLUE_LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(TOUCH_PIN, INPUT);
   pinMode(PIR_PIN, INPUT);
 
   digitalWrite(RELAY_PIN, LOW);
   digitalWrite(FAN_PIN, LOW);
-  digitalWrite(BLUE_LED_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
 
-  // PWM for breathe LED (core 2.x / 3.x compatible init)
+  // PWM for blue LED: steady on/off + breathing effect (core 2.x / 3.x)
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcAttach(BREATHE_LED_PIN, 1000, 8);
+  ledcAttach(BLUE_LED_PIN, 1000, 8);
 #else
-  ledcSetup(BREATHE_LED_CHANNEL, 1000, 8);
-  ledcAttachPin(BREATHE_LED_PIN, BREATHE_LED_CHANNEL);
+  ledcSetup(LED_PWM_CHANNEL, 1000, 8);
+  ledcAttachPin(BLUE_LED_PIN, LED_PWM_CHANNEL);
 #endif
-  setBreathePwm(0);
+  setLedPwm(0);
 
   // Peripherals
   dht.begin();
@@ -144,6 +142,8 @@ void setup() {
   server.on("/rgb", handleRgb);
   server.on("/servo", handleServo);
   server.on("/breathe", handleBreatheLed);
+  server.on("/on", handleLedOn);
+  server.on("/off", handleLedOff);
   server.on("/threshold", handleThreshold);
   server.on("/favicon.ico", handleFavicon);
   server.begin();
