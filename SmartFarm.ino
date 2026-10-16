@@ -1,0 +1,185 @@
+/*
+ * SmartFarm.ino - QE002 ACEBOTT IoT Smart Farm
+ * Entry point: setup() + loop()
+ * Optimized: non-blocking, watchdog, modular debug
+ */
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include <esp_task_wdt.h>
+
+#include "src/config.h"
+#include "src/globals.h"
+#include "src/logger.h"
+#include "src/sensors.h"
+#include "src/actuators.h"
+#include "src/control.h"
+#include "src/settings.h"
+#include "src/oled.h"
+#include "src/wifi.h"
+#include "src/webserver.h"
+
+// ── Debug state ──
+static char sSerialCmd = 0;
+static bool sDebugMode = false;
+
+// ── Watchdog timeout (seconds) ──
+static constexpr uint32_t WDT_TIMEOUT = 30;
+
+static void printDebugMenu() {
+  Serial.println(F("\n=== SMART FARM DEBUG MENU ==="));
+  Serial.println(F(" 1:Sensors  2:Actuators  3:Control"));
+  Serial.println(F(" 4:Web      5:WiFi        6:OLED"));
+  Serial.println(F(" 7:Settings 8:Logger      0:Exit"));
+  Serial.print(F("Chon: "));
+}
+
+static void handleDebugCmd(char cmd) {
+  switch (cmd) {
+    case '1': debugSensors(); break;
+    case '2': debugActuators(); break;
+    case '3': debugControl(); break;
+    case '4': debugWebserver(); break;
+    case '5': debugWifi(); break;
+    case '6': debugOled(); break;
+    case '7': debugSettings(); break;
+    case '8': debugLogger(); break;
+    case '0': sDebugMode = false; Serial.println(F(">> Exit debug.")); break;
+    default:  Serial.println(F(">> Invalid.")); break;
+  }
+  if (cmd != '0') printDebugMenu();
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(100);
+
+  // Watchdog
+  esp_task_wdt_init(WDT_TIMEOUT, true);
+  esp_task_wdt_add(NULL);
+
+  LOG_INFO("Smart Farm starting...");
+
+  // GPIO
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(FAN_PIN, OUTPUT);
+  pinMode(BLUE_LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(TOUCH_PIN, INPUT);
+  pinMode(PIR_PIN, INPUT);
+
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(FAN_PIN, LOW);
+  digitalWrite(BLUE_LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  // PWM for breathe LED
+  ledcSetup(BREATHE_LED_CHANNEL, 1000, 8);
+  ledcAttachPin(BREATHE_LED_PIN, BREATHE_LED_CHANNEL);
+  ledcWrite(BREATHE_LED_CHANNEL, 0);
+
+  // Peripherals
+  dht.begin();
+  strip.begin();
+  strip.show();
+  servo.attach(SERVO_PIN);
+  servo.write(servoAngle);
+
+  // OLED
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    LOG_ERROR_CODE(101, "OLED not found");
+  }
+  display.clearDisplay();
+  display.display();
+
+  // Load settings from flash
+  loadSettings();
+  LOG_INFO("Settings loaded");
+
+  // WiFi
+  WiFi.begin(ssid, password);
+  LOG_INFO("Connecting WiFi...");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print('.');
+    if (millis() - start > 30000) {
+      LOG_ERROR_CODE(102, "WiFi timeout");
+      break;
+    }
+  }
+  Serial.println();
+  Serial.print(F("IP: "));
+  Serial.println(WiFi.localIP());
+
+  // Web server routes
+  server.on("/", handleRoot);
+  server.on("/api", handleApi);
+  server.on("/toggle", handleToggle);
+  server.on("/auto", handleAuto);
+  server.on("/rgb", handleRgb);
+  server.on("/servo", handleServo);
+  server.on("/breathe", handleBreatheLed);
+  server.on("/threshold", handleThreshold);
+  server.begin();
+
+  LOG_INFO("System ready");
+  printDebugMenu();
+}
+
+void loop() {
+  esp_task_wdt_reset();
+  server.handleClient();
+  manageWiFi();
+
+  // Serial debug input
+  if (Serial.available() > 0) {
+    sSerialCmd = Serial.read();
+    if (sSerialCmd == '\n' || sSerialCmd == '\r') {
+      // skip
+    } else if (!sDebugMode) {
+      if (sSerialCmd >= '0' && sSerialCmd <= '8') {
+        sDebugMode = true;
+        handleDebugCmd(sSerialCmd);
+      } else {
+        Serial.println(F(">> Invalid. Enter 0-8."));
+        printDebugMenu();
+      }
+    } else {
+      if (sSerialCmd == '0') {
+        handleDebugCmd('0');
+        Serial.println(F("Running normally..."));
+      } else {
+        Serial.println(F(">> Enter '0' to exit debug."));
+      }
+    }
+  }
+
+  if (sDebugMode) return;
+
+  unsigned long now = millis();
+
+  // Read sensors periodically
+  if (now - lastSensorRead >= SENSOR_INTERVAL) {
+    readAllSensors();
+    lastSensorRead = now;
+  }
+
+  // Automation logic
+  controlPump();
+  controlFan();
+  controlLight();
+  controlRgb();
+  controlBreathe();
+  controlTouch();
+  controlAlerts();
+
+  // Update OLED
+  if (now - lastOledUpdate >= OLED_INTERVAL) {
+    updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+    lastOledUpdate = now;
+  }
+}
