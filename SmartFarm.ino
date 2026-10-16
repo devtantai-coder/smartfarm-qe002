@@ -78,16 +78,16 @@ void setup() {
 
   LOG_INFO("Smart Farm starting...");
 
-  // GPIO
+  // GPIO: set the output latch BEFORE pinMode so no glitch appears on boot
+  // (an active-LOW relay would briefly switch on if driven LOW first).
+  digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);  // pump OFF at boot
+  digitalWrite(FAN_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(FAN_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(TOUCH_PIN, INPUT);
   pinMode(PIR_PIN, INPUT);
-
-  digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);  // pump OFF at boot
-  digitalWrite(FAN_PIN, LOW);
-  digitalWrite(BUZZER_PIN, LOW);
 
   // PWM for blue LED: steady on/off + breathing effect (core 2.x / 3.x)
 #if ESP_ARDUINO_VERSION_MAJOR >= 3

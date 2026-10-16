@@ -400,6 +400,9 @@ void handleThreshold() {
   if (soilThresholdHigh <= soilThresholdLow) {
     soilThresholdHigh = constrain(soilThresholdLow + 50.0f, 0.0f, 4095.0f);
   }
+  if (tempThresholdHigh <= tempThresholdLow) {
+    tempThresholdHigh = tempThresholdLow + 1.0f;  // no upper clamp: keeps high > low at the 60 C edge
+  }
   saveSettings();
   LOG_INFO("Thresholds updated from web");
   server.send(200, "text/plain", "ok");

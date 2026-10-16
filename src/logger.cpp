@@ -93,11 +93,13 @@ void debugActuators() {
   setRgb(0,0,0);
   Serial.println(F("RGB plant pattern..."));
   setRgbPlant(); delay(800); setRgb(0,0,0);
+  Serial.println(F("Buzzer on/off..."));
+  setBuzzer(true); delay(400); setBuzzer(false);
   Serial.println(F("Servo sweep..."));
-  servo.write(0); delay(600);
-  servo.write(90); delay(600);
-  servo.write(180); delay(600);
-  servo.write(0);
+  servo.write(WINDMILL_MIN_ANGLE); delay(600);
+  servo.write((WINDMILL_MIN_ANGLE + WINDMILL_MAX_ANGLE) / 2); delay(600);
+  servo.write(WINDMILL_MAX_ANGLE); delay(600);
+  servo.write(WINDMILL_MIN_ANGLE);
 }
 
 // ── Debug: Control ──

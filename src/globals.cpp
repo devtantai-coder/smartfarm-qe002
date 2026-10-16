@@ -4,7 +4,7 @@
 bool pumpAuto = true, lightAuto = true, rgbAuto = true, fanAuto = true, breatheAuto = false;
 bool relayState = false, fanState = false, blueLedState = false, breatheLedState = false;
 bool windmillOn = false;
-uint8_t rgbR = 255, rgbG = 0, rgbB = 0;
+uint8_t rgbR = 0, rgbG = 0, rgbB = 0;
 uint8_t breatheBrightness = 0;
 int8_t breatheDirection = 1;
 int servoAngle = 0;

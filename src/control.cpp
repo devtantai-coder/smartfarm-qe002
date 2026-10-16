@@ -23,6 +23,9 @@ void controlPump() {
 
   if (!pumpAuto) return;
 
+  // Guard against inverted thresholds (would make the relay chatter)
+  if (soilThresholdHigh <= soilThresholdLow) return;
+
   // Hysteresis: turn on below low, turn off above high
   if (gSoil < (int)soilThresholdLow && !relayState) {
     setRelay(true);
@@ -36,6 +39,10 @@ void controlPump() {
 // ── Fan: temperature hysteresis ──
 void controlFan() {
   if (!fanAuto) return;
+
+  // Guard against inverted thresholds (would make the relay chatter)
+  if (tempThresholdHigh <= tempThresholdLow) return;
+
   if (gTemp > tempThresholdHigh && !fanState) {
     setFan(true);
   } else if (gTemp < tempThresholdLow && fanState) {
