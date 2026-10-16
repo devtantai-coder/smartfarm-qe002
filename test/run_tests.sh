@@ -70,13 +70,15 @@ run_coverage() {
   echo "=== Build: coverage (gcov) ==="
   local objs=()
   local f o
+  # gcov derives the notes file by replacing the object's extension with
+  # .gcno, so name objects like "control.o" (not "control.cpp.o").
   for f in "$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}"; do
-    o="$cov/$(basename "$f").o"
+    o="$cov/$(basename "${f%.cpp}").o"
     g++ "${FLAGS[@]}" --coverage -c "$f" -o "$o"
     objs+=("$o")
   done
-  g++ "${FLAGS[@]}" --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.ino.o"
-  objs+=("$cov/SmartFarm.ino.o")
+  g++ "${FLAGS[@]}" --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.o"
+  objs+=("$cov/SmartFarm.o")
   g++ --coverage -o "$cov/test.bin" "${objs[@]}"
   "$cov/test.bin" | tail -n 1
   echo
@@ -100,9 +102,10 @@ run_coverage() {
     esac
     stats="$(awk -F: '
       $2 ~ /^[ ]*[0-9]+$/ {
-        line=$2; gsub(/ /,"",line);
+        line=$2 + 0;
         if (line == 0) next;
         c=$1; gsub(/ /,"",c);
+        if (c == "-") next;              # non-executable (comment, blank, })
         total++;
         if (c != "#####" && c != "=====" && (c+0) > 0) covered++;
       }

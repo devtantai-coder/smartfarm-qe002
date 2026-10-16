@@ -216,6 +216,14 @@ static void testDhtFailover() {
   for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
   CHECK(sensorHealthy);
   CHECK_NEAR(gTemp, 24.0, 0.05);
+
+  // Humidity NaN falls back to the last good filtered value (same as temp)
+  mockDhtTemp = 27.0f; mockDhtHum = NAN;
+  readAllSensors();
+  CHECK_NEAR(gHum, 50.0, 0.5);
+  CHECK(sensorHealthy);        // a lone humidity NaN does not flag the sensor
+  mockDhtHum = 50.0f;
+  readAllSensors();
 }
 
 // T3: pump soil hysteresis (activity 7/10)
