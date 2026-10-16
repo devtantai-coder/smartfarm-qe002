@@ -191,6 +191,7 @@ void loop() {
   // Read sensors periodically (DHT11 needs >= 1s between reads)
   if (now - lastSensorRead >= SENSOR_INTERVAL) {
     readAllSensors();
+    logSensors();   // one line every second at DEBUG level (activity 7)
     lastSensorRead = now;
   }
 

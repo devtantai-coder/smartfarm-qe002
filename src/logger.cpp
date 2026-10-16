@@ -59,6 +59,13 @@ void logError(LogLevel level, const char* func, int line, int code, const char* 
   Serial.printf(" [MA LOI: %d] -> %s\n", code, msg);
 }
 
+// ── Periodic sensor line (activity 7 / 11): visible at DEBUG log level ──
+void logSensors() {
+  if (LOG_DEBUG < gMinLogLevel) return;
+  Serial.printf("[SENSORS] T:%.1fC H:%.1f%% Light:%d Soil:%d Water:%d PIR:%d Touch:%d\n",
+                gTemp, gHum, gLight, gSoil, gWater, (int)gPir, (int)gTouch);
+}
+
 // ── Debug: Sensors ──
 void debugSensors() {
   Serial.println(F("\n--- SENSORS ---"));

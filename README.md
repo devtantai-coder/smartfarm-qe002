@@ -101,18 +101,18 @@ Dựa trên **Danh mục tổ chức hoạt động trải nghiệm STEM_STEAM**
 | Hoạt động STEAM | Tên hoạt động | Chức năng trong code | File code liên quan |
 |-----------------|---------------|----------------------|---------------------|
 | Hoạt động 1 | Xây dựng lại nông trại | Lắp ráp phần cứng | - |
-| Hoạt động 2 | Thắp sáng nông trại | Bật đèn LED xanh (GPIO 27) | actuators.cpp |
+| Hoạt động 2 | Thắp sáng nông trại | Bật đèn LED xanh (GPIO 27): qua web, `/on`, nút chạm hoặc tự động khi tối | actuators.cpp (setBlueLed), control.cpp (controlLight) |
 | Hoạt động 3 | Điều khiển LED | Hiệu ứng đèn thở PWM trên đèn LED xanh GPIO 27 | control.cpp (controlBreathe), actuators.cpp (setLedPwm) |
 | Hoạt động 4 | Điều khiển ánh sáng LED | Nút chạm bật/tắt đèn LED xanh (nhấn lần đầu bật, nhấn lần nữa tắt) | control.cpp (controlTouch) |
 | Hoạt động 5 | Báo động động vật | PIR: có người thì bật đèn, người rời đi thì tắt đèn | control.cpp (controlAlerts) |
-| Hoạt động 6 | Cối xoay gió năng lượng mặt trời | - (mở rộng sau) | - |
-| Hoạt động 7 | Phát hiện độ ẩm đất, Tưới nước tự động | Cảm biến đất + bơm tự động | sensors.cpp, control.cpp (controlPump) |
-| Hoạt động 8 | Phát hiện mực nước | Cảm biến nước + còi kêu liên tục khi nước cạn | sensors.cpp, control.cpp (controlAlerts) |
+| Hoạt động 6 | Cối xoay gió năng lượng mặt trời | Mô hình quay bằng động cơ nối trực tiếp pin mặt trời qua công tắc vật lý (không nối ESP32) nên không có code điều khiển | - |
+| Hoạt động 7 | Phát hiện độ ẩm đất, Tưới nước tự động | Cảm biến đất + bơm tự động; dữ liệu in ra Serial mỗi giây ở mức log DEBUG | sensors.cpp, control.cpp (controlPump), logger.cpp (logSensors) |
+| Hoạt động 8 | Phát hiện mực nước | Cảm biến nước + còi kêu liên tục khi nước cạn; bơm luôn bị chặn khi hết nước (cả chế độ thủ công) | sensors.cpp, control.cpp (controlAlerts, controlPump) |
 | Hoạt động 9 | Đèn tăng trưởng thực vật | Khi tối: LED 1&3 đỏ, LED 2&4 xanh dương; khi sáng: tắt | control.cpp (controlRgb), actuators.cpp (setRgbPlant) |
-| Hoạt động 10 | Cho ăn tự động | - (mở rộng sau) | - |
-| Hoạt động 11 | Màn hình OLED hiển thị thời tiết | OLED hiển thị T, H, ánh sáng | oled.cpp |
+| Hoạt động 10 | Cho ăn tự động | Theo tài liệu (lesson8), nội dung là tưới nước tự động theo độ ẩm đất — dùng chung logic với Hoạt động 7 | control.cpp (controlPump) |
+| Hoạt động 11 | Màn hình OLED hiển thị thời tiết | OLED hiển thị nhiệt độ, độ ẩm, ánh sáng (kèm đất, nước, trạng thái bơm) | oled.cpp |
 | Hoạt động 12 | Internet điều khiển vạn vật từ xa | WebServer + API + lệnh `/on` `/off` bật/tắt đèn LED từ xa | webserver.cpp (handleLedOn/handleLedOff) |
-| Hoạt động 13 | Sử dụng smart phone để điều khiển nông trại | Giao diện web trên điện thoại | webserver.cpp |
+| Hoạt động 13 | Sử dụng smart phone để điều khiển nông trại | App ACEBOTT chính hãng cần chương trình riêng; dự án dùng giao diện web tương đương để điều khiển từ điện thoại | webserver.cpp |
 
 ---
 
@@ -239,12 +239,13 @@ Màn hình OLED hiển thị: Nhiệt độ, độ ẩm, ánh sáng, độ ẩm 
 
 | Tính năng | Mô tả | Vị trí code |
 |-----------|-------|-------------|
-| Kiểm tra nước trước khi bơm | Không bật máy bơm nếu nước cạn (bảo vệ bơm) | `control.cpp: controlPump()` |
+| Kiểm tra nước trước khi bơm | Không bật máy bơm nếu nước cạn (bảo vệ bơm) — áp dụng **cả khi đang bật bơm thủ công** | `control.cpp: controlPump()` |
 | Hysterese độ ẩm đất | Tránh bơm nhấp nháy khi đất dao động quanh ngưỡng | `control.cpp: controlPump()` |
 | Chống dội + phát hiện sườn nút chạm | Mỗi lần chạm chỉ bật/tắt đèn LED đúng 1 lần và tự chuyển sang thủ công | `control.cpp: controlTouch()` |
 | Điều khiển thủ công tắt tự động | Bấm Bật/Tắt trên web (hoặc `/on` `/off`) sẽ tự tắt chế độ tự động của thiết bị đó | `webserver.cpp: handleToggle(), handleLedOn(), handleLedOff()` |
 | Còi báo theo trạng thái | Nước cạn kêu còi liên tục; chỉ ghi log 1 lần mỗi sự kiện (không spam Serial) | `control.cpp: controlAlerts()` |
 | Bộ đệm trung bình động 5 mẫu | Lọc nhiễu cho toàn bộ cảm biến | `sensors.cpp` |
+| In dữ liệu cảm biến định kỳ | Mỗi giây in 1 dòng cảm biến ở mức DEBUG (giống bài đọc độ ẩm đất qua Serial); không gây nhiễu log ở mức INFO | `logger.cpp: logSensors()`, `SmartFarm.ino` |
 | Tự kết nối lại WiFi | Thử lại ở mọi trạng thái mất mạng, không lặp log gây nhiễu | `wifi.cpp: manageWiFi()` |
 | Lưu cài đặt vào flash | Không mất cài đặt khi mất điện | `settings.cpp` |
 | Kiểm tra lỗi DHT11 | Giữ giá trị cũ khi đọc lỗi, đếm số lần lỗi để báo mã 501 | `sensors.cpp: readAllSensors()` |
@@ -279,6 +280,14 @@ Thông tin trong mỗi dòng log:
 - **Cấp độ:** Mức độ nghiêm trọng của thông tin (đệm 5 ký tự cho thẳng cột)
 - **Hàm:Số dòng:** Tên hàm và số dòng trong file source (dễ tìm vào code)
 - **Nội dung:** Thông báo chi tiết (tiếng Anh ngắn gọn)
+
+### Xem dữ liệu cảm biến trên Serial (Hoạt động 7 và 11)
+
+Khi đổi `gMinLogLevel` thành `LOG_DEBUG`, mỗi giây Serial sẽ in thêm một dòng dữ liệu cảm biến (giống bài đọc độ ẩm đất qua cổng nối tiếp trong tài liệu):
+
+```
+[SENSORS] T:28.5C H:65.0% Light:312 Soil:640 Water:1850 PIR:0 Touch:0
+```
 
 ### Bảng mã lỗi
 

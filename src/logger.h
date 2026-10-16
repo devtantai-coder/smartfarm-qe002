@@ -16,6 +16,10 @@ extern bool dbgSettings, dbgLogger, dbgRgb;
 void logMessage(LogLevel level, const char* func, int line, const char* msg);
 void logError(LogLevel level, const char* func, int line, int code, const char* msg);
 
+// One-line sensor dump for Serial Monitor (activity 7: soil data on serial).
+// Prints only when the minimum log level is DEBUG.
+void logSensors();
+
 // Debug module functions
 void debugSensors();
 void debugActuators();

@@ -11,9 +11,8 @@ static bool sMotionAlarm = false;
 
 // ── Pump: soil moisture + water safety ──
 void controlPump() {
-  if (!pumpAuto) return;
-
-  // Safety: no water = no pump
+  // Safety first, even in manual mode (activity 8): running the pump dry
+  // would damage it, so low water always forces the pump off.
   if (gWater < (int)waterThresholdLow) {
     if (relayState) {
       setRelay(false);
@@ -21,6 +20,8 @@ void controlPump() {
     }
     return;
   }
+
+  if (!pumpAuto) return;
 
   // Hysteresis: turn on below low, turn off above high
   if (gSoil < (int)soilThresholdLow && !relayState) {
@@ -55,17 +56,18 @@ void controlLight() {
 }
 
 // ── RGB: plant growth light when dark (activity 9), off when bright ──
+// Stateless: compares against the actual RGB color so manual colors are
+// never left on while auto mode is re-enabled.
 void controlRgb() {
   if (!rgbAuto) return;
-  static bool sRgbWasDark = false;
   bool isDark = gLight < (lightThreshold - 50);
   bool isBright = gLight > (lightThreshold + 50);
-  if (isDark && !sRgbWasDark) {
+  bool plantOn = (rgbR == 255 && rgbG == 0 && rgbB == 255);
+  bool rgbOff = (rgbR == 0 && rgbG == 0 && rgbB == 0);
+  if (isDark && !plantOn) {
     setRgbPlant();
-    sRgbWasDark = true;
-  } else if (isBright && sRgbWasDark) {
+  } else if (isBright && !rgbOff) {
     setRgb(0, 0, 0);
-    sRgbWasDark = false;
   }
 }
 
