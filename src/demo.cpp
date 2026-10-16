@@ -61,11 +61,11 @@ static void demoAction(DemoAction a) {
       else LOG_WARN("Demo: low water, skip pump");
       break;
     case DA_PUMP_OFF:    setRelay(false); break;
-    case DA_BEEP:        digitalWrite(BUZZER_PIN, HIGH); break;
+    case DA_BEEP:        setBuzzer(true); break;
     case DA_PLANT_ON:    setRgbPlant(); break;
     case DA_RGB_OFF:     setRgb(0, 0, 0); break;
     case DA_WINDMILL:    break;  // swept continuously in updateDemo()
-    case DA_SERVO0:      servo.write(0); stopFeed(); break;
+    case DA_SERVO0:      servo.write(WINDMILL_MIN_ANGLE); stopFeed(); break;
     case DA_FEED:        startFeed(); break;
     default: break;
   }
@@ -96,15 +96,17 @@ void updateDemo() {
   // HD6: sweep the servo like rotating windmill blades
   if (STEPS[sStep].in == DA_WINDMILL && now - sSweepUpdate >= WINDMILL_INTERVAL) {
     sSweepUpdate = now;
+    int span = WINDMILL_MAX_ANGLE - WINDMILL_MIN_ANGLE;
     int phase = (int)(elapsed % 2000);
-    int angle = (phase < 1000) ? (phase * 180) / 1000 : ((2000 - phase) * 180) / 1000;
+    int angle = WINDMILL_MIN_ANGLE + ((phase < 1000) ? (phase * span) / 1000
+                                                     : ((2000 - phase) * span) / 1000);
     servo.write(angle);
   }
 
   if (elapsed < STEPS[sStep].ms) return;
 
   demoAction(STEPS[sStep].out);
-  if (STEPS[sStep].in == DA_BEEP) digitalWrite(BUZZER_PIN, LOW);
+  if (STEPS[sStep].in == DA_BEEP) setBuzzer(false);
 
   sStep++;
   if (sStep >= STEP_COUNT) {
@@ -112,9 +114,9 @@ void updateDemo() {
     setBlueLed(false);
     setBreatheLed(false);
     setRelay(false);
-    digitalWrite(BUZZER_PIN, LOW);
+    setBuzzer(false);
     setRgb(0, 0, 0);
-    servo.write(0);
+    servo.write(WINDMILL_MIN_ANGLE);
     stopFeed();
     LOG_INFO("===== DEMO DONE =====");
     return;

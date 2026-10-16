@@ -197,11 +197,32 @@ const char *ssid = "TEN_WIFI_CUA_BAN";
 const char *password = "MAT_KHAU_WIFI_CUA_BAN";
 ```
 
-### Bước 3: Chọn board và cổng
+### Bước 3: Hiệu chuẩn phần cứng (tùy chọn — file `src/config.h`)
+
+Các module cảm biến/relay/còi bán kèm kit có thể hoạt động ngược chiều so với tài liệu. Thay vì sửa logic, chỉ cần đổi cờ trong `src/config.h` (đặt `1` nếu cần):
+
+| Cờ | Mặc định | Khi nào đặt `1` |
+|----|----------|-----------------|
+| `INVERT_LIGHT` | `0` | Che tay mà giá trị ánh sáng **tăng** |
+| `INVERT_SOIL` | `0` | Đất khô mà giá trị độ ẩm đất **tăng** |
+| `INVERT_WATER` | `0` | Đổ nước vào mà giá trị mức nước **giảm** |
+| `RELAY_ACTIVE_LOW` | `0` | Module relay kích mức **LOW** (bơm chạy khi chân ở LOW) |
+| `BUZZER_PASSIVE` | `0` | Còi loại **passive** (không kêu bằng mức điện áp, cần xung `tone()`) |
+
+Góc servo cũng chỉnh được để khớp cơ khí (tránh kẹt bánh răng):
+
+| Cờ | Mặc định | Ý nghĩa |
+|----|----------|---------|
+| `WINDMILL_MIN_ANGLE` / `WINDMILL_MAX_ANGLE` | `0` / `180` | Biên quét của cối xay gió (HĐ6) |
+| `FEED_OPEN_ANGLE` / `FEED_CLOSE_ANGLE` | `90` / `0` | Góc mở/đóng cửa cho ăn (HĐ10) |
+
+**Cách kiểm tra nhanh chiều cảm biến:** mở Serial Monitor (115200), gõ `1` (menu debug cảm biến), che sáng / đổ nước / chạm đất và xem giá trị trên dòng `Light/Soil/Water` tăng hay giảm, rồi đặt cờ tương ứng và nạp lại.
+
+### Bước 4: Chọn board và cổng
 - **Tools → Board:** ESP32 Dev Module
 - **Tools → Port:** Cổng USB của ESP32 (ví dụ: `/dev/ttyUSB0`)
 
-### Bước 4: Nạp code
+### Bước 5: Nạp code
 Nhấn nút Upload (➡) hoặc **Sketch → Upload**.
 
 ---

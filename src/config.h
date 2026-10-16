@@ -50,4 +50,25 @@ extern const unsigned long FEED_DURATION;
 // ── Sensor Filtering ──
 constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Moving average window
 
+// ── Hardware Adaptation (calibrate to your kit) ──
+// Documented sensor direction: LDR bright = high, soil dry = low,
+// water full = high. If a module reads the opposite way, set the matching
+// flag to 1 here instead of changing any control logic.
+#define INVERT_LIGHT     0
+#define INVERT_SOIL      0
+#define INVERT_WATER     0
+
+// Pump relay board polarity: 1 = active-LOW module (pump runs on LOW level)
+#define RELAY_ACTIVE_LOW 0
+
+// Buzzer type: 1 = passive buzzer (needs tone()), 0 = active buzzer
+#define BUZZER_PASSIVE   0
+#define BUZZER_TONE_HZ   2000
+
+// Servo angles: calibrate to the mechanical assembly (avoid gear stall)
+#define WINDMILL_MIN_ANGLE 0     // windmill sweep lower limit
+#define WINDMILL_MAX_ANGLE 180   // windmill sweep upper limit
+#define FEED_OPEN_ANGLE    90    // feed gate open position
+#define FEED_CLOSE_ANGLE   0     // feed gate closed position
+
 #endif

@@ -9,8 +9,25 @@
 void setRelay(bool on) {
   if (relayState == on) return;
   relayState = on;
-  digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+  bool level = RELAY_ACTIVE_LOW ? !on : on;
+  digitalWrite(RELAY_PIN, level ? HIGH : LOW);
   LOG_INFO(on ? "Pump: ON" : "Pump: OFF");
+}
+
+// Buzzer helper: active buzzers just need a digital level, passive buzzers
+// must be driven with a square wave. Idempotent like the other setters.
+static bool sBuzzerOn = false;
+
+void setBuzzer(bool on) {
+  if (sBuzzerOn == on) return;
+  sBuzzerOn = on;
+#if BUZZER_PASSIVE
+  if (on) tone(BUZZER_PIN, BUZZER_TONE_HZ);
+  else    noTone(BUZZER_PIN);
+#else
+  digitalWrite(BUZZER_PIN, on ? HIGH : LOW);
+#endif
+  if (on) LOG_INFO("Buzzer: ON");
 }
 
 void setFan(bool on) {

@@ -85,7 +85,7 @@ void setup() {
   pinMode(TOUCH_PIN, INPUT);
   pinMode(PIR_PIN, INPUT);
 
-  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);  // pump OFF at boot
   digitalWrite(FAN_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
 

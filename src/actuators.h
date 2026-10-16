@@ -3,6 +3,7 @@
 
 void setRelay(bool on);
 void setFan(bool on);
+void setBuzzer(bool on);
 void setBlueLed(bool on);
 void setBreatheLed(bool on);
 void setLedPwm(uint8_t value);

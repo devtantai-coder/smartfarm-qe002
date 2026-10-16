@@ -25,9 +25,16 @@ static int avgInt(int* buf, uint8_t n) {
 
 float readTemperature() { return dht.readTemperature(); }
 float readHumidity()    { return dht.readHumidity(); }
-int   readLight()       { return analogRead(LDR_PIN); }
-int   readSoil()        { return analogRead(SOIL_PIN); }
-int   readWater()       { return analogRead(WATER_PIN); }
+
+// Applies the INVERT_* flags from config.h so the documented direction always
+// holds: LDR bright = high, soil dry = low, water full = high.
+static int normalizeAdc(int value, bool invert) {
+  return invert ? (4095 - value) : value;
+}
+
+int   readLight()       { return normalizeAdc(analogRead(LDR_PIN), INVERT_LIGHT); }
+int   readSoil()        { return normalizeAdc(analogRead(SOIL_PIN), INVERT_SOIL); }
+int   readWater()       { return normalizeAdc(analogRead(WATER_PIN), INVERT_WATER); }
 bool  readTouch()       { return digitalRead(TOUCH_PIN) == HIGH; }
 bool  readPIR()         { return digitalRead(PIR_PIN) == HIGH; }
 

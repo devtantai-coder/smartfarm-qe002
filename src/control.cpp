@@ -118,7 +118,7 @@ void controlTouch() {
 // ── Alerts: low-water continuous buzzer (priority) + PIR night light ──
 void controlAlerts() {
   if (gWater < (int)waterThresholdLow) {
-    digitalWrite(BUZZER_PIN, HIGH);
+    setBuzzer(true);
     if (!sWaterAlarm) {
       sWaterAlarm = true;
       LOG_ERROR_CODE(302, "Low water alarm");
@@ -127,7 +127,7 @@ void controlAlerts() {
   }
   if (sWaterAlarm) {
     sWaterAlarm = false;
-    digitalWrite(BUZZER_PIN, LOW);
+    setBuzzer(false);
   }
 
   // PIR (activity 5): light on while motion is detected, off when it stops
@@ -152,7 +152,7 @@ void setWindmill(bool on) {
   if (on) {
     stopFeed();             // shared servo
   } else {
-    servo.write(0);
+    servo.write(WINDMILL_MIN_ANGLE);
   }
   LOG_INFO(on ? "Windmill: ON" : "Windmill: OFF");
 }
@@ -163,8 +163,8 @@ void controlWindmill() {
   if (now - sWindmillUpdate < WINDMILL_INTERVAL) return;
   sWindmillUpdate = now;
   sWindmillAngle += sWindmillDir * 6;
-  if (sWindmillAngle >= 180) { sWindmillAngle = 180; sWindmillDir = -1; }
-  if (sWindmillAngle <= 0)   { sWindmillAngle = 0;   sWindmillDir = 1;  }
+  if (sWindmillAngle >= WINDMILL_MAX_ANGLE) { sWindmillAngle = WINDMILL_MAX_ANGLE; sWindmillDir = -1; }
+  if (sWindmillAngle <= WINDMILL_MIN_ANGLE) { sWindmillAngle = WINDMILL_MIN_ANGLE; sWindmillDir = 1;  }
   servo.write(sWindmillAngle);
 }
 
@@ -176,7 +176,7 @@ void startFeed() {
   setWindmill(false);       // shared servo
   sFeedActive = true;
   sFeedStart = millis();
-  servo.write(90);          // gate open
+  servo.write(FEED_OPEN_ANGLE);   // gate open
   LOG_INFO("Feed: gate open");
 }
 
@@ -188,7 +188,7 @@ void controlFeed() {
   if (!sFeedActive) return;
   if (millis() - sFeedStart >= FEED_DURATION) {
     sFeedActive = false;
-    servo.write(0);         // gate closed
+    servo.write(FEED_CLOSE_ANGLE);  // gate closed
     LOG_INFO("Feed: gate closed");
   }
 }
