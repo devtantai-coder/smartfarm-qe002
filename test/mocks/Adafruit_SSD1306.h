@@ -11,7 +11,7 @@
 class Adafruit_SSD1306 {
 public:
   Adafruit_SSD1306(int, int, TwoWire *, int) {}
-  bool begin(int, int) { return true; }
+  bool begin(int, int);
   void clearDisplay();
   void display() {}
   void setTextColor(int) {}

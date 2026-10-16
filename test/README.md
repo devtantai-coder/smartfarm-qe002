@@ -21,21 +21,23 @@ rồi chạy toàn bộ logic như trên kit — không cần phần cứng, kh�
 | `passive-lowrelay` | `-DBUZZER_PASSIVE=1 -DBUZZER_TONE_HZ=2000 -DRELAY_ACTIVE_LOW=1` | Còi passive (tone) + relay kích mức thấp |
 | `asan+ubsan` | `-fsanitize=address,undefined -fno-omit-frame-pointer` | Phát hiện tràn bộ nhớ/UB; script tự bỏ `LD_PRELOAD` khi chạy |
 
-Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.289 lượt kiểm tra,
+Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.300 lượt kiểm tra,
 0 lỗi** trên cả 4 bản build.
 
 ## Cấu trúc
 
 - `test_main.cpp` — toàn bộ test:
-  - **T1–T15** đơn vị: cảm biến, bơm (trễ + an toàn khô), quạt, đèn/PIR/báo động,
+  - **T1–T17** đơn vị: cảm biến, bơm (trễ + an toàn khô), quạt, đèn/PIR/báo động,
     LED thường/thở, chạm chống dội, RGB, còi, cối xay gió, cửa cho ăn, thời tiết,
-    settings, trình diễn.
+    settings, trình diễn; T16 quyền sở hữu đèn của PIR + khôi phục đèn thở, T17
+    khôi phục đèn thở sau trình diễn.
   - **D1–D3** biên: so sánh ngưỡng đúng dấu `<`/`>` tại đúng giá trị biên, tính
     bất biến (idempotency) của cơ cấu chấp hành, thời gian chính xác từng mili-giây
     (chống dội 300 ms, cửa cho ăn 2000 ms, nhịp thở 30 ms, quét servo 30 ms).
-  - **I1–I10** tích hợp: boot đăng ký đủ 14 route, `/api`, `/on` `/off`, phân xử
+  - **I1–I11** tích hợp: boot đăng ký đủ 14 route, `/api`, `/on` `/off`, phân xử
     servo, các handler còn lại, trang chủ + favicon, OLED, menu serial 1–8, phím
-    `9` chạy demo, WiFi mất–nối lại.
+    `9` chạy demo, WiFi mất–nối lại; I11 boot suy giảm (thiếu OLED + hết hạn
+    WiFi, kiểm tra mã lỗi 101/102 và WDT vẫn được cho ăn).
   - **D5–D14** chuyên sâu: hợp đồng JSON 21 khóa (parser tự viết, 200 trạng thái
     ngẫu nhiên), thân phản hồi chính xác + ngưỡng biên, layout OLED từng dòng
     (giới hạn 21 ký tự), biên serial (`\r\n`, byte rác 0xFF, chế độ debug tạm dừng

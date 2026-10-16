@@ -15,6 +15,7 @@ extern int mockBuzzerToneHz;            // tone() frequency, 0 = silent
 extern uint32_t mockPixel[8];           // NeoPixel colors written
 extern int mockWifiStatus;              // WiFi.status() result
 extern const char *mockWifiIp;          // WiFi.localIP() string
+extern bool mockDisplayBeginOk;         // display.begin() result (false = missing OLED)
 
 // ── Instrumentation counters (deep tests) ──
 extern int mockDigitalWriteCount;       // digitalWrite() calls

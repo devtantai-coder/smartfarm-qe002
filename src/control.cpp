@@ -8,6 +8,7 @@
 // ── Alert state (edge-triggered logs, no serial spam) ──
 static bool sWaterAlarm = false;
 static bool sMotionAlarm = false;
+static bool sPirLitLed = false;   // true = the PIR alarm was the one that lit the LED
 
 // ── Pump: soil moisture + water safety ──
 void controlPump() {
@@ -137,14 +138,22 @@ void controlAlerts() {
     setBuzzer(false);
   }
 
-  // PIR (activity 5): light on while motion is detected, off when it stops
+  // PIR (activity 5): light on while motion is detected, off when it stops.
+  // The alarm remembers whether it was the one that lit the LED, so a light
+  // already on (manual or auto) is not killed by a passing person. When the
+  // motion ends, opt-in breathing (activity 3) is resumed.
   if (gPir && !sMotionAlarm) {
     sMotionAlarm = true;
-    setBlueLed(true);
+    sPirLitLed = !blueLedState;
+    if (sPirLitLed) setBlueLed(true);
     LOG_ERROR_CODE(301, "Motion detected");
   } else if (!gPir && sMotionAlarm) {
     sMotionAlarm = false;
-    setBlueLed(false);
+    if (sPirLitLed) {
+      sPirLitLed = false;
+      if (breatheAuto) setBreatheLed(true);
+      else setBlueLed(false);
+    }
   }
 }
 

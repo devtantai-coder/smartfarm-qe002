@@ -71,6 +71,7 @@ struct SerialStub {
   int read();
   void print(char c) { char b[2] = {c, 0}; mockSerialWriteStr(b); }
   void print(const char *s) { mockSerialWriteStr(s); }
+  void print(char *s) { mockSerialWriteStr(s); }
   void print(const String &s) { mockSerialWriteStr(s.c_str()); }
   void print(int v) { mockSerialPrintLong(v); }
   void print(unsigned int v) { mockSerialPrintLong((long)v); }
@@ -82,6 +83,7 @@ struct SerialStub {
   void println() { mockSerialWriteStr("\n"); }
   void println(char c) { print(c); mockSerialWriteStr("\n"); }
   void println(const char *s) { print(s); mockSerialWriteStr("\n"); }
+  void println(char *s) { print(s); mockSerialWriteStr("\n"); }
   void println(const String &s) { print(s); mockSerialWriteStr("\n"); }
   void println(int v) { print(v); mockSerialWriteStr("\n"); }
   void println(unsigned int v) { print(v); mockSerialWriteStr("\n"); }

@@ -26,6 +26,7 @@ int mockBuzzerToneHz = 0;
 uint32_t mockPixel[8] = {0};
 int mockWifiStatus = WL_CONNECTED;
 const char *mockWifiIp = "192.168.1.50";
+bool mockDisplayBeginOk = true;
 
 int mockDigitalWriteCount = 0;
 int mockLedcWriteCount = 0;
@@ -237,6 +238,8 @@ static void oledAppend(const std::string &s) {
   sOledLines[sOledRow] += s;
 }
 
+bool Adafruit_SSD1306::begin(int, int) { return mockDisplayBeginOk; }
+
 void Adafruit_SSD1306::clearDisplay() {
   sOledText.clear();
   for (int i = 0; i < 8; i++) sOledLines[i].clear();
@@ -300,6 +303,7 @@ void mockReset() {
   mockBuzzerToneHz = 0;
   mockWifiStatus = WL_CONNECTED;
   mockWifiIp = "192.168.1.50";
+  mockDisplayBeginOk = true;
 
   mockDigitalWriteCount = 0;
   mockLedcWriteCount = 0;

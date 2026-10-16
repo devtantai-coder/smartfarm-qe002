@@ -118,6 +118,7 @@ void updateDemo() {
     setRgb(0, 0, 0);
     servo.write(WINDMILL_MIN_ANGLE);
     stopFeed();
+    if (breatheAuto) setBreatheLed(true);   // restore opt-in breathing (activity 3)
     LOG_INFO("===== DEMO DONE =====");
     return;
   }

@@ -1324,12 +1324,40 @@ static void testSerialEdges() {
   lastSensorRead = mockMillis();
   loop();
   CHECK(relayState);                          // debug mode: automation paused
+  // while in debug mode any other key is rejected
+  mockSerialClear();
+  mockSerialPush("x");
+  loop();
+  CHECK(has(mockSerialOutput(), "Enter '0' to exit debug."));
   // ...and the very first loop after exiting restores the safety rule
   mockSerialClear();
   mockSerialPush("0");
   loop();
   CHECK(has(mockSerialOutput(), "Running normally..."));
   CHECK(!relayState);
+
+  // Debug menu '5' while WiFi is down covers the reconnect path
+  resetState();
+  mockWifiStatus = WL_DISCONNECTED;
+  mockSerialClear();
+  mockSerialPush("5");
+  loop();
+  CHECK(has(mockSerialOutput(), "--- WIFI ---"));
+  CHECK_EQ(mockWifiReconnectCalls, 1);
+  mockSerialPush("0");
+  loop();
+  mockWifiStatus = WL_CONNECTED;
+
+  // DEBUG level enables the periodic sensor line and the DEBUG tag
+  resetState();
+  gMinLogLevel = LOG_DEBUG;
+  mockSerialClear();
+  logSensors();
+  CHECK(has(mockSerialOutput(), "[SENSORS]"));
+  debugLogger();
+  CHECK(has(mockSerialOutput(), "[DEBUG]"));
+  gMinLogLevel = LOG_INFO;
+
   resetState();
 }
 
@@ -1743,6 +1771,96 @@ static void testClockWrap() {
   resetState();
 }
 
+// T16: PIR alarm LED ownership + breathing recovery (activities 3/5)
+static void testAlertLedOwnership() {
+  printf("T16 alerts: PIR LED ownership + breathing restore\n");
+
+  // Motion while breathing: the alarm takes the LED; breathing resumes after
+  resetState();
+  gPir = false; controlAlerts();          // clear any pending alarm state
+  setBreatheAuto(true);
+  setBreatheLed(true);
+  CHECK(breatheLedState);
+  gPir = true;
+  controlAlerts();
+  CHECK(blueLedState);
+  CHECK(!breatheLedState);                // alarm took over the LED
+  gPir = false;
+  controlAlerts();
+  CHECK(!blueLedState);
+  CHECK(breatheLedState);                 // opt-in breathing is re-armed
+  CHECK(breatheAuto);
+  setBreatheAuto(false);
+  setBreatheLed(false);
+
+  // A manually lit LED survives a passing person (PIR did not own it)
+  resetState();
+  gPir = false; controlAlerts();
+  setBlueLed(true);
+  gPir = true;  controlAlerts();
+  CHECK(blueLedState);
+  gPir = false; controlAlerts();
+  CHECK(blueLedState);
+  setBlueLed(false);
+
+  // Without breathing auto the alarm simply switches the LED back off
+  resetState();
+  gPir = false; controlAlerts();
+  gPir = true;  controlAlerts();
+  CHECK(blueLedState);
+  gPir = false; controlAlerts();
+  CHECK(!blueLedState);
+  CHECK(!breatheLedState);
+
+  // Defensive: a stale ramp value is cleared while breathing is off
+  resetState();
+  breatheBrightness = 100;
+  setLedPwm(222);
+  controlBreathe();
+  CHECK_EQ(breatheBrightness, 0);
+  CHECK_EQ(currentLedPwm(), 0);
+}
+
+// T17: the activity demo restores opt-in breathing when it finishes
+static void testDemoBreathingRestore() {
+  printf("T17 demo: breathing restored after the show\n");
+  resetState();
+  primeSensors(900);
+  setBreatheAuto(true);
+  setBreatheLed(true);
+  startDemo();
+  unsigned long cap = mockMillis() + 120000;
+  while (demoRunning() && mockMillis() < cap) { mockAdvance(10); simLoop(); }
+  CHECK(!demoRunning());
+  CHECK(breatheAuto);
+  CHECK(breatheLedState);                 // breathing is back on after DEMO DONE
+  CHECK(!blueLedState);
+  setBreatheAuto(false);
+  setBreatheLed(false);
+}
+
+// I11: degraded boot - missing OLED and WiFi connect timeout
+static void testBootDegraded() {
+  printf("I11 boot: missing OLED + WiFi timeout\n");
+  resetState();
+  mockServerReset();
+  mockDisplayBeginOk = false;
+  mockWifiStatus = WL_DISCONNECTED;
+  mockSerialClear();
+  setup();
+
+  CHECK_EQ(mockServerRouteCount(), 14);              // routes still registered
+  CHECK(has(mockSerialOutput(), "MA LOI: 101"));     // OLED not found
+  CHECK(has(mockSerialOutput(), "MA LOI: 102"));     // WiFi timeout
+  CHECK(mockWdtResetCalls >= 100);                   // watchdog fed while waiting
+  CHECK(mockWifiBeginCalls >= 1);
+  CHECK(!demoRunning());
+
+  mockDisplayBeginOk = true;
+  mockWifiStatus = WL_CONNECTED;
+  resetState();
+}
+
 // ==============================================
 //  Main
 // ==============================================
@@ -1767,6 +1885,8 @@ int main() {
   testWeather();
   testSettingsRoundtrip();
   testDemoFullRun();
+  testAlertLedOwnership();
+  testDemoBreathingRestore();
 
   testBoundaries();
   testIdempotency();
@@ -1795,6 +1915,7 @@ int main() {
   testRebootPersistence();
   testFuzzSoak();
   testClockWrap();
+  testBootDegraded();
 
   printf("=== %d checks, %d failures ===\n", gChecks, gFails);
   return gFails ? 1 : 0;
