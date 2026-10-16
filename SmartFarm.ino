@@ -202,6 +202,9 @@ void loop() {
     lastSensorRead = now;
   }
 
+  // Safety: the pump must never run dry, in ANY mode (manual or demo)
+  if (gWater < (int)waterThresholdLow && relayState) setRelay(false);
+
   // Automation logic (paused while the activity demo is running)
   if (demoRunning()) {
     updateDemo();

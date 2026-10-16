@@ -377,7 +377,22 @@ LOG_DEBUG("Extra detail only at DEBUG level");    // Chỉ hiển thị nếu c�
 
 ---
 
-## 15. Tác giả và bản quyền
+## 15. Kiểm thử tự động trên máy tính (không cần phần cứng)
+
+Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy hơn **772.000 lượt kiểm tra**:
+
+```bash
+./test/run_tests.sh --quick      # 1 bản build nhanh (core 3.x, cấu hình kit)
+./test/run_tests.sh --full       # 4 bản build: core 3.x, core 2.x + cảm biến đảo,
+                                 # còi passive + relay active-LOW, ASan + UBSan
+./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh bằng gcov
+```
+
+Bộ test bao phủ: logic bơm/quạt/đèn/chạm/còi, so sánh ngưỡng đúng biên, thời gian chính xác từng ms, 14 route HTTP, hợp đồng JSON 21 khóa, menu serial, trình diễn 15 bước, bền vững sau khi mất điện, fuzz 90.000 bước với các bất biến an toàn, và cả trường hợp `millis()` tràn số. Chi tiết xem `test/README.md`.
+
+---
+
+## 16. Tác giả và bản quyền
 
 Dự án được xây dựng cho bộ starter kit **QE002 ACEBOTT IOT Smart Farm**. Code được viết và tối ưu hóa để chạy trên Arduino IDE với mạch ESP32, toàn bộ tài liệu bằng tiếng Việt có dấu. Tham khảo từ tài liệu chính thức của ACEBOTT.
 
