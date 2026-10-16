@@ -5,7 +5,7 @@
 #include "demo.h"
 #include "oled.h"
 
-// ASCII-only labels: the SSD1306 default font has no Vietnamese diacritics
+// Nhãn chỉ dùng ASCII: font mặc định SSD1306 không có dấu tiếng Việt
 static const char* weatherText() {
   switch (weatherStatus()) {
     case WEATHER_SUNNY:  return "Nang";
@@ -20,16 +20,16 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
 
-  // Title bar
+  // Thanh tiêu đề
   display.setCursor(0, 0);
   display.print(F("Smart Farm"));
 
-  // Row 1: weather status (activity 11)
+  // Dòng 1: trạng thái thời tiết (hoạt động 11)
   display.setCursor(0, 8);
   display.print(F("TT: "));
   display.print(weatherText());
 
-  // Row 2: Temp + Humidity
+  // Dòng 2: Nhiệt độ + Độ ẩm
   display.setCursor(0, 16);
   display.print(F("T:"));
   display.print(t, 1);
@@ -37,24 +37,24 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   display.print(h, 0);
   display.print(F("%"));
 
-  // Row 3: Light
+  // Dòng 3: Ánh sáng
   display.setCursor(0, 24);
   display.print(F("Light: "));
   display.print(light);
 
-  // Row 4: Soil
+  // Dòng 4: Đất
   display.setCursor(0, 32);
   display.print(F("Soil: "));
   display.print(soil);
 
-  // Row 5: Water + Pump state
+  // Dòng 5: Nước + trạng thái máy bơm
   display.setCursor(0, 40);
   display.print(F("H2O:"));
   display.print(water);
   display.print(F(" P:"));
   display.print(relayState ? F("ON") : F("OFF"));
 
-  // Row 6: WiFi IP
+  // Dòng 6: IP WiFi
   display.setCursor(0, 48);
   if (WiFi.status() == WL_CONNECTED) {
     display.print(F("IP:"));
@@ -63,7 +63,7 @@ void updateOLED(float t, float h, int light, int soil, int water) {
     display.print(F("WiFi: ---"));
   }
 
-  // Row 7: demo / mechanism status
+  // Dòng 7: trạng thái demo / cơ cấu
   display.setCursor(0, 56);
   if (demoRunning()) {
     display.print(demoStepName());

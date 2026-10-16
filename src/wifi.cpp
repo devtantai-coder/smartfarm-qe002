@@ -3,8 +3,8 @@
 #include "config.h"
 #include "wifi.h"
 
-// Reconnect for ANY lost state (disconnected, idle, scan, failed, no SSID...)
-// and log only once per outage to avoid serial spam.
+// Kết nối lại cho MỌI trạng thái mất kết nối (disconnected, idle, scan, failed, không có SSID...)
+// và chỉ ghi log một lần mỗi lần mất kết nối để tránh spam serial.
 void manageWiFi() {
   static bool sWarned = false;
   unsigned long now = millis();

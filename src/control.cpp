@@ -5,15 +5,15 @@
 #include "settings.h"
 #include "control.h"
 
-// ── Alert state (edge-triggered logs, no serial spam) ──
+// ── Trạng thái cảnh báo (log edge-triggered, không spam serial) ──
 static bool sWaterAlarm = false;
 static bool sMotionAlarm = false;
-static bool sPirLitLed = false;   // true = the PIR alarm was the one that lit the LED
+static bool sPirLitLed = false;   // true = cảnh báo PIR là thứ đã bật LED
 
-// ── Pump: soil moisture + water safety ──
+// ── Bơm: độ ẩm đất + an toàn nước ──
 void controlPump() {
-  // Safety first, even in manual mode (activity 8): running the pump dry
-  // would damage it, so low water always forces the pump off.
+  // An toàn là trên hết, kể cả chế độ thủ công (bài 8): chạy bơm khô
+  // sẽ làm hỏng bơm, nên nước thấp luôn buộc tắt bơm.
   if (gWater < (int)waterThresholdLow) {
     if (relayState) {
       setRelay(false);
@@ -24,10 +24,10 @@ void controlPump() {
 
   if (!pumpAuto) return;
 
-  // Guard against inverted thresholds (would make the relay chatter)
+  // Chống ngưỡng bị đảo (sẽ làm relay đóng ngắt liên tục)
   if (soilThresholdHigh <= soilThresholdLow) return;
 
-  // Hysteresis: turn on below low, turn off above high
+  // Hysteresis: bật khi dưới ngưỡng thấp, tắt khi trên ngưỡng cao
   if (gSoil < (int)soilThresholdLow && !relayState) {
     setRelay(true);
     LOG_INFO("Soil dry, pump ON [202]");
@@ -37,11 +37,11 @@ void controlPump() {
   }
 }
 
-// ── Fan: temperature hysteresis ──
+// ── Quạt: hysteresis theo nhiệt độ ──
 void controlFan() {
   if (!fanAuto) return;
 
-  // Guard against inverted thresholds (would make the relay chatter)
+  // Chống ngưỡng bị đảo (sẽ làm relay đóng ngắt liên tục)
   if (tempThresholdHigh <= tempThresholdLow) return;
 
   if (gTemp > tempThresholdHigh && !fanState) {
@@ -51,9 +51,9 @@ void controlFan() {
   }
 }
 
-// ── Blue light: ambient light with hysteresis (threshold ± 50) ──
-// The blue LED is shared with the breathing effect, PIR and manual control:
-// skip auto control while any of them owns the LED, to avoid fighting.
+// ── Đèn xanh dương: ánh sáng môi trường với hysteresis (ngưỡng ± 50) ──
+// Blue LED dùng chung với hiệu ứng thở, PIR và điều khiển thủ công:
+// bỏ qua điều khiển tự động khi một trong số đó đang giữ LED, để tránh tranh nhau.
 void controlLight() {
   if (!lightAuto || breatheLedState || gPir) return;
   if (gLight < (lightThreshold - 50) && !blueLedState) {
@@ -63,9 +63,9 @@ void controlLight() {
   }
 }
 
-// ── RGB: plant growth light when dark (activity 9), off when bright ──
-// Stateless: compares against the actual RGB color so manual colors are
-// never left on while auto mode is re-enabled.
+// ── RGB: đèn tăng trưởng cây khi trời tối (bài 9), tắt khi trời sáng ──
+// Không lưu trạng thái: so sánh với màu RGB thực tế nên màu thủ công
+// không bao giờ bị bỏ quên khi bật lại chế độ tự động.
 void controlRgb() {
   if (!rgbAuto) return;
   bool isDark = gLight < (lightThreshold - 50);
@@ -79,7 +79,7 @@ void controlRgb() {
   }
 }
 
-// ── Breathe LED: smooth PWM ramp while breatheLedState is on ──
+// ── LED thở: tăng giảm PWM mượt trong khi breatheLedState bật ──
 void controlBreathe() {
   if (!breatheLedState) {
     if (breatheBrightness != 0) {
@@ -105,13 +105,13 @@ void controlBreathe() {
   setLedPwm(breatheBrightness);
 }
 
-// ── Touch: manual blue LED toggle, one toggle per press (activity 4) ──
+// ── Chạm: bật/tắt blue LED thủ công, mỗi lần nhấn đổi một lần (bài 4) ──
 void controlTouch() {
   static bool sPrevTouch = false;
   if (gTouch && !sPrevTouch) {
     unsigned long now = millis();
     if (now - lastTouch >= TOUCH_DEBOUNCE) {
-      if (lightAuto) {  // manual action disables auto to avoid fighting
+      if (lightAuto) {  // thao tác thủ công tắt auto để tránh tranh nhau
         lightAuto = false;
         saveSettings();
       }
@@ -123,7 +123,7 @@ void controlTouch() {
   sPrevTouch = gTouch;
 }
 
-// ── Alerts: low-water continuous buzzer (priority) + PIR night light ──
+// ── Cảnh báo: buzzer liên tục khi nước thấp (ưu tiên) + đèn đêm PIR ──
 void controlAlerts() {
   if (gWater < (int)waterThresholdLow) {
     setBuzzer(true);
@@ -138,10 +138,10 @@ void controlAlerts() {
     setBuzzer(false);
   }
 
-  // PIR (activity 5): light on while motion is detected, off when it stops.
-  // The alarm remembers whether it was the one that lit the LED, so a light
-  // already on (manual or auto) is not killed by a passing person. When the
-  // motion ends, opt-in breathing (activity 3) is resumed.
+  // PIR (bài 5): bật đèn khi phát hiện chuyển động, tắt khi hết chuyển động.
+  // Cảnh báo ghi nhớ nó có phải thứ đã bật LED không, nên đèn đang sáng
+  // (thủ công hay tự động) không bị người đi qua tắt mất. Khi hết
+  // chuyển động, chế độ thở đã bật trước đó (bài 3) được khôi phục.
   if (gPir && !sMotionAlarm) {
     sMotionAlarm = true;
     sPirLitLed = !blueLedState;
@@ -157,7 +157,7 @@ void controlAlerts() {
   }
 }
 
-// ── Windmill (activity 6): sweep the servo back and forth like rotating blades ──
+// ── Cối xay gió (bài 6): quét servo qua lại như cánh quạt đang quay ──
 static int sWindmillAngle = 0;
 static int8_t sWindmillDir = 1;
 static unsigned long sWindmillUpdate = 0;
@@ -166,7 +166,7 @@ void setWindmill(bool on) {
   if (windmillOn == on) return;
   windmillOn = on;
   if (on) {
-    stopFeed();             // shared servo
+    stopFeed();             // servo dùng chung
   } else {
     servo.write(WINDMILL_MIN_ANGLE);
   }
@@ -184,15 +184,15 @@ void controlWindmill() {
   servo.write(sWindmillAngle);
 }
 
-// ── Feed gate (activity 10): servo opens the bowl for FEED_DURATION then closes ──
+// ── Cửa cho ăn (bài 10): servo mở bát trong FEED_DURATION rồi đóng lại ──
 static bool sFeedActive = false;
 static unsigned long sFeedStart = 0;
 
 void startFeed() {
-  setWindmill(false);       // shared servo
+  setWindmill(false);       // servo dùng chung
   sFeedActive = true;
   sFeedStart = millis();
-  servo.write(FEED_OPEN_ANGLE);   // gate open
+  servo.write(FEED_OPEN_ANGLE);   // cửa mở
   LOG_INFO("Feed: gate open");
 }
 
@@ -204,7 +204,7 @@ void controlFeed() {
   if (!sFeedActive) return;
   if (millis() - sFeedStart >= FEED_DURATION) {
     sFeedActive = false;
-    servo.write(FEED_CLOSE_ANGLE);  // gate closed
+    servo.write(FEED_CLOSE_ANGLE);  // cửa đóng
     LOG_INFO("Feed: gate closed");
   }
 }

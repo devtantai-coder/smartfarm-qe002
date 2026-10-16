@@ -4,8 +4,8 @@
 #include "control.h"
 #include "demo.h"
 
-// Non-blocking showcase of the kit activities (2-12). While the demo runs,
-// main loop() pauses the normal automation so nothing fights over the pins.
+// Trình diễn không chặn các bài của kit (2-12). Khi demo chạy,
+// loop() chính tạm dừng tự động hóa thường để không tranh chấp chân.
 enum DemoAction {
   DA_NONE, DA_LED_ON, DA_LED_OFF, DA_BREATHE_ON, DA_BREATHE_OFF,
   DA_PUMP_ON, DA_PUMP_OFF, DA_BEEP, DA_PLANT_ON, DA_RGB_OFF,
@@ -64,7 +64,7 @@ static void demoAction(DemoAction a) {
     case DA_BEEP:        setBuzzer(true); break;
     case DA_PLANT_ON:    setRgbPlant(); break;
     case DA_RGB_OFF:     setRgb(0, 0, 0); break;
-    case DA_WINDMILL:    break;  // swept continuously in updateDemo()
+    case DA_WINDMILL:    break;  // được quét liên tục trong updateDemo()
     case DA_SERVO0:      servo.write(WINDMILL_MIN_ANGLE); stopFeed(); break;
     case DA_FEED:        startFeed(); break;
     default: break;
@@ -93,7 +93,7 @@ void updateDemo() {
   unsigned long now = millis();
   unsigned long elapsed = now - sStepStart;
 
-  // HD6: sweep the servo like rotating windmill blades
+  // HD6: quét servo như cánh cối xay gió đang quay
   if (STEPS[sStep].in == DA_WINDMILL && now - sSweepUpdate >= WINDMILL_INTERVAL) {
     sSweepUpdate = now;
     int span = WINDMILL_MAX_ANGLE - WINDMILL_MIN_ANGLE;
@@ -118,7 +118,7 @@ void updateDemo() {
     setRgb(0, 0, 0);
     servo.write(WINDMILL_MIN_ANGLE);
     stopFeed();
-    if (breatheAuto) setBreatheLed(true);   // restore opt-in breathing (activity 3)
+    if (breatheAuto) setBreatheLed(true);   // khôi phục chế độ thở đã bật trước đó (bài 3)
     LOG_INFO("===== DEMO DONE =====");
     return;
   }

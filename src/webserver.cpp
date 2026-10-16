@@ -8,7 +8,7 @@
 #include "demo.h"
 #include "webserver.h"
 
-// ── Root page (stored in flash, no per-request heap copy) ──
+// ── Trang chủ (lưu trong flash, không copy heap mỗi request) ──
 static const char ROOT_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="vi">
@@ -229,12 +229,12 @@ void handleRoot() {
   server.send_P(200, "text/html", ROOT_HTML);
 }
 
-// ── API: JSON sensor data (uses filtered globals, no raw sensor reads) ──
+// ── API: dữ liệu cảm biến JSON (dùng biến global đã lọc, không đọc cảm biến thô) ──
 void handleApi() {
   MOD_DEBUG(Webserver, "GET /api");
 
-  // Use global filtered values — no raw sensor reads here
-  // DHT11 needs 1s between reads; reading here would return stale data
+  // Dùng giá trị global đã lọc — không đọc cảm biến thô ở đây
+  // DHT11 cần 1s giữa các lần đọc; đọc ở đây sẽ trả về dữ liệu cũ
   String json;
   json.reserve(520);
   json += "{";
@@ -270,7 +270,7 @@ static uint8_t clampByte(long v) {
   return (uint8_t)v;
 }
 
-// ── Toggle device (manual action disables the matching auto mode) ──
+// ── Bật/tắt thiết bị (thao tác thủ công sẽ tắt chế độ tự động tương ứng) ──
 void handleToggle() {
   String id = server.arg("id");
   if (id == "pump") {
@@ -294,7 +294,7 @@ void handleToggle() {
   server.send(200, "text/plain", "ok");
 }
 
-// ── Auto mode ──
+// ── Chế độ tự động ──
 void handleAuto() {
   String id = server.arg("id");
   bool on = server.arg("on") == "true";
@@ -313,7 +313,7 @@ void handleAuto() {
   server.send(200, "text/plain", "ok");
 }
 
-// ── RGB color ──
+// ── Màu RGB ──
 void handleRgb() {
   uint8_t r = clampByte(server.arg("r").toInt());
   uint8_t g = clampByte(server.arg("g").toInt());
@@ -324,7 +324,7 @@ void handleRgb() {
   server.send(200, "text/plain", "ok");
 }
 
-// ── Breathe LED ──
+// ── Đèn thở ──
 void handleBreatheLed() {
   bool want = !breatheLedState;
   setBreatheAuto(false);
@@ -333,8 +333,8 @@ void handleBreatheLed() {
   server.send(200, "text/plain", "ok");
 }
 
-// ── Remote LED on/off (activity 12: GET /on and GET /off) ──
-// Manual action disables light auto so the automation does not fight it.
+// ── Bật/tắt LED từ xa (hoạt động 12: GET /on và GET /off) ──
+// Thao tác thủ công sẽ tắt chế độ tự động đèn để automation không tranh giành điều khiển.
 void handleLedOn() {
   MOD_DEBUG(Webserver, "GET /on");
   setLightAuto(false);
@@ -356,34 +356,34 @@ void handleServo() {
   int angle = server.arg("angle").toInt();
   if (angle < 0) angle = 0;
   if (angle > 180) angle = 180;
-  setWindmill(false);   // manual servo control releases windmill and feed gate
+  setWindmill(false);   // điều khiển servo thủ công sẽ nhả cối xay gió và cửa cho ăn
   stopFeed();
   servoAngle = angle;
   servo.write(servoAngle);
   server.send(200, "text/plain", "ok");
 }
 
-// ── Windmill (activity 6): continuous servo sweep ──
+// ── Cối xay gió (hoạt động 6): servo quay liên tục ──
 void handleWindmill() {
   bool on = server.arg("on") == "true";
   setWindmill(on);
   server.send(200, "text/plain", on ? "windmill on" : "windmill off");
 }
 
-// ── Feed gate (activity 10): open the bowl for FEED_DURATION ──
+// ── Cửa cho ăn (hoạt động 10): mở máng ăn trong FEED_DURATION ──
 void handleFeed() {
   startFeed();
   server.send(200, "text/plain", "feeding");
 }
 
-// ── Activity demo (HD2-HD12) ──
+// ── Demo hoạt động (HD2-HD12) ──
 void handleDemo() {
   MOD_DEBUG(Webserver, "GET /demo");
   startDemo();
   server.send(200, "text/plain", "demo started");
 }
 
-// ── Threshold: update control thresholds from web (clamped to valid range) ──
+// ── Ngưỡng: cập nhật ngưỡng điều khiển từ web (giới hạn trong khoảng hợp lệ) ──
 void handleThreshold() {
   bool changed = false;
   if (server.hasArg("soilLow"))  { soilThresholdLow  = constrain(server.arg("soilLow").toFloat(),  0.0f, 4095.0f); changed = true; }
@@ -401,7 +401,7 @@ void handleThreshold() {
     soilThresholdHigh = constrain(soilThresholdLow + 50.0f, 0.0f, 4095.0f);
   }
   if (tempThresholdHigh <= tempThresholdLow) {
-    tempThresholdHigh = tempThresholdLow + 1.0f;  // no upper clamp: keeps high > low at the 60 C edge
+    tempThresholdHigh = tempThresholdLow + 1.0f;  // không chặn trên: giữ high > low tại mép 60 C
   }
   saveSettings();
   LOG_INFO("Thresholds updated from web");

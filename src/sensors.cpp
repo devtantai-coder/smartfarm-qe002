@@ -2,7 +2,7 @@
 #include "logger.h"
 #include "sensors.h"
 
-// ── Moving average buffers ──
+// ── Bộ đệm trung bình động ──
 static float sTempBuf[SENSOR_FILTER_SIZE] = {0};
 static float sHumBuf[SENSOR_FILTER_SIZE]  = {0};
 static int   sLightBuf[SENSOR_FILTER_SIZE] = {0};
@@ -26,8 +26,8 @@ static int avgInt(int* buf, uint8_t n) {
 float readTemperature() { return dht.readTemperature(); }
 float readHumidity()    { return dht.readHumidity(); }
 
-// Applies the INVERT_* flags from config.h so the documented direction always
-// holds: LDR bright = high, soil dry = low, water full = high.
+// Áp dụng các cờ INVERT_* từ config.h để hướng đã tài liệu hóa luôn
+// đúng: LDR sáng = cao, đất khô = thấp, nước đầy = cao.
 static int normalizeAdc(int value, bool invert) {
   return invert ? (4095 - value) : value;
 }
@@ -42,11 +42,11 @@ void readAllSensors() {
   float t = readTemperature();
   float h = readHumidity();
 
-  // Check NaN BEFORE replacing with old values
+  // Kiểm tra NaN TRƯỚC khi thay bằng giá trị cũ
   bool tIsNan = isnan(t);
   bool hIsNan = isnan(h);
 
-  // Handle NaN from DHT: replace with last known good value
+  // Xử lý NaN từ DHT: thay bằng giá trị tốt cuối cùng đã biết
   if (tIsNan) {
     t = sBufFilled ? sTempBuf[(sBufIdx + SENSOR_FILTER_SIZE - 1) % SENSOR_FILTER_SIZE] : 0;
     if (++sensorFailCount > 5 && sensorHealthy) {
@@ -58,7 +58,7 @@ void readAllSensors() {
     h = sBufFilled ? sHumBuf[(sBufIdx + SENSOR_FILTER_SIZE - 1) % SENSOR_FILTER_SIZE] : 0;
   }
 
-  // Reset fail count on success (use original NaN check, not replaced values)
+  // Reset số lần lỗi khi thành công (dùng kiểm tra NaN gốc, không dùng giá trị thay thế)
   if (!tIsNan && !hIsNan) {
     sensorFailCount = 0;
     sensorHealthy = true;
@@ -68,7 +68,7 @@ void readAllSensors() {
   int s = readSoil();
   int w = readWater();
 
-  // Push to circular buffer
+  // Đẩy vào bộ đệm vòng
   sTempBuf[sBufIdx] = t;
   sHumBuf[sBufIdx]  = h;
   sLightBuf[sBufIdx] = l;
@@ -89,7 +89,7 @@ void readAllSensors() {
   gTouch = readTouch();
 }
 
-// ── Simple weather guess from light + humidity (activity 11) ──
+// ── Đoán thời tiết đơn giản từ ánh sáng + độ ẩm (bài 11) ──
 Weather weatherStatus() {
   bool bright = gLight > (lightThreshold + 50);
   bool dark = gLight < (lightThreshold - 50);

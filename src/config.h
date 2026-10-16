@@ -7,7 +7,7 @@
 extern const char *ssid;
 extern const char *password;
 
-// ── GPIO Pin Map ──
+// ── Sơ đồ chân GPIO ──
 #define DHT_PIN          23
 #define DHT_TYPE         DHT11
 #define RGB_PIN          19
@@ -17,7 +17,7 @@ extern const char *password;
 #define RELAY_PIN        26
 #define FAN_PIN          14
 #define BLUE_LED_PIN     27
-#define LED_PWM_CHANNEL  15      // LEDC channel for blue LED PWM (core 2.x); avoids servo timer conflict
+#define LED_PWM_CHANNEL  15      // Kênh LEDC cho PWM LED xanh dương (core 2.x); tránh xung đột timer với servo
 #define TOUCH_PIN        39
 #define PIR_PIN          33
 #define LDR_PIN          34
@@ -29,7 +29,7 @@ extern const char *password;
 #define SCREEN_WIDTH     128
 #define SCREEN_HEIGHT    64
 
-// ── Control Thresholds ──
+// ── Ngưỡng điều khiển ──
 extern float soilThresholdLow;
 extern float soilThresholdHigh;
 extern float waterThresholdLow;
@@ -37,7 +37,7 @@ extern int   lightThreshold;
 extern float tempThresholdHigh;
 extern float tempThresholdLow;
 
-// ── Timing (ms) ──
+// ── Thời gian (ms) ──
 extern const unsigned long WIFI_CONNECT_TIMEOUT;
 extern const unsigned long WIFI_CHECK_INTERVAL;
 extern const unsigned long SENSOR_INTERVAL;
@@ -47,14 +47,14 @@ extern const unsigned long BREATHE_INTERVAL;
 extern const unsigned long WINDMILL_INTERVAL;
 extern const unsigned long FEED_DURATION;
 
-// ── Sensor Filtering ──
-constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Moving average window
+// ── Lọc cảm biến ──
+constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 
-// ── Hardware Adaptation (calibrate to your kit) ──
-// Documented sensor direction: LDR bright = high, soil dry = low,
-// water full = high. If a module reads the opposite way, set the matching
-// flag to 1 here instead of changing any control logic.
-// (Each flag can also be overridden from the build command line, e.g. -DINVERT_LIGHT=1)
+// ── Thích ứng phần cứng (hiệu chỉnh theo kit của bạn) ──
+// Chiều đọc cảm biến theo tài liệu: LDR sáng = mức cao, đất khô = mức thấp,
+// nước đầy = mức cao. Nếu module đọc ngược lại, hãy đặt cờ tương ứng
+// thành 1 ở đây thay vì sửa bất kỳ logic điều khiển nào.
+// (Mỗi cờ cũng có thể ghi đè từ dòng lệnh build, ví dụ -DINVERT_LIGHT=1)
 #ifndef INVERT_LIGHT
 #define INVERT_LIGHT     0
 #endif
@@ -65,12 +65,12 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Moving average window
 #define INVERT_WATER     0
 #endif
 
-// Pump relay board polarity: 1 = active-LOW module (pump runs on LOW level)
+// Cực tính board relay bơm: 1 = module active-LOW (bơm chạy ở mức LOW)
 #ifndef RELAY_ACTIVE_LOW
 #define RELAY_ACTIVE_LOW 0
 #endif
 
-// Buzzer type: 1 = passive buzzer (needs tone()), 0 = active buzzer
+// Loại buzzer: 1 = buzzer thụ động (cần tone()), 0 = buzzer chủ động
 #ifndef BUZZER_PASSIVE
 #define BUZZER_PASSIVE   0
 #endif
@@ -78,18 +78,18 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Moving average window
 #define BUZZER_TONE_HZ   2000
 #endif
 
-// Servo angles: calibrate to the mechanical assembly (avoid gear stall)
+// Góc servo: hiệu chỉnh theo cơ cấu cơ khí (tránh kẹt bánh răng)
 #ifndef WINDMILL_MIN_ANGLE
-#define WINDMILL_MIN_ANGLE 0     // windmill sweep lower limit
+#define WINDMILL_MIN_ANGLE 0     // giới hạn dưới khi quét cánh quạt gió
 #endif
 #ifndef WINDMILL_MAX_ANGLE
-#define WINDMILL_MAX_ANGLE 180   // windmill sweep upper limit
+#define WINDMILL_MAX_ANGLE 180   // giới hạn trên khi quét cánh quạt gió
 #endif
 #ifndef FEED_OPEN_ANGLE
-#define FEED_OPEN_ANGLE    90    // feed gate open position
+#define FEED_OPEN_ANGLE    90    // vị trí mở cửa máng ăn
 #endif
 #ifndef FEED_CLOSE_ANGLE
-#define FEED_CLOSE_ANGLE   0     // feed gate closed position
+#define FEED_CLOSE_ANGLE   0     // vị trí đóng cửa máng ăn
 #endif
 
 #endif

@@ -1,8 +1,8 @@
 #pragma once
 #include "Arduino.h"
 
-// WebServer mock: routes are recorded and can be invoked by the tests,
-// request args are injected, responses are captured (see mock.cpp/mock.h).
+// mock WebServer: các route được ghi lại và test có thể gọi,
+// tham số request được inject, response được ghi lại (xem mock.cpp/mock.h).
 class WebServer {
 public:
   WebServer(int) {}

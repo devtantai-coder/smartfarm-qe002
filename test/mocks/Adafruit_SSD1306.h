@@ -6,8 +6,8 @@
 #define SSD1306_SWITCHCAPVCC 2
 #define SSD1306_WHITE 1
 
-// OLED mock: captures everything printed, both as one stream and per text row
-// (setCursor y selects the row, y/8). See mock.cpp/mock.h.
+// mock OLED: ghi lại mọi nội dung được in, cả dạng một luồng và theo từng dòng text
+// (y của setCursor chọn dòng, y/8). Xem mock.cpp/mock.h.
 class Adafruit_SSD1306 {
 public:
   Adafruit_SSD1306(int, int, TwoWire *, int) {}

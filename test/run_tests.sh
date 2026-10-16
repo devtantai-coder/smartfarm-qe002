@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Deep host-side test runner for the Smart Farm QE002 firmware.
+# Trình chạy test chuyên sâu phía host cho firmware Smart Farm QE002.
 #
-# Compiles the REAL firmware (SmartFarm.ino + src/*.cpp) against the
-# controllable hardware mocks in test/mocks/ and runs the suite.
+# Biên dịch firmware THẬT (SmartFarm.ino + src/*.cpp) dựa trên các
+# mock phần cứng có thể điều khiển trong test/mocks/ và chạy bộ test.
 #
-# Usage:
-#   ./test/run_tests.sh --quick      one build (default core 3.x, kit defaults)
-#   ./test/run_tests.sh --full       four builds: core3, core2+inverts,
-#                                    passive buzzer+active-low relay, ASan+UBSan
-#   ./test/run_tests.sh --coverage   build with gcov and print line coverage
+# Cách dùng:
+#   ./test/run_tests.sh --quick      một bản build (mặc định core 3.x, cấu hình kit mặc định)
+#   ./test/run_tests.sh --full       bốn bản build: core3, core2+inverts,
+#                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan
+#   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng
 #
-# Requirements: g++ with C++17, bash. No ESP32 toolchain needed.
+# Yêu cầu: g++ với C++17, bash. Không cần toolchain ESP32.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -57,8 +57,8 @@ run_asan() {
   echo "=== Build: asan+ubsan ==="
   g++ "${FLAGS[@]}" -g -fsanitize=address,undefined -fno-omit-frame-pointer \
     -DESP_ARDUINO_VERSION_MAJOR=3 -o "$bin" "${FILES[@]}"
-  # Some desktop sessions export LD_PRELOAD (e.g. libgtk-nocsd); the sanitizer
-  # runtime must be the first library loaded, so drop LD_PRELOAD for this run.
+  # Một số phiên desktop đặt biến LD_PRELOAD (ví dụ libgtk-nocsd); runtime
+  # sanitizer phải là thư viện được nạp đầu tiên, nên bỏ LD_PRELOAD cho lần chạy này.
   env -u LD_PRELOAD "$bin"
   echo
 }
@@ -70,8 +70,8 @@ run_coverage() {
   echo "=== Build: coverage (gcov) ==="
   local objs=()
   local f o
-  # gcov derives the notes file by replacing the object's extension with
-  # .gcno, so name objects like "control.o" (not "control.cpp.o").
+  # gcov tạo file ghi chú bằng cách thay phần mở rộng của file object bằng
+  # .gcno, nên đặt tên object như "control.o" (không phải "control.cpp.o").
   for f in "$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}"; do
     o="$cov/$(basename "${f%.cpp}").o"
     g++ "${FLAGS[@]}" --coverage -c "$f" -o "$o"
@@ -105,7 +105,7 @@ run_coverage() {
         line=$2 + 0;
         if (line == 0) next;
         c=$1; gsub(/ /,"",c);
-        if (c == "-") next;              # non-executable (comment, blank, })
+        if (c == "-") next;              # không thực thi (chú thích, dòng trống, })
         total++;
         if (c != "#####" && c != "=====" && (c+0) > 0) covered++;
       }

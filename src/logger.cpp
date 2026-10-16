@@ -3,12 +3,12 @@
 #include "sensors.h"
 #include "actuators.h"
 
-// ── Module debug flags ──
+// ── Các cờ debug theo module ──
 bool dbgSensors = false, dbgActuators = false, dbgControl = false;
 bool dbgWebserver = false, dbgWifi = false, dbgOled = false;
 bool dbgSettings = false, dbgLogger = false, dbgRgb = false;
 
-// Minimum level printed (LOG_DEBUG shows everything)
+// Mức tối thiểu được in (LOG_DEBUG hiển thị mọi thứ)
 LogLevel gMinLogLevel = LOG_INFO;
 
 static bool sLogInit = false;
@@ -30,7 +30,7 @@ static void ensureInit() {
   Serial.println(F("\n=== SMART FARM LOGGER ==="));
 }
 
-// [HH:MM:SS.mmm] [LEVEL] func:line
+// [HH:MM:SS.mmm] [LEVEL] hàm:dòng
 static void printHeader(LogLevel level, const char* func, int line) {
   unsigned long ms = millis();
   unsigned long sec = ms / 1000;
@@ -53,20 +53,20 @@ void logMessage(LogLevel level, const char* func, int line, const char* msg) {
 }
 
 void logError(LogLevel level, const char* func, int line, int code, const char* msg) {
-  if (level < gMinLogLevel) return;  // fixes code being printed below min level
+  if (level < gMinLogLevel) return;  // khắc phục lỗi mã code vẫn bị in khi dưới mức tối thiểu
   ensureInit();
   printHeader(level, func, line);
   Serial.printf(" [MA LOI: %d] -> %s\n", code, msg);
 }
 
-// ── Periodic sensor line (activity 7 / 11): visible at DEBUG log level ──
+// ── Dòng cảm biến định kỳ (activity 7 / 11): hiển thị ở mức log DEBUG ──
 void logSensors() {
   if (LOG_DEBUG < gMinLogLevel) return;
   Serial.printf("[SENSORS] T:%.1fC H:%.1f%% Light:%d Soil:%d Water:%d PIR:%d Touch:%d\n",
                 gTemp, gHum, gLight, gSoil, gWater, (int)gPir, (int)gTouch);
 }
 
-// ── Debug: Sensors ──
+// ── Debug: Cảm biến ──
 void debugSensors() {
   Serial.println(F("\n--- SENSORS ---"));
   readAllSensors();
@@ -75,7 +75,7 @@ void debugSensors() {
   Serial.printf("PIR:%d  Touch:%d  Health:%d\n", gPir, gTouch, sensorHealthy);
 }
 
-// ── Debug: Actuators ──
+// ── Debug: Cơ cấu chấp hành ──
 void debugActuators() {
   Serial.println(F("\n--- ACTUATORS ---"));
   Serial.println(F("Pump on/off..."));
@@ -102,7 +102,7 @@ void debugActuators() {
   servo.write(WINDMILL_MIN_ANGLE);
 }
 
-// ── Debug: Control ──
+// ── Debug: Điều khiển ──
 void debugControl() {
   Serial.println(F("\n--- CONTROL ---"));
   Serial.printf("Soil: %.0f-%.0f  Water:%.0f\n", soilThresholdLow, soilThresholdHigh, waterThresholdLow);
@@ -144,7 +144,7 @@ void debugOled() {
   Serial.println(F("OLED test pattern sent."));
 }
 
-// ── Debug: Settings ──
+// ── Debug: Cài đặt ──
 void debugSettings() {
   Serial.println(F("\n--- SETTINGS ---"));
   Serial.printf("soilLow:%.0f soilHigh:%.0f\n", soilThresholdLow, soilThresholdHigh);

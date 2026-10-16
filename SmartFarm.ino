@@ -1,8 +1,8 @@
 /*
  * SmartFarm.ino - QE002 ACEBOTT IoT Smart Farm
- * Entry point: setup() + loop()
- * Non-blocking, watchdog-protected, modular debug
- * Compatible with esp32 Arduino core 2.x and 3.x
+ * Điểm bắt đầu: setup() + loop()
+ * Non-blocking, được watchdog bảo vệ, debug theo từng module
+ * Tương thích với esp32 Arduino core 2.x và 3.x
  */
 
 #include <Arduino.h>
@@ -23,11 +23,11 @@
 #include "src/webserver.h"
 #include "src/demo.h"
 
-// ── Debug state ──
+// ── Trạng thái debug ──
 static char sSerialCmd = 0;
 static bool sDebugMode = false;
 
-// ── Watchdog timeout (ms) ──
+// ── Thời gian timeout watchdog (ms) ──
 static constexpr uint32_t WDT_TIMEOUT_MS = 30000;
 
 static void handleFavicon() {
@@ -63,7 +63,7 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // Watchdog (core 2.x / 3.x compatible init)
+  // Watchdog (khởi tạo tương thích core 2.x / 3.x)
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   esp_task_wdt_config_t wdtCfg = {};
   wdtCfg.timeout_ms = WDT_TIMEOUT_MS;
@@ -78,9 +78,9 @@ void setup() {
 
   LOG_INFO("Smart Farm starting...");
 
-  // GPIO: set the output latch BEFORE pinMode so no glitch appears on boot
-  // (an active-LOW relay would briefly switch on if driven LOW first).
-  digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);  // pump OFF at boot
+  // GPIO: ghi sẵn mức ra chân TRƯỚC khi gọi pinMode để không bị nhiễu (glitch) lúc khởi động
+  // (relay active-LOW sẽ bật chớp một cái nếu bị kéo xuống LOW trước).
+  digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);  // tắt bơm khi khởi động
   digitalWrite(FAN_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
   pinMode(RELAY_PIN, OUTPUT);
@@ -89,7 +89,7 @@ void setup() {
   pinMode(TOUCH_PIN, INPUT);
   pinMode(PIR_PIN, INPUT);
 
-  // PWM for blue LED: steady on/off + breathing effect (core 2.x / 3.x)
+  // PWM cho LED xanh dương: bật/tắt ổn định + hiệu ứng thở (core 2.x / 3.x)
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcAttach(BLUE_LED_PIN, 1000, 8);
 #else
@@ -98,7 +98,7 @@ void setup() {
 #endif
   setLedPwm(0);
 
-  // Peripherals
+  // Thiết bị ngoại vi
   dht.begin();
   strip.begin();
   strip.show();
@@ -113,12 +113,12 @@ void setup() {
   display.clearDisplay();
   display.display();
 
-  // Load settings from flash
+  // Nạp cài đặt từ flash
   loadSettings();
   LOG_INFO("Settings loaded");
   if (breatheAuto) setBreatheLed(true);
 
-  // WiFi: short blocking wait (watchdog is fed), then manageWiFi() retries
+  // WiFi: chờ ngắn ở dạng blocking (watchdog vẫn được nuôi), sau đó manageWiFi() tự thử lại
   WiFi.setSleep(false);
   WiFi.begin(ssid, password);
   LOG_INFO("Connecting WiFi...");
@@ -136,7 +136,7 @@ void setup() {
     LOG_ERROR_CODE(102, "WiFi timeout - retrying in background");
   }
 
-  // Web server routes
+  // Các route của web server
   server.on("/", handleRoot);
   server.on("/api", handleApi);
   server.on("/toggle", handleToggle);
@@ -162,11 +162,11 @@ void loop() {
   server.handleClient();
   manageWiFi();
 
-  // Serial debug input
+  // Nhập lệnh debug qua Serial
   if (Serial.available() > 0) {
     sSerialCmd = Serial.read();
     if (sSerialCmd == '\n' || sSerialCmd == '\r') {
-      // skip
+      // bỏ qua
     } else if (!sDebugMode) {
       if (sSerialCmd == '9') {
         startDemo();
@@ -191,24 +191,24 @@ void loop() {
 
   unsigned long now = millis();
 
-  // Fast digital inputs: touch/PIR must react faster than the 1s sensor cycle
+  // Đầu vào số nhanh: touch/PIR phải phản hồi nhanh hơn chu kỳ đọc cảm biến 1 giây
   gTouch = readTouch();
   gPir = readPIR();
 
-  // Read sensors periodically (DHT11 needs >= 1s between reads)
+  // Đọc cảm biến định kỳ (DHT11 cần >= 1 giây giữa hai lần đọc)
   if (now - lastSensorRead >= SENSOR_INTERVAL) {
     readAllSensors();
-    logSensors();   // one line every second at DEBUG level (activity 7)
+    logSensors();   // mỗi giây một dòng ở mức DEBUG (activity 7)
     lastSensorRead = now;
   }
 
-  // Safety: the pump must never run dry, in ANY mode (manual or demo)
+  // An toàn: bơm tuyệt đối không được chạy khô, ở MỌI chế độ (thủ công hay demo)
   if (gWater < (int)waterThresholdLow && relayState) setRelay(false);
 
-  // Automation logic (paused while the activity demo is running)
+  // Logic tự động (tạm dừng khi demo của bài học đang chạy)
   if (demoRunning()) {
     updateDemo();
-    controlBreathe();   // keep the HD3 breathing step animating during the demo
+    controlBreathe();   // giữ bước thở HD3 chạy liên tục trong lúc demo
   } else {
     controlPump();
     controlFan();
@@ -221,7 +221,7 @@ void loop() {
     controlFeed();
   }
 
-  // Update OLED
+  // Cập nhật OLED
   if (now - lastOledUpdate >= OLED_INTERVAL) {
     updateOLED(gTemp, gHum, gLight, gSoil, gWater);
     lastOledUpdate = now;

@@ -43,14 +43,14 @@ TwoWire Wire;
 WiFiStub WiFi;
 SerialStub Serial;
 
-// ── Arduino core ──
+// ── Lõi Arduino ──
 unsigned long millis() { return sMillis; }
 void delay(unsigned long ms) { sMillis += ms; }
 unsigned long mockMillis() { return sMillis; }
 void mockAdvance(unsigned long ms) { sMillis += ms; }
 void mockSetMillis(unsigned long ms) { sMillis = ms; }
 
-// ── IO call-order log ──
+// ── Log thứ tự gọi IO ──
 static std::string sIoLog;
 
 static void ioLogAppend(char kind, uint8_t pin, int value) {
@@ -104,7 +104,7 @@ int esp_task_wdt_deinit() { return 0; }
 float DHT::readTemperature() { return mockDhtTemp; }
 float DHT::readHumidity() { return mockDhtHum; }
 
-// ── Servo / NeoPixel hooks ──
+// ── Hook Servo / NeoPixel ──
 void mockServoWrite(int angle) {
   mockServoAngle = angle;
   mockServoWriteCount++;
@@ -116,7 +116,7 @@ void mockNeoPixelSet(int index, uint32_t color) {
   mockPixel[index] = color;
 }
 
-// ── Serial capture ──
+// ── Ghi lại output Serial ──
 static std::string sSerialOut;
 static std::string sSerialIn;
 
@@ -146,7 +146,7 @@ const char *mockSerialOutput() { return sSerialOut.c_str(); }
 int mockSerialPending() { return (int)sSerialIn.size(); }
 void mockSerialClear() { sSerialOut.clear(); sSerialIn.clear(); }
 
-// ── WebServer mock ──
+// ── mock WebServer ──
 struct Route { std::string path; void (*fn)(); };
 static Route sRoutes[24];
 static int sRouteCount = 0;
@@ -228,7 +228,7 @@ int mockServerLastCode() { return sLastCode; }
 const char *mockServerLastType() { return sLastType.c_str(); }
 const char *mockServerLastBody() { return sLastBody.c_str(); }
 
-// ── OLED mock: one stream + per text row (setCursor y/8) ──
+// ── mock OLED: một luồng + theo từng dòng text (setCursor y/8) ──
 static std::string sOledText;
 static std::string sOledLines[8];
 static int sOledRow = 0;
@@ -259,7 +259,7 @@ const char *mockOledText() { return sOledText.c_str(); }
 const char *mockOledLine(int row) { return (row >= 0 && row < 8) ? sOledLines[row].c_str() : ""; }
 int mockOledLineCount() { return 8; }
 
-// ── Preferences mock ──
+// ── mock Preferences ──
 struct PrefEntry {
   char key[16];
   float value;

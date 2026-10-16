@@ -2,9 +2,9 @@
 #include "logger.h"
 #include "actuators.h"
 
-// All setters are idempotent: no re-write / no log spam when the state
-// does not change. This keeps controlAlerts()/controlLight() cheap even
-// though they are called on every loop iteration.
+// Mọi hàm setter đều idempotent: không ghi lại / không spam log khi trạng thái
+// không đổi. Nhờ vậy controlAlerts()/controlLight() vẫn rẻ dù
+// được gọi mỗi vòng lặp.
 
 void setRelay(bool on) {
   if (relayState == on) return;
@@ -14,8 +14,8 @@ void setRelay(bool on) {
   LOG_INFO(on ? "Pump: ON" : "Pump: OFF");
 }
 
-// Buzzer helper: active buzzers just need a digital level, passive buzzers
-// must be driven with a square wave. Idempotent like the other setters.
+// Hàm phụ buzzer: buzzer active chỉ cần mức digital, buzzer passive
+// phải được điều khiển bằng xung vuông. Idempotent như các setter khác.
 static bool sBuzzerOn = false;
 
 void setBuzzer(bool on) {
@@ -37,14 +37,14 @@ void setFan(bool on) {
   LOG_INFO(on ? "Fan: ON" : "Fan: OFF");
 }
 
-// Blue LED (pin 27) is driven by PWM so both the steady on/off mode and the
-// breathing effect share the same hardware. The two modes are mutually
-// exclusive (blueLedState vs breatheLedState); a steady command wins.
+// Blue LED (chân 27) được điều khiển bằng PWM để cả chế độ bật/tắt liên tục
+// và hiệu ứng thở dùng chung phần cứng. Hai chế độ loại trừ
+// lẫn nhau (blueLedState vs breatheLedState); lệnh sáng liên tục thắng.
 void setBlueLed(bool on) {
   if (on) {
     if (blueLedState && !breatheLedState) return;
     blueLedState = true;
-    breatheLedState = false;    // steady light wins over breathing
+    breatheLedState = false;    // đèn sáng liên tục thắng chế độ thở
     breatheBrightness = 0;
     setLedPwm(255);
   } else {
@@ -57,8 +57,8 @@ void setBlueLed(bool on) {
   LOG_INFO(on ? "Blue LED: ON" : "Blue LED: OFF");
 }
 
-// Single place that talks to the PWM peripheral (core 2.x uses a channel,
-// core 3.x uses the pin).
+// Nơi duy nhất giao tiếp với ngoại vi PWM (core 2.x dùng channel,
+// core 3.x dùng chân).
 void setLedPwm(uint8_t value) {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcWrite(BLUE_LED_PIN, value);
@@ -73,7 +73,7 @@ void setBreatheLed(bool on) {
   breatheBrightness = 0;
   breatheDirection = 1;
   if (on) {
-    blueLedState = false;       // breathing takes over the blue LED
+    blueLedState = false;       // chế độ thở tiếp quản blue LED
   } else {
     setLedPwm(0);
   }
@@ -89,7 +89,7 @@ void setRgb(uint8_t r, uint8_t g, uint8_t b) {
   MOD_DEBUG(Rgb, "RGB set");
 }
 
-// Plant growth light (activity 9): LED 1 & 3 red, LED 2 & 4 blue.
+// Đèn tăng trưởng cho cây (bài 9): LED 1 & 3 đỏ, LED 2 & 4 xanh dương.
 void setRgbPlant() {
   rgbR = 255; rgbG = 0; rgbB = 255;
   for (int i = 0; i < RGB_COUNT; i++) {

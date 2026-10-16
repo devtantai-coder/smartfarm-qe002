@@ -1,7 +1,7 @@
 #ifndef SENSORS_H
 #define SENSORS_H
 
-// Weather guess from light/humidity (activity 11)
+// Đoán thời tiết từ ánh sáng/độ ẩm (bài 11)
 enum Weather { WEATHER_NORMAL, WEATHER_SUNNY, WEATHER_CLOUDY, WEATHER_RAIN };
 
 void readAllSensors();

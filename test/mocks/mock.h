@@ -1,30 +1,30 @@
 #pragma once
-// Controllable hardware mock API for the host-side test suite.
-// The tests link the REAL firmware (SmartFarm.ino + src/*.cpp) against these
-// mocks, so every check exercises production code. See test/README.md.
+// API mock phần cứng điều khiển được cho bộ test chạy trên host.
+// Các test link firmware THẬT (SmartFarm.ino + src/*.cpp) với các
+// mock này, nên mọi kiểm tra đều chạy trên code production. Xem test/README.md.
 #include <cstdint>
 
-// ── Fake hardware state ──
-extern float mockDhtTemp, mockDhtHum;   // DHT11 readings
-extern int mockAdc[40];                 // analogRead values by pin
-extern uint8_t mockDigital[40];         // digitalRead values by pin
-extern uint32_t mockPinLevel[40];       // digitalWrite levels captured by pin
-extern int mockServoAngle;              // last servo.write() angle
-extern uint32_t mockPwm[40];            // last ledcWrite() value by channel/pin
-extern int mockBuzzerToneHz;            // tone() frequency, 0 = silent
-extern uint32_t mockPixel[8];           // NeoPixel colors written
-extern int mockWifiStatus;              // WiFi.status() result
-extern const char *mockWifiIp;          // WiFi.localIP() string
-extern bool mockDisplayBeginOk;         // display.begin() result (false = missing OLED)
+// ── Trạng thái phần cứng giả lập ──
+extern float mockDhtTemp, mockDhtHum;   // giá trị đọc từ DHT11
+extern int mockAdc[40];                 // giá trị analogRead theo chân
+extern uint8_t mockDigital[40];         // giá trị digitalRead theo chân
+extern uint32_t mockPinLevel[40];       // mức digitalWrite ghi lại theo chân
+extern int mockServoAngle;              // góc servo.write() lần cuối
+extern uint32_t mockPwm[40];            // giá trị ledcWrite() lần cuối theo kênh/chân
+extern int mockBuzzerToneHz;            // tần số tone(), 0 = im lặng
+extern uint32_t mockPixel[8];           // màu NeoPixel đã ghi
+extern int mockWifiStatus;              // kết quả WiFi.status()
+extern const char *mockWifiIp;          // chuỗi WiFi.localIP()
+extern bool mockDisplayBeginOk;         // kết quả display.begin() (false = thiếu OLED)
 
-// ── Instrumentation counters (deep tests) ──
-extern int mockDigitalWriteCount;       // digitalWrite() calls
-extern int mockLedcWriteCount;          // ledcWrite() calls
-extern int mockInvalidPixelWrites;      // setPixelColor with out-of-range index
-extern int mockInvalidPwmWrites;        // ledcWrite with out-of-range channel/pin
-extern int mockServoWriteCount;         // servo.write() calls
-extern int mockServoMinSeen;            // min angle ever written (9999 if none)
-extern int mockServoMaxSeen;            // max angle ever written (-1 if none)
+// ── Bộ đếm instrumentation (test chuyên sâu) ──
+extern int mockDigitalWriteCount;       // số lần gọi digitalWrite()
+extern int mockLedcWriteCount;          // số lần gọi ledcWrite()
+extern int mockInvalidPixelWrites;      // setPixelColor với index ngoài phạm vi
+extern int mockInvalidPwmWrites;        // ledcWrite với kênh/chân ngoài phạm vi
+extern int mockServoWriteCount;         // số lần gọi servo.write()
+extern int mockServoMinSeen;            // góc nhỏ nhất từng ghi (9999 nếu chưa có)
+extern int mockServoMaxSeen;            // góc lớn nhất từng ghi (-1 nếu chưa có)
 extern int mockToneCalls, mockNoToneCalls;
 extern int mockWifiBeginCalls, mockWifiDisconnectCalls, mockWifiReconnectCalls;
 extern int mockWdtInitCalls, mockWdtAddCalls, mockWdtResetCalls;
@@ -40,8 +40,8 @@ const char *mockSerialOutput();
 int mockSerialPending();
 void mockSerialClear();
 
-// IO call-order log for the boot-glitch regression test:
-// entries look like "W:26=1;" (digitalWrite) and "M:26;" (pinMode).
+// Log thứ tự gọi IO cho test regression lỗi glitch lúc khởi động:
+// mỗi mục có dạng "W:26=1;" (digitalWrite) và "M:26;" (pinMode).
 const char *mockIoLog();
 void mockIoLogClear();
 
@@ -57,10 +57,10 @@ const char *mockServerLastBody();
 
 // OLED
 const char *mockOledText();
-const char *mockOledLine(int row);      // captured text per 8-px text row
+const char *mockOledLine(int row);      // text ghi lại cho mỗi dòng text 8-px
 int mockOledLineCount();
 
-// Hooks implemented in mock.cpp, called from the simulation headers
+// Các hook hiện thực trong mock.cpp, được gọi từ các header mô phỏng
 void mockServoWrite(int angle);
 void mockNeoPixelSet(int index, uint32_t color);
 float mockPrefGet(const char *key, float dflt);

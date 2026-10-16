@@ -1,6 +1,6 @@
 #pragma once
-// Host-side simulation of the Arduino core API used by this project.
-// Plain PC build: no ESP32 toolchain needed. See test/README.md.
+// Mô phỏng phía host cho API lõi Arduino mà dự án này dùng.
+// Build thẳng trên PC: không cần ESP32 toolchain. Xem test/README.md.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -59,7 +59,7 @@ void ledcAttach(uint8_t, uint32_t, uint8_t);
 void tone(uint8_t, unsigned int, unsigned long = 0);
 void noTone(uint8_t);
 
-// Serial capture hooks (implemented in mock.cpp)
+// Hook ghi lại output Serial (hiện thực trong mock.cpp)
 void mockSerialWriteStr(const char *s);
 void mockSerialPrintLong(long v);
 void mockSerialPrintFloat(double v, int digits);

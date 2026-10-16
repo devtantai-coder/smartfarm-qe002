@@ -11,7 +11,7 @@
 #include <WebServer.h>
 #include <Preferences.h>
 
-// ── ESP32 core version compatibility (2.x and 3.x) ──
+// ── Tương thích phiên bản core ESP32 (2.x và 3.x) ──
 #if __has_include(<esp_arduino_version.h>)
 #include <esp_arduino_version.h>
 #endif
@@ -22,7 +22,7 @@
 #include "config.h"
 #include "logger.h"
 
-// ── System State ──
+// ── Trạng thái hệ thống ──
 extern bool pumpAuto, lightAuto, rgbAuto, fanAuto, breatheAuto;
 extern bool relayState, fanState, blueLedState, breatheLedState;
 extern bool windmillOn;
@@ -31,16 +31,16 @@ extern uint8_t breatheBrightness;
 extern int8_t breatheDirection;
 extern int servoAngle;
 
-// ── Sensor Data ──
+// ── Dữ liệu cảm biến ──
 extern float gTemp, gHum;
 extern int gLight, gSoil, gWater;
 extern bool gPir, gTouch;
 
-// ── Timing ──
+// ── Thời gian ──
 extern unsigned long lastWifiCheck, lastSensorRead, lastOledUpdate;
 extern unsigned long lastBuzzer, lastTouch, lastBreatheUpdate;
 
-// ── Hardware Objects ──
+// ── Đối tượng phần cứng ──
 extern DHT dht;
 extern Adafruit_SSD1306 display;
 extern Adafruit_NeoPixel strip;
@@ -48,7 +48,7 @@ extern Servo servo;
 extern WebServer server;
 extern Preferences preferences;
 
-// ── Sensor Health ──
+// ── Sức khỏe cảm biến ──
 extern uint8_t sensorFailCount;
 extern bool sensorHealthy;
 
