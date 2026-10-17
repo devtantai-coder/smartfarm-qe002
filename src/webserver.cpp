@@ -357,17 +357,19 @@ static uint8_t clampByte(long v) {
 // ── Bật/tắt thiết bị (thao tác thủ công sẽ tắt chế độ tự động tương ứng) ──
 void handleToggle() {
   if (!guardWeb()) return;
-  String id = server.arg("id");
-  if (id == "pump") {
+  char idBuf[16] = {0};
+  strncpy(idBuf, server.arg("id").c_str(), sizeof(idBuf) - 1);
+  const char* id = idBuf;
+  if (strcmp(id, "pump") == 0) {
     setPumpAuto(false);
     setRelay(!relayState);
-  } else if (id == "led") {
+  } else if (strcmp(id, "led") == 0) {
     setLightAuto(false);
     setBlueLed(!blueLedState);
-  } else if (id == "fan") {
+  } else if (strcmp(id, "fan") == 0) {
     setFanAuto(false);
     setFan(!fanState);
-  } else if (id == "breathe") {
+  } else if (strcmp(id, "breathe") == 0) {
     bool want = !breatheLedState;
     setBreatheAuto(false);
     setBreatheLed(want);
@@ -382,13 +384,15 @@ void handleToggle() {
 // ── Chế độ tự động ──
 void handleAuto() {
   if (!guardWeb()) return;
-  String id = server.arg("id");
+  char idBuf[16] = {0};
+  strncpy(idBuf, server.arg("id").c_str(), sizeof(idBuf) - 1);
+  const char* id = idBuf;
   bool on = server.arg("on") == "true";
-  if (id == "pump") setPumpAuto(on);
-  else if (id == "light") setLightAuto(on);
-  else if (id == "rgb") setRgbAuto(on);
-  else if (id == "fan") setFanAuto(on);
-  else if (id == "breathe") {
+  if (strcmp(id, "pump") == 0) setPumpAuto(on);
+  else if (strcmp(id, "light") == 0) setLightAuto(on);
+  else if (strcmp(id, "rgb") == 0) setRgbAuto(on);
+  else if (strcmp(id, "fan") == 0) setFanAuto(on);
+  else if (strcmp(id, "breathe") == 0) {
     setBreatheAuto(on);
     setBreatheLed(on);
   } else {
