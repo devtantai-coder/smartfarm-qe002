@@ -18,6 +18,8 @@ void saveSettings() {
   preferences.putBool("breatheAuto", breatheAuto);
   preferences.putString("wifiSsid", ssid);
   preferences.putString("wifiPass", password);
+  preferences.putString("webToken", webToken);
+  preferences.putString("otaPass", otaPassword);
   preferences.end();
   LOG_INFO("Settings saved to flash");
 }
@@ -45,6 +47,16 @@ void loadSettings() {
   if (savedPass.length() > 0) {
     savedPass.toCharArray(password, sizeof(password));
   }
+
+  // Mã bảo mật: ưu tiên giá trị đã lưu, fallback về compile-time
+  String savedToken = preferences.getString("webToken", "");
+  String savedOtaPass = preferences.getString("otaPass", "");
+  if (savedToken.length() > 0) {
+    savedToken.toCharArray(webToken, sizeof(webToken));
+  }
+  if (savedOtaPass.length() > 0) {
+    savedOtaPass.toCharArray(otaPassword, sizeof(otaPassword));
+  }
   preferences.end();
   LOG_INFO("Settings loaded from flash");
 }
@@ -68,6 +80,11 @@ void resetSettings() {
   ssid[sizeof(ssid) - 1] = '\0';
   strncpy(password, "YOUR_WIFI_PASSWORD", sizeof(password) - 1);
   password[sizeof(password) - 1] = '\0';
+  strncpy(webToken, WEB_TOKEN, sizeof(webToken) - 1);
+  webToken[sizeof(webToken) - 1] = '\0';
+  strncpy(otaPassword, OTA_PASSWORD, sizeof(otaPassword) - 1);
+  otaPassword[sizeof(otaPassword) - 1] = '\0';
   gLastNonce = 0;
+  gNeedRestart = false;
   LOG_INFO("Settings reset to defaults");
 }

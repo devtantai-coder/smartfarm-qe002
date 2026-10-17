@@ -278,7 +278,7 @@ static bool guardWeb() {
       return false;
     }
   }
-  if (WEB_TOKEN[0] != '\0') {
+  if (webToken[0] != '\0') {
     char token[64];
     if (server.hasHeader("X-Auth-Token")) {
       strncpy(token, server.header("X-Auth-Token").c_str(), sizeof(token) - 1);
@@ -288,7 +288,7 @@ static bool guardWeb() {
       token[0] = '\0';
     }
     token[sizeof(token) - 1] = '\0';
-    if (strcmp(token, WEB_TOKEN) != 0) {
+    if (strcmp(token, webToken) != 0) {
       server.send(401, "text/plain", "unauthorized");
       return false;
     }
@@ -523,6 +523,5 @@ void handleWifi() {
   }
   saveSettings();
   server.send(200, "text/plain", "ok");
-  delay(500);
-  ESP.restart();
+  gNeedRestart = true;
 }

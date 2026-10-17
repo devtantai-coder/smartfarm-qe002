@@ -142,7 +142,7 @@ void setup() {
 
   // OTA: cập nhật firmware qua mạng (Arduino IDE / web upload)
   ArduinoOTA.setHostname("smartfarm");
-  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.setPassword(otaPassword);
   ArduinoOTA.onStart([]() {
     Serial.println(F("OTA: start"));
   });
@@ -193,6 +193,12 @@ void loop() {
   server.handleClient();
   ArduinoOTA.handle();
   manageWiFi();
+
+  // Khởi động lại sau khi lưu cài đặt WiFi/mật khẩu (chờ phản hồi HTTP xong)
+  if (gNeedRestart) {
+    delay(100);
+    ESP.restart();
+  }
 
   // Nhập lệnh debug qua Serial
   if (Serial.available() > 0) {

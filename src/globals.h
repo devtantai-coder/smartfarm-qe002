@@ -52,7 +52,14 @@ extern Preferences preferences;
 extern uint8_t sensorFailCount;
 extern bool sensorHealthy;
 
+// ── Mã bảo mật (lưu trong Preferences, fallback về compile-time) ──
+extern char webToken[64];
+extern char otaPassword[64];
+
 // ── Chống replay ──
 extern uint32_t gLastNonce;
+
+// ── Cờ khởi động lại sau khi lưu cài đặt ──
+extern bool gNeedRestart;
 
 #endif

@@ -30,5 +30,12 @@ Preferences preferences;
 uint8_t sensorFailCount = 0;
 bool sensorHealthy = true;
 
+// ── Mã bảo mật (khởi tạo từ macro compile-time, có thể ghi đè từ Preferences) ──
+char webToken[64] = WEB_TOKEN;
+char otaPassword[64] = OTA_PASSWORD;
+
 // ── Chống replay ──
 uint32_t gLastNonce = 0;
+
+// ── Cờ khởi động lại ──
+bool gNeedRestart = false;
