@@ -41,6 +41,11 @@ public:
   bool operator!=(const String &o) const { return s_ != o.s_; }
   bool startsWith(const char *o) const { return s_.rfind(o ? o : "", 0) == 0; }
   bool startsWith(const String &o) const { return s_.rfind(o.s_, 0) == 0; }
+  void toCharArray(char *buf, unsigned bufsize) const {
+    unsigned n = s_.size() < bufsize - 1 ? s_.size() : bufsize - 1;
+    memcpy(buf, s_.data(), n);
+    buf[n] = '\0';
+  }
   const std::string &std_str() const { return s_; }
 private:
   std::string s_;
@@ -104,3 +109,9 @@ struct TwoWire {
   void begin(int, int) {}
 };
 extern TwoWire Wire;
+
+class ESPClass {
+public:
+  static void restart() {}
+};
+extern ESPClass ESP;

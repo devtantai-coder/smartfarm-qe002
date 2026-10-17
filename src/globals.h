@@ -52,4 +52,7 @@ extern Preferences preferences;
 extern uint8_t sensorFailCount;
 extern bool sensorHealthy;
 
+// ── Chống replay ──
+extern uint32_t gLastNonce;
+
 #endif

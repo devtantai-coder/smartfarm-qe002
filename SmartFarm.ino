@@ -35,6 +35,9 @@ static void handleFavicon() {
   server.send(204, "text/plain", "");
 }
 
+// ── Cấu hình WiFi động (định nghĩa trong webserver.cpp) ──
+void handleWifi();
+
 static void printDebugMenu() {
   Serial.println(F("\n=== SMART FARM DEBUG MENU ==="));
   Serial.println(F(" 1:Sensors  2:Actuators  3:Control"));
@@ -139,6 +142,7 @@ void setup() {
 
   // OTA: cập nhật firmware qua mạng (Arduino IDE / web upload)
   ArduinoOTA.setHostname("smartfarm");
+  ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.onStart([]() {
     Serial.println(F("OTA: start"));
   });
@@ -172,6 +176,7 @@ void setup() {
   server.on("/feed", handleFeed);
   server.on("/demo", handleDemo);
   server.on("/threshold", handleThreshold);
+  server.on("/wifi", handleWifi);
   server.on("/favicon.ico", handleFavicon);
   // WebServer chỉ giữ các header đã đăng ký (mặc định chỉ vài header trình duyệt);
   // phải khai báo để guardWeb() đọc được Origin/Referer/Sec-Fetch-Site/X-Auth-Token.

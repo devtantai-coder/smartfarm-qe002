@@ -4,8 +4,8 @@
 #include <Arduino.h>
 
 // ── WiFi ──
-extern const char *ssid;
-extern const char *password;
+extern char ssid[32];
+extern char password[64];
 
 // ── Sơ đồ chân GPIO ──
 #define DHT_PIN          23
@@ -99,6 +99,18 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 //   http://<ip-thiết-bị>/?token=MAT-KHAU-CUA-BAN
 #ifndef WEB_TOKEN
 #define WEB_TOKEN ""
+#endif
+
+// ── Mật khẩu OTA (cập nhật firmware từ xa) ──
+// Để trống "" = không yêu cầu password (chỉ nên dùng trong mạng gia đình tin cậy).
+#ifndef OTA_PASSWORD
+#define OTA_PASSWORD ""
+#endif
+
+// ── Chống replay (1 = yêu cầu nonce cho mọi lệnh đổi trạng thái) ──
+// Khi bật, client phải lấy nonce từ /api rồi gửi kèm mỗi lệnh. Lệnh cũ sẽ bị chặn.
+#ifndef ANTI_REPLAY
+#define ANTI_REPLAY 0
 #endif
 
 #endif

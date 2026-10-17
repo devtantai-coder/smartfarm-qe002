@@ -4,6 +4,7 @@
 class ArduinoOTAClass {
 public:
   void setHostname(const char*) {}
+  void setPassword(const char*) {}
   void onStart(void (*fn)()) {}
   void onEnd(void (*fn)()) {}
   void onProgress(void (*fn)(unsigned int, unsigned int)) {}

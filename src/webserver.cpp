@@ -182,12 +182,19 @@ header h1 span{color:var(--primary);font-weight:800}
 </div>
 <script>
 const TOKEN=new URLSearchParams(location.search).get('token')||'';
-function api(u){return TOKEN?(u+(u.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(TOKEN)):u}
+let NONCE=0;
+function api(u){
+  let sep=u.indexOf('?')>=0?'&':'?';
+  u=u+sep+'token='+encodeURIComponent(TOKEN);
+  if(NONCE>0)u=u+'&nonce='+NONCE;
+  return u
+}
 async function fetchData(){
 try{
 const r=await fetch('/api');
 const d=await r.json();
 window.__sf=d;
+NONCE=d.nonce??0;
 document.getElementById('valTemp').textContent=d.temp?.toFixed(1)??'--';
 document.getElementById('valHum').textContent=d.hum?.toFixed(1)??'--';
 document.getElementById('valLight').textContent=d.light??'--';
@@ -286,6 +293,22 @@ static bool guardWeb() {
       return false;
     }
   }
+
+#if ANTI_REPLAY
+  // Chống replay: yêu cầu nonce lớn hơn lần dùng cuối cùng.
+  char nonceStr[16] = {0};
+  if (server.hasArg("nonce")) {
+    strncpy(nonceStr, server.arg("nonce").c_str(), sizeof(nonceStr) - 1);
+    nonceStr[sizeof(nonceStr) - 1] = '\0';
+  }
+  uint32_t nonce = (uint32_t)strtoul(nonceStr, nullptr, 10);
+  if (nonce == 0 || nonce <= gLastNonce) {
+    server.send(403, "text/plain", "replay");
+    return false;
+  }
+  gLastNonce = nonce;
+#endif
+
   return true;
 }
 
@@ -309,7 +332,7 @@ void handleApi() {
            "\"weather\":%d,\"pir\":%s,\"touch\":%s,\"relay\":%s,\"fan\":%s,"
            "\"led\":%s,\"breathe\":%s,\"windmill\":%s,\"feed\":%s,\"demo\":%s,"
            "\"demoStep\":\"%s\",\"pumpAuto\":%s,\"lightAuto\":%s,\"rgbAuto\":%s,"
-           "\"fanAuto\":%s,\"breatheAuto\":%s}",
+           "\"fanAuto\":%s,\"breatheAuto\":%s,\"nonce\":%u}",
            (double)gTemp, (double)gHum, (int)gLight, (int)gSoil, (int)gWater,
            (int)weatherStatus(),
            gPir ? "true" : "false", gTouch ? "true" : "false",
@@ -320,7 +343,7 @@ void handleApi() {
            demoRunning() ? demoStepName() : "",
            pumpAuto ? "true" : "false", lightAuto ? "true" : "false",
            rgbAuto ? "true" : "false", fanAuto ? "true" : "false",
-           breatheAuto ? "true" : "false");
+           breatheAuto ? "true" : "false", gLastNonce + 1);
 
   server.send(200, "application/json", buf);
 }
@@ -478,4 +501,28 @@ void handleThreshold() {
   saveSettings();
   LOG_INFO("Thresholds updated from web");
   server.send(200, "text/plain", "ok");
+}
+
+// ── Cấu hình WiFi động (lưu vào Preferences, khởi động lại để áp dụng) ──
+void handleWifi() {
+  if (!guardWeb()) return;
+  bool changed = false;
+  if (server.hasArg("ssid")) {
+    strncpy(ssid, server.arg("ssid").c_str(), sizeof(ssid) - 1);
+    ssid[sizeof(ssid) - 1] = '\0';
+    changed = true;
+  }
+  if (server.hasArg("password")) {
+    strncpy(password, server.arg("password").c_str(), sizeof(password) - 1);
+    password[sizeof(password) - 1] = '\0';
+    changed = true;
+  }
+  if (!changed) {
+    server.send(400, "text/plain", "no params");
+    return;
+  }
+  saveSettings();
+  server.send(200, "text/plain", "ok");
+  delay(500);
+  ESP.restart();
 }

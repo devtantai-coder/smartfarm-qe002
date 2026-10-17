@@ -343,6 +343,46 @@ void mockPrefPut(const char *key, float value) {
   }
 }
 
+// ── mock Preferences (string) ──
+struct StrPrefEntry {
+  char key[16];
+  char value[64];
+  bool used;
+};
+static StrPrefEntry sStrPrefs[16];
+
+const char *mockPrefGetStr(const char *key, const char *dflt) {
+  for (int i = 0; i < 16; i++) {
+    if (sStrPrefs[i].used && strcmp(sStrPrefs[i].key, key) == 0) return sStrPrefs[i].value;
+  }
+  return dflt;
+}
+
+void mockPrefPutStr(const char *key, const char *value) {
+  for (int i = 0; i < 16; i++) {
+    if (sStrPrefs[i].used && strcmp(sStrPrefs[i].key, key) == 0) {
+      strncpy(sStrPrefs[i].value, value, sizeof(sStrPrefs[i].value) - 1);
+      sStrPrefs[i].value[sizeof(sStrPrefs[i].value) - 1] = '\0';
+      return;
+    }
+  }
+  for (int i = 0; i < 16; i++) {
+    if (!sStrPrefs[i].used) {
+      strncpy(sStrPrefs[i].key, key, sizeof(sStrPrefs[i].key) - 1);
+      sStrPrefs[i].key[sizeof(sStrPrefs[i].key) - 1] = '\0';
+      strncpy(sStrPrefs[i].value, value, sizeof(sStrPrefs[i].value) - 1);
+      sStrPrefs[i].value[sizeof(sStrPrefs[i].value) - 1] = '\0';
+      sStrPrefs[i].used = true;
+      return;
+    }
+  }
+}
+
+void mockPrefClear() {
+  for (int i = 0; i < 24; i++) sPrefs[i].used = false;
+  for (int i = 0; i < 16; i++) sStrPrefs[i].used = false;
+}
+
 void mockReset() {
   sMillis = 0;
   mockDhtTemp = 25.0f;

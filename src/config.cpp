@@ -1,8 +1,8 @@
 #include "config.h"
 
 // ── WiFi ──
-const char *ssid = "YOUR_WIFI_SSID";
-const char *password = "YOUR_WIFI_PASSWORD";
+char ssid[32] = "YOUR_WIFI_SSID";
+char password[64] = "YOUR_WIFI_PASSWORD";
 
 // ── Ngưỡng ──
 float soilThresholdLow  = 400.0f;

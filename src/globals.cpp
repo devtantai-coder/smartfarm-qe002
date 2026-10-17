@@ -29,3 +29,6 @@ Preferences preferences;
 // ── Sức khỏe ──
 uint8_t sensorFailCount = 0;
 bool sensorHealthy = true;
+
+// ── Chống replay ──
+uint32_t gLastNonce = 0;

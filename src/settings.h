@@ -3,5 +3,6 @@
 
 void saveSettings();
 void loadSettings();
+void resetSettings();
 
 #endif

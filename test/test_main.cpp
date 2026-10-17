@@ -734,7 +734,7 @@ static void testInoBoot() {
   mockSerialClear();
   mockServerReset();
   setup();
-  CHECK_EQ(mockServerRouteCount(), 14);
+  CHECK_EQ(mockServerRouteCount(), 15);
   const char *routes[] = {"/", "/api", "/toggle", "/auto", "/rgb", "/servo", "/breathe",
                           "/on", "/off", "/windmill", "/feed", "/demo", "/threshold", "/favicon.ico"};
   for (const char *r : routes) CHECK(mockServerHasRoute(r));
@@ -1044,7 +1044,8 @@ static const ApiKey API_KEYS[] = {
   {"temp", 'n'}, {"hum", 'n'}, {"light", 'n'}, {"soil", 'n'}, {"water", 'n'}, {"weather", 'n'},
   {"pir", 'b'}, {"touch", 'b'}, {"relay", 'b'}, {"fan", 'b'}, {"led", 'b'}, {"breathe", 'b'},
   {"windmill", 'b'}, {"feed", 'b'}, {"demo", 'b'}, {"demoStep", 's'},
-  {"pumpAuto", 'b'}, {"lightAuto", 'b'}, {"rgbAuto", 'b'}, {"fanAuto", 'b'}, {"breatheAuto", 'b'}
+  {"pumpAuto", 'b'}, {"lightAuto", 'b'}, {"rgbAuto", 'b'}, {"fanAuto", 'b'}, {"breatheAuto", 'b'},
+  {"nonce", 'n'}
 };
 static const int API_KEY_COUNT = (int)(sizeof(API_KEYS) / sizeof(API_KEYS[0]));
 
@@ -1528,7 +1529,7 @@ static void testBootOrder() {
 
   CHECK(mockWdtInitCalls >= 1);
   CHECK_EQ(mockWdtAddCalls, 1);
-  CHECK_EQ(mockServerRouteCount(), 14);
+  CHECK_EQ(mockServerRouteCount(), 15);
 }
 
 // D12: settings sống sót qua chu kỳ nguồn mô phỏng
@@ -1551,7 +1552,7 @@ static void testRebootPersistence() {
   rgbR = rgbG = rgbB = 0;
   setup();
 
-  CHECK_EQ(mockServerRouteCount(), 14);
+  CHECK_EQ(mockServerRouteCount(), 15);
   CHECK_NEAR(soilThresholdLow, 1234, 0.01);
   CHECK_NEAR(soilThresholdHigh, 1284, 0.01);
   CHECK(!pumpAuto);
@@ -1958,7 +1959,7 @@ static void testBootDegraded() {
   mockSerialClear();
   setup();
 
-  CHECK_EQ(mockServerRouteCount(), 14);              // route vẫn được đăng ký
+  CHECK_EQ(mockServerRouteCount(), 15);              // route vẫn được đăng ký
   CHECK(has(mockSerialOutput(), "MA LOI: 101"));     // không tìm thấy OLED
   CHECK(has(mockSerialOutput(), "MA LOI: 102"));     // WiFi timeout
   CHECK(mockWdtResetCalls >= 100);                   // watchdog được feed trong lúc chờ
