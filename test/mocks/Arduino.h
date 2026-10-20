@@ -105,8 +105,16 @@ struct SerialStub {
 };
 extern SerialStub Serial;
 
+// Hook đếm giao dịch I2C (mock.cpp): tách byte lệnh (write(uint8_t)) và
+// byte dữ liệu (write(buffer)) để test kiểm tra cơ chế cập nhật delta của OLED.
+extern int mockI2cCmdBytes, mockI2cDataBytes, mockI2cTransactions;
+
 struct TwoWire {
-  void begin(int, int) {}
+  void begin(int, int, unsigned long = 0) {}
+  void beginTransmission(uint8_t) {}
+  void write(uint8_t) { mockI2cCmdBytes++; }
+  void write(const uint8_t *, size_t n) { mockI2cDataBytes += (int)n; }
+  uint8_t endTransmission() { mockI2cTransactions++; return 0; }
 };
 extern TwoWire Wire;
 

@@ -1,16 +1,7 @@
 #include "config.h"
 
-// ── WiFi ──
-char ssid[32] = "YOUR_WIFI_SSID";
-char password[64] = "YOUR_WIFI_PASSWORD";
-
-// ── Ngưỡng ──
-float soilThresholdLow  = 400.0f;
-float soilThresholdHigh = 700.0f;
-float waterThresholdLow = 200.0f;
-int   lightThreshold    = 500;
-float tempThresholdHigh = 30.0f;
-float tempThresholdLow  = 25.0f;
+// Các giá trị cấu hình có thể thay đổi lúc chạy (WiFi, ngưỡng, mã bảo mật)
+// nằm trong SystemState — xem src/globals.h / globals.cpp.
 
 // ── Thời gian ──
 const unsigned long WIFI_CONNECT_TIMEOUT = 30000;
@@ -21,5 +12,4 @@ const unsigned long TOUCH_DEBOUNCE      = 300;
 const unsigned long BREATHE_INTERVAL    = 30;
 const unsigned long WINDMILL_INTERVAL   = 30;    // bước quét servo (activity 6)
 const unsigned long FEED_DURATION       = 2000;  // thời gian mở cửa máng ăn (activity 10)
-
-
+const unsigned long RESTART_DELAY_MS    = 200;   // chờ HTTP trả lời xong rồi mới restart

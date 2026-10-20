@@ -3,9 +3,8 @@
 
 #include <Arduino.h>
 
-// ── WiFi ──
-extern char ssid[32];
-extern char password[64];
+// WiFi, ngưỡng điều khiển và mã bảo mật là các trường của SystemState
+// (xem src/globals.h) — không khai báo biến rời ở đây nữa.
 
 // ── Sơ đồ chân GPIO ──
 #define DHT_PIN          23
@@ -26,16 +25,9 @@ extern char password[64];
 #define OLED_SDA         21
 #define OLED_SCL         22
 #define OLED_RESET       -1
+#define OLED_I2C_ADDR    0x3C    // địa chỉ I2C chuẩn của module SSD1306 128x64
 #define SCREEN_WIDTH     128
 #define SCREEN_HEIGHT    64
-
-// ── Ngưỡng điều khiển ──
-extern float soilThresholdLow;
-extern float soilThresholdHigh;
-extern float waterThresholdLow;
-extern int   lightThreshold;
-extern float tempThresholdHigh;
-extern float tempThresholdLow;
 
 // ── Thời gian (ms) ──
 extern const unsigned long WIFI_CONNECT_TIMEOUT;
@@ -46,6 +38,7 @@ extern const unsigned long TOUCH_DEBOUNCE;
 extern const unsigned long BREATHE_INTERVAL;
 extern const unsigned long WINDMILL_INTERVAL;
 extern const unsigned long FEED_DURATION;
+extern const unsigned long RESTART_DELAY_MS;   // trễ trước khi ESP.restart() sau khi lưu WiFi
 
 // ── Lọc cảm biến ──
 constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
@@ -93,8 +86,9 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 #endif
 
 // ── Bảo vệ web ──
-// Token tùy chọn cho các lệnh đổi trạng thái (bật/tắt, chỉnh ngưỡng...).
+// Token tùy chọn cho các lệnh đổi trạng thái và /api (bật/tắt, chỉnh ngưỡng...).
 // Để trống "" = không yêu cầu token (chỉ nên dùng trong mạng gia đình tin cậy).
+// Token chỉ nằm ở firmware (compile-time), KHÔNG ghi plaintext vào NVS/flash.
 // Đặt token rồi nạp lại firmware; mở web kèm token một lần để trang tự nhớ:
 //   http://<ip-thiết-bị>/?token=MAT-KHAU-CUA-BAN
 #ifndef WEB_TOKEN
@@ -102,6 +96,7 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 #endif
 
 // ── Mật khẩu OTA (cập nhật firmware từ xa) ──
+// Chỉ nằm ở firmware (compile-time), không ghi vào NVS.
 // Để trống "" = không yêu cầu password (chỉ nên dùng trong mạng gia đình tin cậy).
 #ifndef OTA_PASSWORD
 #define OTA_PASSWORD ""

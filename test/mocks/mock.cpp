@@ -37,6 +37,9 @@ int mockServoMinSeen = 9999;
 int mockServoMaxSeen = -1;
 int mockToneCalls = 0, mockNoToneCalls = 0;
 int mockWifiBeginCalls = 0, mockWifiDisconnectCalls = 0, mockWifiReconnectCalls = 0;
+int mockWifiPersistentCalls = 0, mockWifiSleepDisableCalls = 0;
+int mockI2cCmdBytes = 0, mockI2cDataBytes = 0, mockI2cTransactions = 0;
+int mockStripShowCount = 0;
 int mockWdtInitCalls = 0, mockWdtAddCalls = 0, mockWdtResetCalls = 0;
 
 TwoWire Wire;
@@ -201,6 +204,12 @@ void WebServer::send(int code, const char *type, const String &body) {
   sLastCode = code; sLastType = type ? type : ""; sLastBody = body.std_str();
 }
 void WebServer::send(int code) { sLastCode = code; sLastType.clear(); sLastBody.clear(); }
+// Ghi body thô kiểu send(code,type,"") + setContentLength + sendContent:
+// send() xoá body cũ, sendContent() nối phần thân vào sau.
+void WebServer::setContentLength(size_t length) { (void)length; }
+void WebServer::sendContent(const char *content, size_t length) {
+  if (content && length) sLastBody.append(content, length);
+}
 void WebServer::send_P(int code, const char *type, const char *body) { send(code, type, body); }
 void WebServer::sendHeader(const char *name, const char *value) { (void)name; (void)value; }
 
@@ -286,18 +295,35 @@ const char *mockServerLastBody() { return sLastBody.c_str(); }
 static std::string sOledText;
 static std::string sOledLines[8];
 static int sOledRow = 0;
+// Framebuffer giả 1024 byte: mỗi page 128 byte giữ hash nội dung dòng text
+// tương ứng (page = dòng text 8-px) để updateOLED() diff từng page giống
+// phần cứng thật — page nào đổi thì chỉ page đó được gửi qua I2C.
+static uint8_t sOledBuf[128 * 64 / 8];
+
+static void oledSyncBuffer() {
+  memset(sOledBuf, 0, sizeof(sOledBuf));
+  for (int row = 0; row < 8; row++) {
+    uint32_t h = 2166136261u;
+    for (char c : sOledLines[row]) { h ^= (uint8_t)c; h *= 16777619u; }
+    memcpy(sOledBuf + row * 128, &h, sizeof(h));
+  }
+}
 
 static void oledAppend(const std::string &s) {
   sOledText += s;
   sOledLines[sOledRow] += s;
+  oledSyncBuffer();
 }
 
 bool Adafruit_SSD1306::begin(int, int) { return mockDisplayBeginOk; }
+
+uint8_t *Adafruit_SSD1306::getBuffer() { return sOledBuf; }
 
 void Adafruit_SSD1306::clearDisplay() {
   sOledText.clear();
   for (int i = 0; i < 8; i++) sOledLines[i].clear();
   sOledRow = 0;
+  oledSyncBuffer();
 }
 void Adafruit_SSD1306::setCursor(int, int y) {
   sOledRow = y / 8;
@@ -408,6 +434,9 @@ void mockReset() {
   mockServoMaxSeen = -1;
   mockToneCalls = mockNoToneCalls = 0;
   mockWifiBeginCalls = mockWifiDisconnectCalls = mockWifiReconnectCalls = 0;
+  mockWifiPersistentCalls = mockWifiSleepDisableCalls = 0;
+  mockI2cCmdBytes = mockI2cDataBytes = mockI2cTransactions = 0;
+  mockStripShowCount = 0;
   mockWdtInitCalls = mockWdtAddCalls = mockWdtResetCalls = 0;
 
   sSerialOut.clear();

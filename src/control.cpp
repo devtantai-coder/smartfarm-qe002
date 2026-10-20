@@ -15,24 +15,24 @@ static bool sPrevTouch = false;   // trạng thái chạm lần trước (chốn
 void controlPump() {
   // An toàn là trên hết, kể cả chế độ thủ công (bài 8): chạy bơm khô
   // sẽ làm hỏng bơm, nên nước thấp luôn buộc tắt bơm.
-  if (gWater < (int)waterThresholdLow) {
-    if (relayState) {
+  if (sys.gWater < (int)sys.waterThresholdLow) {
+    if (sys.relayState) {
       setRelay(false);
       LOG_ERROR_CODE(201, "Low water, pump OFF");
     }
     return;
   }
 
-  if (!pumpAuto) return;
+  if (!sys.pumpAuto) return;
 
   // Chống ngưỡng bị đảo (sẽ làm relay đóng ngắt liên tục)
-  if (soilThresholdHigh <= soilThresholdLow) return;
+  if (sys.soilThresholdHigh <= sys.soilThresholdLow) return;
 
   // Hysteresis: bật khi dưới ngưỡng thấp, tắt khi trên ngưỡng cao
-  if (gSoil < (int)soilThresholdLow && !relayState) {
+  if (sys.gSoil < (int)sys.soilThresholdLow && !sys.relayState) {
     setRelay(true);
     LOG_INFO("Soil dry, pump ON [202]");
-  } else if (gSoil > (int)soilThresholdHigh && relayState) {
+  } else if (sys.gSoil > (int)sys.soilThresholdHigh && sys.relayState) {
     setRelay(false);
     LOG_INFO("Soil wet, pump OFF [203]");
   }
@@ -40,14 +40,14 @@ void controlPump() {
 
 // ── Quạt: hysteresis theo nhiệt độ ──
 void controlFan() {
-  if (!fanAuto) return;
+  if (!sys.fanAuto) return;
 
   // Chống ngưỡng bị đảo (sẽ làm relay đóng ngắt liên tục)
-  if (tempThresholdHigh <= tempThresholdLow) return;
+  if (sys.tempThresholdHigh <= sys.tempThresholdLow) return;
 
-  if (gTemp > tempThresholdHigh && !fanState) {
+  if (sys.gTemp > sys.tempThresholdHigh && !sys.fanState) {
     setFan(true);
-  } else if (gTemp < tempThresholdLow && fanState) {
+  } else if (sys.gTemp < sys.tempThresholdLow && sys.fanState) {
     setFan(false);
   }
 }
@@ -56,10 +56,10 @@ void controlFan() {
 // Blue LED dùng chung với hiệu ứng thở, PIR và điều khiển thủ công:
 // bỏ qua điều khiển tự động khi một trong số đó đang giữ LED, để tránh tranh nhau.
 void controlLight() {
-  if (!lightAuto || breatheLedState || gPir) return;
-  if (gLight < (lightThreshold - 50) && !blueLedState) {
+  if (!sys.lightAuto || sys.breatheLedState || sys.gPir) return;
+  if (sys.gLight < (sys.lightThreshold - 50) && !sys.blueLedState) {
     setBlueLed(true);
-  } else if (gLight > (lightThreshold + 50) && blueLedState) {
+  } else if (sys.gLight > (sys.lightThreshold + 50) && sys.blueLedState) {
     setBlueLed(false);
   }
 }
@@ -68,11 +68,11 @@ void controlLight() {
 // Không lưu trạng thái: so sánh với màu RGB thực tế nên màu thủ công
 // không bao giờ bị bỏ quên khi bật lại chế độ tự động.
 void controlRgb() {
-  if (!rgbAuto) return;
-  bool isDark = gLight < (lightThreshold - 50);
-  bool isBright = gLight > (lightThreshold + 50);
-  bool plantOn = (rgbR == 255 && rgbG == 0 && rgbB == 255);
-  bool rgbOff = (rgbR == 0 && rgbG == 0 && rgbB == 0);
+  if (!sys.rgbAuto) return;
+  bool isDark = sys.gLight < (sys.lightThreshold - 50);
+  bool isBright = sys.gLight > (sys.lightThreshold + 50);
+  bool plantOn = (sys.rgbR == 255 && sys.rgbG == 0 && sys.rgbB == 255);
+  bool rgbOff = (sys.rgbR == 0 && sys.rgbG == 0 && sys.rgbB == 0);
   if (isDark && !plantOn) {
     setRgbPlant();
   } else if (isBright && !rgbOff) {
@@ -80,52 +80,52 @@ void controlRgb() {
   }
 }
 
-// ── LED thở: tăng giảm PWM mượt trong khi breatheLedState bật ──
+// ── LED thở: tăng giảm PWM mượt trong khi sys.breatheLedState bật ──
 void controlBreathe() {
-  if (!breatheLedState) {
-    if (breatheBrightness != 0) {
-      breatheBrightness = 0;
+  if (!sys.breatheLedState) {
+    if (sys.breatheBrightness != 0) {
+      sys.breatheBrightness = 0;
       setLedPwm(0);
     }
     return;
   }
 
   unsigned long now = millis();
-  if (now - lastBreatheUpdate < BREATHE_INTERVAL) return;
-  lastBreatheUpdate = now;
+  if (now - sys.lastBreatheUpdate < BREATHE_INTERVAL) return;
+  sys.lastBreatheUpdate = now;
 
-  int16_t next = (int16_t)breatheBrightness + (int16_t)breatheDirection * 5;
+  int16_t next = (int16_t)sys.breatheBrightness + (int16_t)sys.breatheDirection * 5;
   if (next >= 255) {
     next = 255;
-    breatheDirection = -1;
+    sys.breatheDirection = -1;
   } else if (next <= 0) {
     next = 0;
-    breatheDirection = 1;
+    sys.breatheDirection = 1;
   }
-  breatheBrightness = (uint8_t)next;
-  setLedPwm(breatheBrightness);
+  sys.breatheBrightness = (uint8_t)next;
+  setLedPwm(sys.breatheBrightness);
 }
 
 // ── Chạm: bật/tắt blue LED thủ công, mỗi lần nhấn đổi một lần (bài 4) ──
 void controlTouch() {
-  if (gTouch && !sPrevTouch) {
+  if (sys.gTouch && !sPrevTouch) {
     unsigned long now = millis();
-    if (now - lastTouch >= TOUCH_DEBOUNCE) {
-      if (lightAuto) {  // thao tác thủ công tắt auto để tránh tranh nhau
-        lightAuto = false;
+    if (now - sys.lastTouch >= TOUCH_DEBOUNCE) {
+      if (sys.lightAuto) {  // thao tác thủ công tắt auto để tránh tranh nhau
+        sys.lightAuto = false;
         saveSettings();
       }
-      setBlueLed(!blueLedState);
-      lastTouch = now;
+      setBlueLed(!sys.blueLedState);
+      sys.lastTouch = now;
       LOG_INFO("Touch: LED toggle");
     }
   }
-  sPrevTouch = gTouch;
+  sPrevTouch = sys.gTouch;
 }
 
 // ── Cảnh báo: buzzer liên tục khi nước thấp (ưu tiên) + đèn đêm PIR ──
 void controlAlerts() {
-  if (gWater < (int)waterThresholdLow) {
+  if (sys.gWater < (int)sys.waterThresholdLow) {
     setBuzzer(true);
     if (!sWaterAlarm) {
       sWaterAlarm = true;
@@ -142,16 +142,16 @@ void controlAlerts() {
   // Cảnh báo ghi nhớ nó có phải thứ đã bật LED không, nên đèn đang sáng
   // (thủ công hay tự động) không bị người đi qua tắt mất. Khi hết
   // chuyển động, chế độ thở đã bật trước đó (bài 3) được khôi phục.
-  if (gPir && !sMotionAlarm) {
+  if (sys.gPir && !sMotionAlarm) {
     sMotionAlarm = true;
-    sPirLitLed = !blueLedState;
+    sPirLitLed = !sys.blueLedState;
     if (sPirLitLed) setBlueLed(true);
     LOG_ERROR_CODE(301, "Motion detected");
-  } else if (!gPir && sMotionAlarm) {
+  } else if (!sys.gPir && sMotionAlarm) {
     sMotionAlarm = false;
     if (sPirLitLed) {
       sPirLitLed = false;
-      if (breatheAuto) setBreatheLed(true);
+      if (sys.breatheAuto) setBreatheLed(true);
       else setBlueLed(false);
     }
   }
@@ -163,8 +163,8 @@ static int8_t sWindmillDir = 1;
 static unsigned long sWindmillUpdate = 0;
 
 void setWindmill(bool on) {
-  if (windmillOn == on) return;
-  windmillOn = on;
+  if (sys.windmillOn == on) return;
+  sys.windmillOn = on;
   if (on) {
     stopFeed();             // servo dùng chung
   } else {
@@ -174,7 +174,7 @@ void setWindmill(bool on) {
 }
 
 void controlWindmill() {
-  if (!windmillOn) return;
+  if (!sys.windmillOn) return;
   unsigned long now = millis();
   if (now - sWindmillUpdate < WINDMILL_INTERVAL) return;
   sWindmillUpdate = now;

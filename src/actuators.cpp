@@ -7,8 +7,8 @@
 // được gọi mỗi vòng lặp.
 
 void setRelay(bool on) {
-  if (relayState == on) return;
-  relayState = on;
+  if (sys.relayState == on) return;
+  sys.relayState = on;
   bool level = RELAY_ACTIVE_LOW ? !on : on;
   digitalWrite(RELAY_PIN, level ? HIGH : LOW);
   LOG_INFO(on ? "Pump: ON" : "Pump: OFF");
@@ -31,27 +31,27 @@ void setBuzzer(bool on) {
 }
 
 void setFan(bool on) {
-  if (fanState == on) return;
-  fanState = on;
+  if (sys.fanState == on) return;
+  sys.fanState = on;
   digitalWrite(FAN_PIN, on ? HIGH : LOW);
   LOG_INFO(on ? "Fan: ON" : "Fan: OFF");
 }
 
 // Blue LED (chân 27) được điều khiển bằng PWM để cả chế độ bật/tắt liên tục
 // và hiệu ứng thở dùng chung phần cứng. Hai chế độ loại trừ
-// lẫn nhau (blueLedState vs breatheLedState); lệnh sáng liên tục thắng.
+// lẫn nhau (sys.blueLedState vs sys.breatheLedState); lệnh sáng liên tục thắng.
 void setBlueLed(bool on) {
   if (on) {
-    if (blueLedState && !breatheLedState) return;
-    blueLedState = true;
-    breatheLedState = false;    // đèn sáng liên tục thắng chế độ thở
-    breatheBrightness = 0;
+    if (sys.blueLedState && !sys.breatheLedState) return;
+    sys.blueLedState = true;
+    sys.breatheLedState = false;    // đèn sáng liên tục thắng chế độ thở
+    sys.breatheBrightness = 0;
     setLedPwm(255);
   } else {
-    if (!blueLedState && !breatheLedState) return;
-    blueLedState = false;
-    breatheLedState = false;
-    breatheBrightness = 0;
+    if (!sys.blueLedState && !sys.breatheLedState) return;
+    sys.blueLedState = false;
+    sys.breatheLedState = false;
+    sys.breatheBrightness = 0;
     setLedPwm(0);
   }
   LOG_INFO(on ? "Blue LED: ON" : "Blue LED: OFF");
@@ -68,20 +68,28 @@ void setLedPwm(uint8_t value) {
 }
 
 void setBreatheLed(bool on) {
-  if (breatheLedState == on) return;
-  breatheLedState = on;
-  breatheBrightness = 0;
-  breatheDirection = 1;
+  if (sys.breatheLedState == on) return;
+  sys.breatheLedState = on;
+  sys.breatheBrightness = 0;
+  sys.breatheDirection = 1;
   if (on) {
-    blueLedState = false;       // chế độ thở tiếp quản blue LED
+    sys.blueLedState = false;       // chế độ thở tiếp quản blue LED
   } else {
     setLedPwm(0);
   }
   LOG_INFO(on ? "Breathe: ON" : "Breathe: OFF");
 }
 
+// true = hoa văn đèn tăng trưởng đang hiển thị. sys.rgbR/G/B không phân biệt
+// được hoa văn với màu đơn sắc cùng giá trị (255,0,255), nên cần cờ riêng để
+// setRgb() idempotent đúng: bỏ qua strip.show() (một giao dịch RMT ngắt
+// interrupts) khi màu không đổi thật sự.
+static bool sPlantPattern = false;
+
 void setRgb(uint8_t r, uint8_t g, uint8_t b) {
-  rgbR = r; rgbG = g; rgbB = b;
+  if (!sPlantPattern && sys.rgbR == r && sys.rgbG == g && sys.rgbB == b) return;
+  sPlantPattern = false;
+  sys.rgbR = r; sys.rgbG = g; sys.rgbB = b;
   for (int i = 0; i < RGB_COUNT; i++) {
     strip.setPixelColor(i, strip.Color(r, g, b));
   }
@@ -91,7 +99,8 @@ void setRgb(uint8_t r, uint8_t g, uint8_t b) {
 
 // Đèn tăng trưởng cho cây (bài 9): LED 1 & 3 đỏ, LED 2 & 4 xanh dương.
 void setRgbPlant() {
-  rgbR = 255; rgbG = 0; rgbB = 255;
+  sPlantPattern = true;
+  sys.rgbR = 255; sys.rgbG = 0; sys.rgbB = 255;
   for (int i = 0; i < RGB_COUNT; i++) {
     bool red = (i % 2 == 0);
     strip.setPixelColor(i, red ? strip.Color(255, 0, 0) : strip.Color(0, 0, 255));
@@ -100,14 +109,14 @@ void setRgbPlant() {
   MOD_DEBUG(Rgb, "RGB plant light");
 }
 
-void setRgbAuto(bool on)  { rgbAuto = on; }
-void setPumpAuto(bool on) { pumpAuto = on; }
-void setFanAuto(bool on)  { fanAuto = on; }
-void setLightAuto(bool on){ lightAuto = on; }
-void setBreatheAuto(bool on) { breatheAuto = on; }
+void setRgbAuto(bool on)  { sys.rgbAuto = on; }
+void setPumpAuto(bool on) { sys.pumpAuto = on; }
+void setFanAuto(bool on)  { sys.fanAuto = on; }
+void setLightAuto(bool on){ sys.lightAuto = on; }
+void setBreatheAuto(bool on) { sys.breatheAuto = on; }
 
 #ifdef SMARTFARM_TEST_HOOKS
 // Chỉ dùng cho bộ test trên máy tính: đưa biến static về trạng thái vừa cấp điện
 // để các test không phụ thuộc vào thứ tự chạy.
-void testResetActuatorStatics() { sBuzzerOn = false; }
+void testResetActuatorStatics() { sBuzzerOn = false; sPlantPattern = false; }
 #endif

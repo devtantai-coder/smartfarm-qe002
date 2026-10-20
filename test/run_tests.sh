@@ -8,7 +8,12 @@
 #   ./test/run_tests.sh --quick      một bản build (mặc định core 3.x, cấu hình kit mặc định)
 #   ./test/run_tests.sh --full       năm bản build: core3, core2+inverts,
 #                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan, web token
-#   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng
+#   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng + nhánh
+#
+# Biến môi trường:
+#   COVERAGE_MIN   ngưỡng độ phủ dòng (mặc định 80)
+#   BRANCH_MIN     ngưỡng độ phủ nhánh, "taken at least once" (mặc định 75)
+#   FUZZ_ITERS     số vòng fuzz mỗi seed (mặc định 30000)
 #
 # Yêu cầu: g++ với C++17, bash. Không cần toolchain ESP32.
 set -euo pipefail
@@ -37,6 +42,7 @@ FILES=("$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}" -x c++ "$ROOT/Sma
 
 MODE="${1:---full}"
 COVERAGE_MIN="${COVERAGE_MIN:-80}"
+BRANCH_MIN="${BRANCH_MIN:-75}"
 
 build_and_run() {
   local name="$1"; shift
@@ -90,12 +96,12 @@ run_coverage() {
   echo "=== Coverage (production code: src/*.cpp + SmartFarm.ino) ==="
   ( cd "$cov"
     for f in "$ROOT/src/"*.cpp "$ROOT/SmartFarm.ino"; do
-      gcov -o "$cov" "$f" > /dev/null 2>&1 || true
+      gcov -b -o "$cov" "$f" > /dev/null 2>&1 || true
     done )
 
-  local total=0 covered=0
-  printf "%-30s %8s %8s %8s\n" "File" "Lines" "Hit" "Cover"
-  local gc base stats hit tot pct
+  local total=0 covered=0 btotal=0 bcovered=0
+  printf "%-22s %7s %7s %7s %10s %7s %7s\n" "File" "Lines" "Hit" "Cover" "Branches" "BHit" "BCover"
+  local gc base f stats hit tot pct bstats bhit btot bpct
   for gc in "$cov"/*.gcov; do
     [ -e "$gc" ] || continue
     base="$(basename "$gc" .gcov)"
@@ -103,6 +109,10 @@ run_coverage() {
       actuators.cpp|config.cpp|control.cpp|demo.cpp|globals.cpp|logger.cpp|\
       oled.cpp|sensors.cpp|settings.cpp|webserver.cpp|wifi.cpp|SmartFarm.ino) ;;
       *) continue ;;
+    esac
+    case "$base" in
+      SmartFarm.ino) f="$ROOT/SmartFarm.ino" ;;
+      *)             f="$ROOT/src/$base" ;;
     esac
     stats="$(awk -F: '
       $2 ~ /^[ ]*[0-9]+$/ {
@@ -119,24 +129,58 @@ run_coverage() {
     tot="${stats##* }"
     total=$((total + tot))
     covered=$((covered + hit))
+
+    # Độ phủ nhánh: "Taken at least once" là chỉ số branch coverage cổ điển
+    # (một nhánh đã được đi qua ít nhất một lần). Số liệu lấy từ dòng tổng
+    # kết của gcov -b nên chính xác, không bị ảnh hưởng bởi làm tròn %.
+    bstats="$( (cd "$cov" && gcov -b -o "$cov" "$f" 2>/dev/null) | awk -v n="$base" '
+      /^File / { sec = $0 }
+      /^Taken at least once:/ && sec ~ n {
+        p = $4; sub(/^once:/, "", p); sub(/%$/, "", p);
+        printf "%d %d", $6 * p / 100 + 0.5, $6;
+      }')" || true
+    if [ -n "$bstats" ]; then
+      bhit="${bstats%% *}"
+      btot="${bstats##* }"
+    else
+      bhit=0
+      btot=0
+    fi
+    btotal=$((btotal + btot))
+    bcovered=$((bcovered + bhit))
+
     if [ "$tot" -gt 0 ]; then
       pct="$(awk -v c="$hit" -v t="$tot" 'BEGIN { printf "%.1f", 100.0*c/t }')"
     else
       pct="n/a"
     fi
-    printf "%-30s %8d %8d %7s%%\n" "$base" "$tot" "$hit" "$pct"
+    if [ "$btot" -gt 0 ]; then
+      bpct="$(awk -v c="$bhit" -v t="$btot" 'BEGIN { printf "%.1f", 100.0*c/t }')"
+    else
+      bpct="n/a"
+    fi
+    printf "%-22s %7d %7d %6s%% %10d %7d %6s%%\n" "$base" "$tot" "$hit" "$pct" "$btot" "$bhit" "$bpct"
   done
 
-  local overall
+  local overall boverall
   if [ "$total" -gt 0 ]; then
     overall="$(awk -v c="$covered" -v t="$total" 'BEGIN { printf "%.1f", 100.0*c/t }')"
   else
     overall="0.0"
   fi
-  echo "--------------------------------------------------------"
-  printf "%-30s %8d %8d %7s%%\n" "TOTAL" "$total" "$covered" "$overall"
+  if [ "$btotal" -gt 0 ]; then
+    boverall="$(awk -v c="$bcovered" -v t="$btotal" 'BEGIN { printf "%.1f", 100.0*c/t }')"
+  else
+    boverall="0.0"
+  fi
+  echo "------------------------------------------------------------------------------"
+  printf "%-22s %7d %7d %6s%% %10d %7d %6s%%\n" "TOTAL" "$total" "$covered" "$overall" "$btotal" "$bcovered" "$boverall"
   awk -v p="$overall" -v m="$COVERAGE_MIN" 'BEGIN { exit (p+0 >= m+0) ? 0 : 1 }' || {
     echo "ERROR: coverage ${overall}% is below the ${COVERAGE_MIN}% threshold (set COVERAGE_MIN to override)"
+    exit 1
+  }
+  awk -v p="$boverall" -v m="$BRANCH_MIN" 'BEGIN { exit (p+0 >= m+0) ? 0 : 1 }' || {
+    echo "ERROR: branch coverage ${boverall}% is below the ${BRANCH_MIN}% threshold (set BRANCH_MIN to override)"
     exit 1
   }
 }

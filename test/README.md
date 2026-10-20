@@ -9,8 +9,15 @@ rồi chạy toàn bộ logic như trên kit — không cần phần cứng, kh�
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh (core 3.x, cấu hình kit)
 ./test/run_tests.sh --full       # 5 bản build (mặc định khi không truyền tham số)
-./test/run_tests.sh --coverage   # đo độ phủ bằng gcov (cũng đặt WEB_TOKEN; ngưỡng COVERAGE_MIN, mặc định 80%)
+./test/run_tests.sh --coverage   # đo độ phủ dòng + nhánh bằng gcov (cũng đặt WEB_TOKEN)
 ```
+
+Tùy biến bằng biến môi trường:
+
+- `COVERAGE_MIN` — ngưỡng độ phủ dòng (mặc định 80), `--coverage` exit khác 0 nếu dưới.
+- `BRANCH_MIN` — ngưỡng độ phủ nhánh "taken at least once" (mặc định 75).
+- `FUZZ_ITERS` — số vòng fuzz mỗi seed (mặc định 30000; rút ngắn khi phát triển,
+  ví dụ `FUZZ_ITERS=2000 ./test/run_tests.sh --quick`).
 
 5 bản build trong chế độ `--full`:
 
@@ -22,25 +29,33 @@ rồi chạy toàn bộ logic như trên kit — không cần phần cứng, kh�
 | `asan+ubsan` | `-fsanitize=address,undefined -fno-omit-frame-pointer` | Phát hiện tràn bộ nhớ/UB; script tự bỏ `LD_PRELOAD` khi chạy |
 | `webtoken` | `-DWEB_TOKEN='"token-bao-mat-test"'` | Bật `WEB_TOKEN` để chạy D16 (bảo vệ token web) |
 
-Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.318 lượt kiểm tra,
+Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.448 lượt kiểm tra,
 0 lỗi** trên 4 bản build thường; bản `webtoken` và bản `--coverage` (cũng đặt
-`WEB_TOKEN`) chạy **772.331 lượt**. Độ phủ dòng lệnh: **99,8%** (`logger.cpp` 99,1%,
-`SmartFarm.ino` 99,3%, các file còn lại 100%).
+`WEB_TOKEN`) chạy **772.465 lượt**. Độ phủ dòng lệnh: **99,9%**
+(`SmartFarm.ino` 99,4% — chỉ còn nhánh `default` phòng vệ không thể chạm tới
+của `handleDebugCmd()`; các file còn lại 100%). Độ phủ nhánh (taken at least
+once): **~79,7%** cho toàn bộ code production — phần thiếu chủ yếu là các
+nhánh phòng vệ một chiều (`errno` của thư viện, `else` bất khả thi, nhánh
+compile-time của ternary). Mỗi test in một dòng `[PASS]/[FAIL]` kèm tên và
+số check của riêng nó để khoanh vùng lỗi nhanh.
 
 ## Cấu trúc
 
 - `test_main.cpp` — toàn bộ test:
-  - **T1–T17** đơn vị: cảm biến, bơm (trễ + an toàn khô), quạt, đèn/PIR/báo động,
+  - **T1–T19** đơn vị: cảm biến, bơm (trễ + an toàn khô), quạt, đèn/PIR/báo động,
     LED thường/thở, chạm chống dội, RGB, còi, cối xay gió, cửa cho ăn, thời tiết,
     settings, trình diễn; T16 quyền sở hữu đèn của PIR + khôi phục đèn thở, T17
-    khôi phục đèn thở sau trình diễn.
+    khôi phục đèn thở sau trình diễn, T18 reset mặc định + bỏ qua ghi flash khi
+    giá trị không đổi + mã bảo mật không bị ghi vào NVS, T19 logger với cấp log
+    ngoài enum.
   - **D1–D3** biên: so sánh ngưỡng đúng dấu `<`/`>` tại đúng giá trị biên, tính
     bất biến (idempotency) của cơ cấu chấp hành, thời gian chính xác từng mili-giây
     (chống dội 300 ms, cửa cho ăn 2000 ms, nhịp thở 30 ms, quét servo 30 ms).
-  - **I1–I11** tích hợp: boot đăng ký đủ 14 route, `/api`, `/on` `/off`, phân xử
-    servo, các handler còn lại, trang chủ + favicon, OLED, menu serial 1–8, phím
-    `9` chạy demo, WiFi mất–nối lại; I11 boot suy giảm (thiếu OLED + hết hạn
-    WiFi, kiểm tra mã lỗi 101/102 và WDT vẫn được cho ăn).
+  - **I1–I13** tích hợp: boot đăng ký đủ 15 route, `/api`, `/on` `/off`, phân xử
+    servo, các handler còn lại, trang chủ + favicon, cấu hình WiFi động qua
+    `/wifi` (lưu flash + restart), callback OTA in trạng thái ra serial, OLED,
+    menu serial 1–8, phím `9` chạy demo, WiFi mất–nối lại; I11 boot suy giảm
+    (thiếu OLED + hết hạn WiFi, kiểm tra mã lỗi 101/102 và WDT vẫn được cho ăn).
   - **D5–D16** chuyên sâu: hợp đồng JSON 21 khóa (parser tự viết, 200 trạng thái
     ngẫu nhiên), thân phản hồi chính xác + ngưỡng biên, layout OLED từng dòng
     (giới hạn 21 ký tự), biên serial (`\r\n`, byte rác 0xFF, chế độ debug tạm dừng
@@ -51,8 +66,8 @@ Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.3
     trạng thái, cối xay/cho ăn loại trừ nhau, góc servo 0–180...), tràn
     `millis()` cho mọi bộ đếm thời gian, chặn CSRF (Origin/Referer lạ hoặc
     `Sec-Fetch-Site: cross-site` → 403, cùng nguồn được phép), và token web tùy
-    chọn (thiếu/sai → 401, đúng qua header `X-Auth-Token` hoặc `?token=` → 200;
-    bản build không đặt `WEB_TOKEN` tự bỏ qua).
+    chọn (thiếu/sai → 401, đúng qua header `X-Auth-Token` hoặc `?token=` → 200,
+    `/api` cũng bị chặn khi thiếu token; bản build không đặt `WEB_TOKEN` tự bỏ qua).
 - `mocks/` — giả lập Arduino/ESP32: `mock.h` + `mock.cpp` (API điều khiển thời gian
   `mockSetMillis`, ADC, chân, log GPIO, OLED theo dòng, WiFi, web server kèm
   `mockServerSetHeader` giả lập header HTTP, counters)

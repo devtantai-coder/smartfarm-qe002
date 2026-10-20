@@ -28,6 +28,8 @@ extern int mockServoMaxSeen;            // góc lớn nhất từng ghi (-1 nế
 extern int mockToneCalls, mockNoToneCalls;
 extern int mockWifiBeginCalls, mockWifiDisconnectCalls, mockWifiReconnectCalls;
 extern int mockWdtInitCalls, mockWdtAddCalls, mockWdtResetCalls;
+extern int mockI2cCmdBytes, mockI2cDataBytes, mockI2cTransactions;
+extern int mockStripShowCount;          // số lần strip.show() (giao dịch RMT)
 
 unsigned long mockMillis();
 void mockAdvance(unsigned long ms);

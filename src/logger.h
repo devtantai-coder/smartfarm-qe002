@@ -22,7 +22,9 @@ void logSensors();
 
 // Các hàm debug của module
 void debugSensors();
-void debugActuators();
+void debugActuators();          // bắt đầu trình tự test cơ cấu (không chặn)
+void updateDebugActuators();    // loop() gọi mỗi vòng khi ở chế độ debug
+void stopDebugActuators();      // thoát debug giữa chừng: dừng + tắt an toàn
 void debugControl();
 void debugWebserver();
 void debugWifi();

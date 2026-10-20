@@ -12,10 +12,18 @@
 extern int mockWifiStatus;
 extern const char *mockWifiIp;
 extern int mockWifiBeginCalls, mockWifiDisconnectCalls, mockWifiReconnectCalls;
+extern int mockWifiPersistentCalls, mockWifiSleepDisableCalls;
 
 class IPAddress {
 public:
-  String toString() const { return String(mockWifiIp); }
+  // Chốt giá trị lúc tạo để so sánh ==/!= hoạt động giống IPAddress thật
+  // (code sản phẩm dùng phép so sánh để cache tiền tố origin).
+  IPAddress() : s_(mockWifiIp ? mockWifiIp : "") {}
+  String toString() const { return String(s_.c_str()); }
+  bool operator==(const IPAddress &o) const { return s_ == o.s_; }
+  bool operator!=(const IPAddress &o) const { return s_ != o.s_; }
+private:
+  std::string s_;
 };
 
 struct WiFiStub {
@@ -26,6 +34,7 @@ struct WiFiStub {
   void begin(const char *, const char *);
   void disconnect();
   void reconnect();
-  void setSleep(bool) {}
+  void setSleep(bool on) { if (!on) mockWifiSleepDisableCalls++; }
+  void persistent(bool on) { if (!on) mockWifiPersistentCalls++; }
 };
 extern WiFiStub WiFi;

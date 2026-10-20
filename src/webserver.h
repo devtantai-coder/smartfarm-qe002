@@ -1,5 +1,8 @@
-#ifndef WEBSERVER_H
-#define WEBSERVER_H
+// Không dùng guard WEBSERVER_H: thư viện WebServer của core ESP32 cũng dùng
+// đúng macro này, include <WebServer.h> trước sẽ khiến toàn bộ header này
+// bị bỏ qua và mọi handler "not declared".
+#ifndef SMARTFARM_WEBSERVER_H
+#define SMARTFARM_WEBSERVER_H
 
 void handleRoot();
 void handleApi();

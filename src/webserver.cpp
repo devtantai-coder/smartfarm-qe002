@@ -181,17 +181,25 @@ header h1 span{color:var(--primary);font-weight:800}
 <div class="refresh">Cập nhật mỗi 2 giây &bull; Smart Farm QE002 ACEBOTT</div>
 </div>
 <script>
-const TOKEN=new URLSearchParams(location.search).get('token')||'';
+const params=new URLSearchParams(location.search);
+let TOKEN=params.get('token')||'';
+try{
+if(TOKEN)sessionStorage.setItem('sfToken',TOKEN);
+else TOKEN=sessionStorage.getItem('sfToken')||'';
+}catch(e){}
+if(params.get('token'))history.replaceState(null,'',location.pathname);
 let NONCE=0;
+function authHeaders(){return TOKEN?{'X-Auth-Token':TOKEN}:{}}
 function api(u){
   let sep=u.indexOf('?')>=0?'&':'?';
-  u=u+sep+'token='+encodeURIComponent(TOKEN);
-  if(NONCE>0)u=u+'&nonce='+NONCE;
+  if(NONCE>0)u=u+sep+'nonce='+NONCE;
   return u
 }
+async function call(u){const r=await fetch(api(u),{headers:authHeaders()});if(NONCE>0&&(r.ok||r.status===400))NONCE++;return r}
 async function fetchData(){
 try{
-const r=await fetch('/api');
+const r=await fetch('/api',{headers:authHeaders()});
+if(r.status===401){document.getElementById('ipBadge').textContent='Can token';return}
 const d=await r.json();
 window.__sf=d;
 NONCE=d.nonce??0;
@@ -219,15 +227,17 @@ document.getElementById('badgeRgbAuto').textContent=d.rgbAuto?'Tự động: B�
 document.getElementById('badgeRgbAuto').className='badge '+(d.rgbAuto?'on':'off');
 }catch(e){console.error(e)}
 }
-async function toggleDevice(id){await fetch(api('/toggle?id='+id));fetchData()}
-async function ledSet(on){await fetch(api(on?'/on':'/off'));fetchData()}
-async function toggleWindmill(){const s=window.__sf||{};await fetch(api('/windmill?on='+(s.windmill?'false':'true')));fetchData()}
-async function feedNow(){await fetch(api('/feed'));fetchData()}
-async function runDemo(){if(!confirm('Chạy trình diễn lần lượt các hoạt động (khoảng 40 giây)?'))return;await fetch(api('/demo'));fetchData()}
-async function setAutoMode(id,on){await fetch(api('/auto?id='+id+'&on='+on));fetchData()}
-async function setRgb(r,g,b){await fetch(api('/rgb?r='+r+'&g='+g+'&b='+b));fetchData()}
-async function setServo(v){document.getElementById('servoLabel').textContent=v;await fetch(api('/servo?angle='+v))}
-setInterval(fetchData,2000);
+async function toggleDevice(id){await call('/toggle?id='+id);fetchData()}
+async function ledSet(on){await call(on?'/on':'/off');fetchData()}
+async function toggleWindmill(){const s=window.__sf||{};await call('/windmill?on='+(s.windmill?'false':'true'));fetchData()}
+async function feedNow(){await call('/feed');fetchData()}
+async function runDemo(){if(!confirm('Chạy trình diễn lần lượt các hoạt động (khoảng 40 giây)?'))return;await call('/demo');fetchData()}
+async function setAutoMode(id,on){await call('/auto?id='+id+'&on='+on);fetchData()}
+async function setRgb(r,g,b){await call('/rgb?r='+r+'&g='+g+'&b='+b);fetchData()}
+async function setServo(v){document.getElementById('servoLabel').textContent=v;await call('/servo?angle='+v)}
+function pollTick(){if(!document.hidden)fetchData()}
+setInterval(pollTick,2000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)fetchData()});
 fetchData();
 </script>
 </body>
@@ -238,7 +248,10 @@ fetchData();
 // 1) Chống CSRF: trình duyệt gửi kèm Origin/Referer khi trang khác gọi vào
 //    thiết bị; chỉ chấp nhận yêu cầu cùng nguồn với IP của thiết bị.
 // 2) Token tùy chọn: nếu WEB_TOKEN được đặt trong config.h, mọi lệnh đổi
-//    trạng thái phải kèm đúng token (header X-Auth-Token hoặc ?token=...).
+//    trạng thái (và cả /api vì trả nonce + dữ liệu cảm biến) phải kèm đúng
+//    token qua header X-Auth-Token; ?token= vẫn chấp nhận cho client tự viết.
+//    Trang chủ cũng đọc ?token= một lần rồi tự gửi bằng header, không để
+//    token dính vào URL các lệnh phía sau.
 static bool sameOriginCStr(const char* url, const char* origin) {
   if (url == nullptr || url[0] == '\0') return true;
   size_t olen = strlen(origin);
@@ -247,52 +260,78 @@ static bool sameOriginCStr(const char* url, const char* origin) {
   return c == '\0' || c == '/' || c == ':' || c == '?';
 }
 
-static bool guardWeb() {
-  char me[64];
-  snprintf(me, sizeof(me), "http://%s", WiFi.localIP().toString().c_str());
+// So sánh token kiểu constant-time để không rò rỉ độ dài/ký tự khớp qua thời gian phản hồi.
+static bool secretMatches(const char* a, const char* b) {
+  size_t la = strlen(a), lb = strlen(b);
+  size_t diff = la ^ lb;
+  for (size_t i = 0; i < la && i < lb; i++) diff |= (size_t)(a[i] ^ b[i]);
+  return diff == 0;
+}
 
-  if (server.hasHeader("Origin")) {
-    char origin[128];
-    strncpy(origin, server.header("Origin").c_str(), sizeof(origin) - 1);
-    origin[sizeof(origin) - 1] = '\0';
-    if (!sameOriginCStr(origin, me)) {
-      server.send(403, "text/plain", "forbidden");
-      return false;
-    }
+// Tiền tố nguồn của thiết bị ("http://<ip>") chỉ đổi khi IP đổi; nhớ lại để
+// mỗi request của trang web không phải cấp phát String + snprintf.
+static const char* localOriginCached() {
+  static IPAddress sCachedIp;
+  static char sMe[64] = {0};
+  IPAddress ip = WiFi.localIP();
+  if (sMe[0] == '\0' || ip != sCachedIp) {
+    sCachedIp = ip;
+    snprintf(sMe, sizeof(sMe), "http://%s", ip.toString().c_str());
   }
-  if (server.hasHeader("Referer")) {
-    char referer[128];
-    strncpy(referer, server.header("Referer").c_str(), sizeof(referer) - 1);
-    referer[sizeof(referer) - 1] = '\0';
-    if (!sameOriginCStr(referer, me)) {
-      server.send(403, "text/plain", "forbidden");
-      return false;
-    }
+  return sMe;
+}
+
+static bool checkSameOrigin() {
+  // Đọc mỗi header đúng MỘT lần (WebServer cấp phát String cho mỗi lần đọc);
+  // header vắng trả chuỗi rỗng nên không cần hasHeader() gọi thêm.
+  const String origin = server.header("Origin");
+  const String referer = server.header("Referer");
+  const String site = server.header("Sec-Fetch-Site");
+
+  // Client không gửi header nguồn (curl, app nội bộ): không có gì để đối chiếu.
+  if (origin.length() == 0 && referer.length() == 0 && site.length() == 0) {
+    return true;
   }
-  if (server.hasHeader("Sec-Fetch-Site")) {
-    char site[32];
-    strncpy(site, server.header("Sec-Fetch-Site").c_str(), sizeof(site) - 1);
-    site[sizeof(site) - 1] = '\0';
-    if (strcmp(site, "cross-site") == 0) {
-      server.send(403, "text/plain", "forbidden");
-      return false;
-    }
+
+  const char* me = localOriginCached();
+
+  if (origin.length() > 0 && !sameOriginCStr(origin.c_str(), me)) {
+    server.send(403, "text/plain", "forbidden");
+    return false;
   }
-  if (webToken[0] != '\0') {
-    char token[64];
-    if (server.hasHeader("X-Auth-Token")) {
-      strncpy(token, server.header("X-Auth-Token").c_str(), sizeof(token) - 1);
-    } else if (server.hasArg("token")) {
-      strncpy(token, server.arg("token").c_str(), sizeof(token) - 1);
-    } else {
-      token[0] = '\0';
-    }
-    token[sizeof(token) - 1] = '\0';
-    if (strcmp(token, webToken) != 0) {
-      server.send(401, "text/plain", "unauthorized");
-      return false;
-    }
+  if (referer.length() > 0 && !sameOriginCStr(referer.c_str(), me)) {
+    server.send(403, "text/plain", "forbidden");
+    return false;
   }
+  if (strcmp(site.c_str(), "cross-site") == 0) {
+    server.send(403, "text/plain", "forbidden");
+    return false;
+  }
+  return true;
+}
+
+static bool checkToken() {
+  if (sys.webToken[0] == '\0') return true;
+  char token[64] = {0};
+  if (server.hasHeader("X-Auth-Token")) {
+    strncpy(token, server.header("X-Auth-Token").c_str(), sizeof(token) - 1);
+  } else if (server.hasArg("token")) {
+    strncpy(token, server.arg("token").c_str(), sizeof(token) - 1);
+  } else {
+    token[0] = '\0';
+  }
+  token[sizeof(token) - 1] = '\0';
+  if (!secretMatches(token, sys.webToken)) {
+    server.send(401, "text/plain", "unauthorized");
+    return false;
+  }
+  return true;
+}
+
+// Bảo vệ đầy đủ cho các lệnh đổi trạng thái: chống CSRF + token + chống replay.
+static bool guardWeb() {
+  if (!checkSameOrigin()) return false;
+  if (!checkToken()) return false;
 
 #if ANTI_REPLAY
   // Chống replay: yêu cầu nonce lớn hơn lần dùng cuối cùng.
@@ -302,11 +341,11 @@ static bool guardWeb() {
     nonceStr[sizeof(nonceStr) - 1] = '\0';
   }
   uint32_t nonce = (uint32_t)strtoul(nonceStr, nullptr, 10);
-  if (nonce == 0 || nonce <= gLastNonce) {
+  if (nonce == 0 || nonce <= sys.gLastNonce) {
     server.send(403, "text/plain", "replay");
     return false;
   }
-  gLastNonce = nonce;
+  sys.gLastNonce = nonce;
 #endif
 
   return true;
@@ -322,10 +361,15 @@ void handleRoot() {
 void handleApi() {
   MOD_DEBUG(Webserver, "GET /api");
 
+  // Khi WEB_TOKEN được đặt, dữ liệu cảm biến + nonce chỉ trả cho client đã xác thực.
+  // Ở đây chỉ kiểm tra token (không kèm chống replay) vì client cần /api để LẤY nonce.
+  if (!checkToken()) return;
+
   // Dùng giá trị global đã lọc — không đọc cảm biến thô ở đây
   // (DHT11 cần 1 giây giữa hai lần đọc; đọc thêm sẽ trả dữ liệu cũ)
   // Dựng JSON bằng snprintf vào buffer cố định — không tự nối String trong handler
   // và không cấp phát heap thêm (send() của thư viện vẫn tạo String nội bộ một lần).
+  const bool demoOn = demoRunning();   // đọc một lần, tránh gọi lặp 2 chỗ trong snprintf
   char buf[512];
   snprintf(buf, sizeof(buf),
            "{\"temp\":%.1f,\"hum\":%.1f,\"light\":%d,\"soil\":%d,\"water\":%d,"
@@ -333,25 +377,42 @@ void handleApi() {
            "\"led\":%s,\"breathe\":%s,\"windmill\":%s,\"feed\":%s,\"demo\":%s,"
            "\"demoStep\":\"%s\",\"pumpAuto\":%s,\"lightAuto\":%s,\"rgbAuto\":%s,"
            "\"fanAuto\":%s,\"breatheAuto\":%s,\"nonce\":%u}",
-           (double)gTemp, (double)gHum, (int)gLight, (int)gSoil, (int)gWater,
+           (double)sys.gTemp, (double)sys.gHum, (int)sys.gLight, (int)sys.gSoil, (int)sys.gWater,
            (int)weatherStatus(),
-           gPir ? "true" : "false", gTouch ? "true" : "false",
-           relayState ? "true" : "false", fanState ? "true" : "false",
-           blueLedState ? "true" : "false", breatheLedState ? "true" : "false",
-           windmillOn ? "true" : "false", feedRunning() ? "true" : "false",
-           demoRunning() ? "true" : "false",
-           demoRunning() ? demoStepName() : "",
-           pumpAuto ? "true" : "false", lightAuto ? "true" : "false",
-           rgbAuto ? "true" : "false", fanAuto ? "true" : "false",
-           breatheAuto ? "true" : "false", gLastNonce + 1);
+           sys.gPir ? "true" : "false", sys.gTouch ? "true" : "false",
+           sys.relayState ? "true" : "false", sys.fanState ? "true" : "false",
+           sys.blueLedState ? "true" : "false", sys.breatheLedState ? "true" : "false",
+           sys.windmillOn ? "true" : "false", feedRunning() ? "true" : "false",
+           demoOn ? "true" : "false",
+           demoOn ? demoStepName() : "",
+           sys.pumpAuto ? "true" : "false", sys.lightAuto ? "true" : "false",
+           sys.rgbAuto ? "true" : "false", sys.fanAuto ? "true" : "false",
+           sys.breatheAuto ? "true" : "false",
+           (unsigned)(sys.gLastNonce == 0xFFFFFFFFul ? 1ul : sys.gLastNonce + 1));  // tránh trả nonce 0 (luôn bị từ chối)
 
-  server.send(200, "application/json", buf);
+  // Ghi thẳng buffer qua sendContent: send(code, type, content) của WebServer
+  // nhận String nên sẽ copy ~400 byte sang heap mỗi lần /api được gọi (2 giây
+  // một lần khi mở trang). setContentLength + sendContent giữ nguyên header
+  // Content-Length mà không cấp phát thêm.
+  size_t len = strlen(buf);
+  server.setContentLength(len);
+  server.send(200, "application/json", "");
+  server.sendContent(buf, len);
 }
 
 static uint8_t clampByte(long v) {
   if (v < 0) return 0;
   if (v > 255) return 255;
   return (uint8_t)v;
+}
+
+// Đọc tham số float từ query. Giá trị không hữu hạn (client gửi "nan"/"inf")
+// được quy về 0 giống toFloat("abc") — nếu không, NaN sẽ lọt qua constrain()
+// (mọi so sánh với NaN đều sai) rồi gây ép kiểu float->int không xác định
+// trong các phép so ngưỡng và làm logic điều khiển kẹt.
+static float floatArg(const char* name) {
+  float v = server.arg(name).toFloat();
+  return isfinite(v) ? v : 0.0f;
 }
 
 // ── Bật/tắt thiết bị (thao tác thủ công sẽ tắt chế độ tự động tương ứng) ──
@@ -362,15 +423,15 @@ void handleToggle() {
   const char* id = idBuf;
   if (strcmp(id, "pump") == 0) {
     setPumpAuto(false);
-    setRelay(!relayState);
+    setRelay(!sys.relayState);
   } else if (strcmp(id, "led") == 0) {
     setLightAuto(false);
-    setBlueLed(!blueLedState);
+    setBlueLed(!sys.blueLedState);
   } else if (strcmp(id, "fan") == 0) {
     setFanAuto(false);
-    setFan(!fanState);
+    setFan(!sys.fanState);
   } else if (strcmp(id, "breathe") == 0) {
-    bool want = !breatheLedState;
+    bool want = !sys.breatheLedState;
     setBreatheAuto(false);
     setBreatheLed(want);
   } else {
@@ -418,7 +479,7 @@ void handleRgb() {
 // ── Đèn thở ──
 void handleBreatheLed() {
   if (!guardWeb()) return;
-  bool want = !breatheLedState;
+  bool want = !sys.breatheLedState;
   setBreatheAuto(false);
   setBreatheLed(want);
   saveSettings();
@@ -453,8 +514,8 @@ void handleServo() {
   if (angle > 180) angle = 180;
   setWindmill(false);   // điều khiển servo thủ công sẽ nhả cối xay gió và cửa cho ăn
   stopFeed();
-  servoAngle = angle;
-  servo.write(servoAngle);
+  sys.servoAngle = angle;
+  servo.write(sys.servoAngle);
   server.send(200, "text/plain", "ok");
 }
 
@@ -485,22 +546,22 @@ void handleDemo() {
 void handleThreshold() {
   if (!guardWeb()) return;
   bool changed = false;
-  if (server.hasArg("soilLow"))  { soilThresholdLow  = constrain(server.arg("soilLow").toFloat(),  0.0f, 4095.0f); changed = true; }
-  if (server.hasArg("soilHigh")) { soilThresholdHigh = constrain(server.arg("soilHigh").toFloat(), 0.0f, 4095.0f); changed = true; }
-  if (server.hasArg("waterLow")) { waterThresholdLow = constrain(server.arg("waterLow").toFloat(), 0.0f, 4095.0f); changed = true; }
-  if (server.hasArg("light"))    { lightThreshold    = constrain(server.arg("light").toInt(),      0,    4095);   changed = true; }
-  if (server.hasArg("tempHigh")) { tempThresholdHigh = constrain(server.arg("tempHigh").toFloat(), 0.0f, 60.0f);   changed = true; }
-  if (server.hasArg("tempLow"))  { tempThresholdLow  = constrain(server.arg("tempLow").toFloat(),  0.0f, 60.0f);   changed = true; }
+  if (server.hasArg("soilLow"))  { sys.soilThresholdLow  = constrain(floatArg("soilLow"),  0.0f, 4095.0f); changed = true; }
+  if (server.hasArg("soilHigh")) { sys.soilThresholdHigh = constrain(floatArg("soilHigh"), 0.0f, 4095.0f); changed = true; }
+  if (server.hasArg("waterLow")) { sys.waterThresholdLow = constrain(floatArg("waterLow"), 0.0f, 4095.0f); changed = true; }
+  if (server.hasArg("light"))    { sys.lightThreshold    = constrain(server.arg("light").toInt(),      0,    4095);   changed = true; }
+  if (server.hasArg("tempHigh")) { sys.tempThresholdHigh = constrain(floatArg("tempHigh"), 0.0f, 60.0f);   changed = true; }
+  if (server.hasArg("tempLow"))  { sys.tempThresholdLow  = constrain(floatArg("tempLow"),  0.0f, 60.0f);   changed = true; }
 
   if (!changed) {
     server.send(400, "text/plain", "no params");
     return;
   }
-  if (soilThresholdHigh <= soilThresholdLow) {
-    soilThresholdHigh = constrain(soilThresholdLow + 50.0f, 0.0f, 4095.0f);
+  if (sys.soilThresholdHigh <= sys.soilThresholdLow) {
+    sys.soilThresholdHigh = constrain(sys.soilThresholdLow + 50.0f, 0.0f, 4095.0f);
   }
-  if (tempThresholdHigh <= tempThresholdLow) {
-    tempThresholdHigh = tempThresholdLow + 1.0f;  // không chặn trên: giữ high > low tại mép 60 C
+  if (sys.tempThresholdHigh <= sys.tempThresholdLow) {
+    sys.tempThresholdHigh = sys.tempThresholdLow + 1.0f;  // không chặn trên: giữ high > low tại mép 60 C
   }
   saveSettings();
   LOG_INFO("Thresholds updated from web");
@@ -512,13 +573,13 @@ void handleWifi() {
   if (!guardWeb()) return;
   bool changed = false;
   if (server.hasArg("ssid")) {
-    strncpy(ssid, server.arg("ssid").c_str(), sizeof(ssid) - 1);
-    ssid[sizeof(ssid) - 1] = '\0';
+    strncpy(sys.ssid, server.arg("ssid").c_str(), sizeof(sys.ssid) - 1);
+    sys.ssid[sizeof(sys.ssid) - 1] = '\0';
     changed = true;
   }
   if (server.hasArg("password")) {
-    strncpy(password, server.arg("password").c_str(), sizeof(password) - 1);
-    password[sizeof(password) - 1] = '\0';
+    strncpy(sys.password, server.arg("password").c_str(), sizeof(sys.password) - 1);
+    sys.password[sizeof(sys.password) - 1] = '\0';
     changed = true;
   }
   if (!changed) {
@@ -527,5 +588,5 @@ void handleWifi() {
   }
   saveSettings();
   server.send(200, "text/plain", "ok");
-  gNeedRestart = true;
+  sys.gNeedRestart = true;
 }

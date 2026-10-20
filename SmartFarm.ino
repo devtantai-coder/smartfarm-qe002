@@ -31,6 +31,13 @@ static bool sDebugMode = false;
 // ── Thời gian timeout watchdog (ms) ──
 static constexpr uint32_t WDT_TIMEOUT_MS = 30000;
 
+// ── Khởi động lại không chặn ──
+// Sau khi lưu cài đặt WiFi cần chờ phản hồi HTTP gửi xong mới restart;
+// thời gian chờ (RESTART_DELAY_MS, trong src/config.h) được đếm trong loop()
+// thay vì delay().
+static bool sRestartArmed = false;
+static unsigned long sRestartMs = 0;
+
 static void handleFavicon() {
   server.send(204, "text/plain", "");
 }
@@ -57,15 +64,18 @@ static void handleDebugCmd(char cmd) {
     case '6': debugOled(); break;
     case '7': debugSettings(); break;
     case '8': debugLogger(); break;
-    case '0': sDebugMode = false; Serial.println(F(">> Exit debug.")); break;
-    default:  Serial.println(F(">> Invalid.")); break;
+    case '0':
+      stopDebugActuators();   // dừng trình tự test cơ cấu (nếu đang chạy) + tắt an toàn
+      sDebugMode = false;
+      Serial.println(F(">> Exit debug."));
+      break;
+    // loop() đã lọc ký tự trước khi gọi hàm này (chỉ '0'-'8'), nên không cần default
   }
   if (cmd != '0') printDebugMenu();
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(100);
 
   // Watchdog (khởi tạo tương thích core 2.x / 3.x)
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -107,11 +117,12 @@ void setup() {
   strip.begin();
   strip.show();
   servo.attach(SERVO_PIN);
-  servo.write(servoAngle);
+  servo.write(sys.servoAngle);
 
-  // OLED
-  Wire.begin(OLED_SDA, OLED_SCL);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+  // OLED: I2C 400 kHz (SSD1306 hỗ trợ tối đa 400 kHz) — display() đẩy cả
+  // framebuffer 1024 byte nên tăng tốc I2C giúp giảm mạnh thời gian chặn loop.
+  Wire.begin(OLED_SDA, OLED_SCL, 400000);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
     LOG_ERROR_CODE(101, "OLED not found");
   }
   display.clearDisplay();
@@ -119,30 +130,28 @@ void setup() {
 
   // Nạp cài đặt từ flash
   loadSettings();
+  // Ép vòng loop đầu đọc cảm biến TRƯỚC khi automation chạy. Nếu WiFi kết nối
+  // nhanh (< 1 s), nếu không ép thì controlAlerts/controlLight/controlRgb sẽ
+  // hành động theo giá trị 0 khởi tạo: hú còi "hết nước" và chớp đèn/RGB oan.
+  sys.lastSensorRead = millis() - SENSOR_INTERVAL;
   LOG_INFO("Settings loaded");
-  if (breatheAuto) setBreatheLed(true);
+  if (sys.breatheAuto) setBreatheLed(true);
 
-  // WiFi: chờ ngắn ở dạng blocking (watchdog vẫn được nuôi), sau đó manageWiFi() tự thử lại
+  // WiFi không chặn: begin() rồi để loop() xử lý. manageWiFi() tự in IP khi
+  // kết nối được, tự thử lại mỗi WIFI_CHECK_INTERVAL, và báo lỗi 102 sau
+  // WIFI_CONNECT_TIMEOUT nếu vẫn chưa vào mạng.
+  // persistent(false): credentials đã lưu trong Preferences của firmware;
+  // nếu để mặc định, mỗi WiFi.begin() (kể cả vòng thử lại mỗi 10 giây) sẽ
+  // ghi thêm một lần vào NVS — hao chu kỳ ghi flash vô ích.
+  WiFi.persistent(false);
   WiFi.setSleep(false);
-  WiFi.begin(ssid, password);
+  WiFi.begin(sys.ssid, sys.password);
+  sys.lastWifiCheck = millis();
   LOG_INFO("Connecting WiFi...");
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT) {
-    esp_task_wdt_reset();
-    delay(250);
-    Serial.print('.');
-  }
-  Serial.println();
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print(F("IP: "));
-    Serial.println(WiFi.localIP());
-  } else {
-    LOG_ERROR_CODE(102, "WiFi timeout - retrying in background");
-  }
 
   // OTA: cập nhật firmware qua mạng (Arduino IDE / web upload)
   ArduinoOTA.setHostname("smartfarm");
-  ArduinoOTA.setPassword(otaPassword);
+  ArduinoOTA.setPassword(sys.otaPassword);
   ArduinoOTA.onStart([]() {
     Serial.println(F("OTA: start"));
   });
@@ -188,16 +197,60 @@ void setup() {
   printDebugMenu();
 }
 
+// Toàn bộ vòng automation của loop(), tách thành hàm riêng để bộ test trên
+// host gọi ĐÚNG hàm này thay vì sao chép lại logic (một nguồn sự thật duy
+// nhất). loop() gọi hàm này sau khi xử lý serial/khởi động lại.
+void runAutomation() {
+  unsigned long now = millis();
+
+  // Đầu vào số nhanh: touch/PIR phải phản hồi nhanh hơn chu kỳ đọc cảm biến 1 giây
+  sys.gTouch = readTouch();
+  sys.gPir = readPIR();
+
+  // Đọc cảm biến định kỳ (DHT11 cần >= 1 giây giữa hai lần đọc)
+  if (now - sys.lastSensorRead >= SENSOR_INTERVAL) {
+    readAllSensors();
+    logSensors();   // mỗi giây một dòng ở mức DEBUG (activity 7)
+    sys.lastSensorRead = now;
+  }
+
+  // An toàn: bơm tuyệt đối không được chạy khô, ở MỌI chế độ (thủ công hay demo)
+  if (sys.gWater < (int)sys.waterThresholdLow && sys.relayState) setRelay(false);
+
+  // Logic tự động (tạm dừng khi demo của bài học đang chạy)
+  if (demoRunning()) {
+    updateDemo();
+    controlBreathe();   // giữ bước thở HD3 chạy liên tục trong lúc demo
+  } else {
+    controlPump();
+    controlFan();
+    controlLight();
+    controlRgb();
+    controlBreathe();
+    controlTouch();
+    controlAlerts();
+    controlWindmill();
+    controlFeed();
+  }
+}
+
 void loop() {
   esp_task_wdt_reset();
   server.handleClient();
   ArduinoOTA.handle();
   manageWiFi();
 
-  // Khởi động lại sau khi lưu cài đặt WiFi/mật khẩu (chờ phản hồi HTTP xong)
-  if (gNeedRestart) {
-    delay(100);
-    ESP.restart();
+  // Khởi động lại sau khi lưu cài đặt WiFi/mật khẩu (chờ phản hồi HTTP xong).
+  // Không dùng delay(): đếm đủ RESTART_DELAY_MS trong loop rồi mới restart.
+  if (sys.gNeedRestart) {
+    if (!sRestartArmed) {
+      sRestartArmed = true;
+      sRestartMs = millis();
+    } else if (millis() - sRestartMs >= RESTART_DELAY_MS) {
+      ESP.restart();
+    }
+  } else {
+    sRestartArmed = false;
   }
 
   // Nhập lệnh debug qua Serial
@@ -225,43 +278,18 @@ void loop() {
     }
   }
 
-  if (sDebugMode) return;
+  if (sDebugMode) {
+    // Bơm trình tự test cơ cấu (bấm '2') — chạy không chặn, web/OTA vẫn phục vụ
+    updateDebugActuators();
+    return;
+  }
 
   unsigned long now = millis();
-
-  // Đầu vào số nhanh: touch/PIR phải phản hồi nhanh hơn chu kỳ đọc cảm biến 1 giây
-  gTouch = readTouch();
-  gPir = readPIR();
-
-  // Đọc cảm biến định kỳ (DHT11 cần >= 1 giây giữa hai lần đọc)
-  if (now - lastSensorRead >= SENSOR_INTERVAL) {
-    readAllSensors();
-    logSensors();   // mỗi giây một dòng ở mức DEBUG (activity 7)
-    lastSensorRead = now;
-  }
-
-  // An toàn: bơm tuyệt đối không được chạy khô, ở MỌI chế độ (thủ công hay demo)
-  if (gWater < (int)waterThresholdLow && relayState) setRelay(false);
-
-  // Logic tự động (tạm dừng khi demo của bài học đang chạy)
-  if (demoRunning()) {
-    updateDemo();
-    controlBreathe();   // giữ bước thở HD3 chạy liên tục trong lúc demo
-  } else {
-    controlPump();
-    controlFan();
-    controlLight();
-    controlRgb();
-    controlBreathe();
-    controlTouch();
-    controlAlerts();
-    controlWindmill();
-    controlFeed();
-  }
+  runAutomation();
 
   // Cập nhật OLED
-  if (now - lastOledUpdate >= OLED_INTERVAL) {
-    updateOLED(gTemp, gHum, gLight, gSoil, gWater);
-    lastOledUpdate = now;
+  if (now - sys.lastOledUpdate >= OLED_INTERVAL) {
+    updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+    sys.lastOledUpdate = now;
   }
 }

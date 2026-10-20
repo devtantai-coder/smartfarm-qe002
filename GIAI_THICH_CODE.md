@@ -6,6 +6,14 @@ Tài liệu này dành cho **người chưa từng học lập trình** cũng đ
 > Mẹo đọc: mở file code thật bên cạnh (ví dụ `SmartFarm.ino`) rồi đối chiếu số dòng.
 > Code trong tài liệu được trích nguyên văn từ repo.
 
+> **Lưu ý phiên bản:** tài liệu được viết trước đợt tái cấu trúc state gần nhất.
+> Mọi biến toàn cục (ví dụ `relayState`, `soilThresholdLow`, `webToken`...) nay nằm
+> trong một struct duy nhất `SystemState` và được truy cập qua `sys.relayState`,
+> `sys.soilThresholdLow`... Logic, tên hàm và luồng hoạt động **không đổi**; khi đối
+> chiếu với code hiện tại hãy thêm tiền tố `sys.` cho các biến toàn cục.
+> Ngoài ra `webToken`/`otaPassword` không còn được ghi vào flash, và số dòng của
+> `test/test_main.cpp` đã dịch chuyển do bổ sung test (T18, T19, I12, I13).
+
 ---
 
 ## PHẦN 0 — BỨC TRANH TỔNG THỂ (đọc trước khi vào chi tiết)
@@ -2740,7 +2748,7 @@ void handleThreshold() {
 
 ---
 
-## PHẦN 13 — Thư mục test/ (bộ kiểm thử 772.318 lượt)
+## PHẦN 13 — Thư mục test/ (bộ kiểm thử 772.362 lượt)
 
 ### 13.1. Vì sao có bộ test này?
 
@@ -2763,7 +2771,7 @@ biên dịch **code thật** (`SmartFarm.ino` + `src/*.cpp`). Nhờ vậy:
 5 bản build của `--full` chạy CÙNG bộ test với cấu hình khác nhau, để chắc mọi nhánh
 `#if` đều đúng. Mọi bản build đều kèm `-DSMARTFARM_TEST_HOOKS` để bộ test reset được cả
 các biến static trong `src/` (xem các hook `testReset*Statics` ở PHẦN 5–8, 11). Bản
-`webtoken` chạy thêm test D16 nên có **772.331** lượt kiểm tra thay vì 772.318:
+`webtoken` chạy thêm test D16 nên có **772.379** lượt kiểm tra thay vì 772.362:
 
 | Bản build | Cấu hình | Kiểm tra điều gì |
 |---|---|---|
@@ -2775,14 +2783,14 @@ các biến static trong `src/` (xem các hook `testReset*Statics` ở PHẦN 5�
 
 ### 13.3. `test_main.cpp` gồm những gì?
 
-- **T1–T17**: test đơn vị từng mô-đun — ví dụ T3 kiểm tra bơm bật khi đất khô, giữ nguyên khi đất trong khoảng trễ, tắt khi đất ẩm; T16 kiểm tra PIR không tắt oan đèn bật thủ công và đèn thở được khôi phục.
+- **T1–T19**: test đơn vị từng mô-đun — ví dụ T3 kiểm tra bơm bật khi đất khô, giữ nguyên khi đất trong khoảng trễ, tắt khi đất ẩm; T16 kiểm tra PIR không tắt oan đèn bật thủ công và đèn thở được khôi phục; T18 kiểm tra reset mặc định, bỏ qua ghi flash khi giá trị không đổi và mã bảo mật không bị ghi vào NVS; T19 kiểm tra logger với cấp log ngoài enum.
 - **D1–D3**: soi đúng các giá trị **biên** — ví dụ `gWater` đúng bằng ngưỡng thì *được phép* chạy bơm (luật là `<` chứ không phải `<=`), hoặc van thời gian: đúng 29 ms chưa đổi nhịp, đúng 30 ms mới đổi.
-- **I1–I11**: test tích hợp với `setup()` + `loop()` thật — boot đăng ký đủ 14 route, thứ tự ghi mức điện trước `pinMode` (chống glitch relay), mất WiFi tự nối lại, boot thiếu OLED/không có WiFi vẫn chạy, v.v.
+- **I1–I13**: test tích hợp với `setup()` + `loop()` thật — boot đăng ký đủ 14 route, thứ tự ghi mức điện trước `pinMode` (chống glitch relay), mất WiFi tự nối lại, boot thiếu OLED/không có WiFi vẫn chạy, cấu hình WiFi động qua web (I12), callback OTA in đúng trạng thái (I13), v.v.
 - **D5–D16**: test chuyên sâu — hợp đồng JSON 21 khóa với bộ đọc JSON tự viết, đúng từng ký tự thân phản hồi, OLED từng dòng và giới hạn 21 ký tự, menu serial với byte rác, trình diễn đúng 15 bước/30.700 ms, chống spam WiFi đúng 10.000 ms, bền vững qua mất điện, **fuzz 90.000 bước ngẫu nhiên** với các bất biến an toàn (bơm không bao giờ chạy khô, chân luôn khớp trạng thái…), tràn `millis()` cho mọi bộ đếm, chặn CSRF (Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` → 403) và bảo vệ token web tùy chọn (thiếu/sai → 401, đúng → 200).
 
 ### 13.4. Vài bất biến (invariant) quan trọng được kiểm tra liên tục
 
-1. `!(gWater < waterThresholdLow && relayState)` — không bao giờ bơm chạy khô.
+1. `!(sys.gWater < sys.waterThresholdLow && sys.relayState)` — không bao giờ bơm chạy khô.
 2. Mức điện chân relay/quạt luôn khớp cờ trạng thái (kể cả khi đảo cực).
 3. Cối xay gió và cửa máng ăn không bao giờ chạy đồng thời (chung server).
 4. Đèn xanh "sáng đều" và "đèn thở" không bao giờ cùng bật.

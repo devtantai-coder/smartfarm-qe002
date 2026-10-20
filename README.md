@@ -78,8 +78,8 @@ duan123/
 ├── SmartFarm.ino          # File chính (setup và loop - điểm bắt đầu)
 ├── README.md              # File hướng dẫn này
 ├── src/
-│   ├── config.h / config.cpp        # Cấu hình: WiFi, chân, ngưỡng, thời gian
-│   ├── globals.h / globals.cpp      # Biến toàn cục và đối tượng phần cứng
+│   ├── config.h / config.cpp        # Hằng số cấu hình: chân GPIO, thời gian, cờ phần cứng
+│   ├── globals.h / globals.cpp      # SystemState (một struct chứa toàn bộ state) + đối tượng phần cứng
 │   ├── sensors.h / sensors.cpp      # Hàm đọc cảm biến
 │   ├── actuators.h / actuators.cpp  # Hàm điều khiển thiết bị (relay, đèn, RGB, servo)
 │   ├── settings.h / settings.cpp    # Lưu/tải cài đặt vào bộ nhớ flash ESP32
@@ -218,7 +218,7 @@ Góc servo cũng chỉnh được để khớp cơ khí (tránh kẹt bánh răn
 
 **Cách kiểm tra nhanh chiều cảm biến:** mở Serial Monitor (115200), gõ `1` (menu debug cảm biến), che sáng / đổ nước / chạm đất và xem giá trị trên dòng `Light/Soil/Water` tăng hay giảm, rồi đặt cờ tương ứng và nạp lại.
 
-**Bảo mật web (tùy chọn):** Đặt `WEB_TOKEN` trong `src/config.h` để bật mật khẩu cho mọi lệnh đổi trạng thái (để trống `""` = tắt bảo vệ, mặc định). Sau khi nạp, mở `http://<IP>/?token=mat-khau-cua-ban` một lần để trang tự nhớ token, hoặc gửi kèm header `X-Auth-Token`. Code cũng tự chặn CSRF: yêu cầu có Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` bị trả 403 (nhờ `server.collectHeaders()` trong `setup()` — đã có sẵn); trang chủ gửi `X-Frame-Options: DENY` và meta `no-referrer` để tránh lộ token qua URL. Token truyền bằng HTTP thường nên chỉ chống lẫn nhau trong LAN, không thay thế HTTPS.
+**Bảo mật web (tùy chọn):** Đặt `WEB_TOKEN` trong `src/config.h` để bật mật khẩu cho mọi lệnh đổi trạng thái **và cả `/api`** (API trả dữ liệu cảm biến + nonce chống replay, nên không để hở). Sau khi nạp, mở `http://<IP>/?token=mat-khau-cua-ban` một lần để trang tự nhớ token (lưu `sessionStorage` và xóa token khỏi thanh địa chỉ), sau đó trang gửi token qua header `X-Auth-Token` thay vì để lộ trên URL; client tự viết vẫn có thể dùng `?token=`. Token được so sánh kiểu constant-time. Code cũng tự chặn CSRF: yêu cầu có Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` bị trả 403 (nhờ `server.collectHeaders()` trong `setup()` — đã có sẵn); trang chủ gửi `X-Frame-Options: DENY` và meta `no-referrer` để tránh lộ token qua URL. Token truyền bằng HTTP thường nên chỉ chống lẫn nhau trong LAN, không thay thế HTTPS.
 
 ### Bước 4: Chọn board và cổng
 - **Tools → Board:** ESP32 Dev Module
@@ -279,12 +279,15 @@ Màn hình OLED hiển thị 8 dòng: tên hệ thống, trạng thái thời ti
 | In dữ liệu cảm biến định kỳ | Mỗi giây in 1 dòng cảm biến ở mức DEBUG (giống bài đọc độ ẩm đất qua Serial); không gây nhiễu log ở mức INFO | `logger.cpp: logSensors()`, `SmartFarm.ino` |
 | Tự kết nối lại WiFi | Thử lại ở mọi trạng thái mất mạng, không lặp log gây nhiễu | `wifi.cpp: manageWiFi()` |
 | Lưu cài đặt vào flash | Không mất cài đặt khi mất điện | `settings.cpp` |
+| State tập trung | Mọi biến mutable gom vào một `SystemState` (`sys.*`) duy nhất: rõ chủ sở hữu, dễ reset, không còn biến rời rạc | `globals.h`, `globals.cpp` |
+| Không lưu plaintext secret | `webToken`/`otaPassword` chỉ nằm ở firmware (compile-time), không ghi vào NVS/flash | `settings.cpp`, `src/config.h` |
 | Kiểm tra lỗi DHT11 | Giữ giá trị cũ khi đọc lỗi, đếm số lần lỗi để báo mã 501 | `sensors.cpp: readAllSensors()` |
 | Giới hạn giá trị từ web | Chặn servo 0–180°, màu RGB 0–255, ngưỡng trong khoảng hợp lệ | `webserver.cpp` |
 | Watchdog an toàn | Nạp watchdog trong lúc chờ WiFi, tự khởi động lại nếu chương trình treo | `SmartFarm.ino` |
 | Servo dùng chung an toàn | Cối xay gió, cho ăn và điều khiển servo thủ công tự loại trừ nhau, không tranh chấp servo | `control.cpp: setWindmill(), startFeed()`, `webserver.cpp: handleServo()` |
 | Demo không xung đột | Khi chạy trình diễn, toàn bộ điều khiển tự động tạm dừng; kết thúc demo tự tắt mọi thiết bị | `SmartFarm.ino`, `demo.cpp` |
-| Mật khẩu web tùy chọn | Đặt `WEB_TOKEN` trong `src/config.h` để mọi lệnh đổi trạng thái phải kèm token đúng (header `X-Auth-Token` hoặc `?token=`); để trống = tắt (mặc định) | `src/config.h`, `webserver.cpp: guardWeb()` |
+| Mật khẩu web tùy chọn | Đặt `WEB_TOKEN` trong `src/config.h` để mọi lệnh đổi trạng thái và `/api` phải kèm token đúng (header `X-Auth-Token` hoặc `?token=`); so sánh constant-time; để trống = tắt (mặc định) | `src/config.h`, `webserver.cpp: checkToken(), guardWeb()` |
+| Ghi flash tiết kiệm | `saveSettings()` chỉ ghi các khóa NVS thực sự đổi — bấm nút liên tục không mài mòn flash vô ích | `settings.cpp: saveSettings()` |
 | Chống CSRF | Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` bị trả 403; yêu cầu cùng nguồn được phép | `webserver.cpp: guardWeb()`, `SmartFarm.ino: collectHeaders()` |
 | Chống clickjacking/lộ token | Trang chủ gửi `X-Frame-Options: DENY` và meta `no-referrer` nên token không lộ qua URL khi mở tài nguyên ngoài | `webserver.cpp: handleRoot()` |
 
@@ -384,16 +387,16 @@ LOG_DEBUG("Extra detail only at DEBUG level");    // Chỉ hiển thị nếu c�
 
 ## 15. Kiểm thử tự động trên máy tính (không cần phần cứng)
 
-Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy **772.318 lượt kiểm tra** trên mỗi bản build thường (bản `webtoken` kiểm tra thêm bảo vệ token: 772.331 lượt):
+Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy **772.448 lượt kiểm tra** trên mỗi bản build thường (bản `webtoken` kiểm tra thêm bảo vệ token: 772.465 lượt). Các test gọi thẳng `runAutomation()` — hàm mà `loop()` dùng — nên không có logic nào bị sao chép khỏi firmware.
 
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh (core 3.x, cấu hình kit)
 ./test/run_tests.sh --full       # 5 bản build: core 3.x, core 2.x + cảm biến đảo,
                                  # còi passive + relay active-LOW, ASan + UBSan, token web
-./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh bằng gcov (hiện 99,8%)
+./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh + nhánh bằng gcov (hiện 99,9% dòng, ~79,7% nhánh)
 ```
 
-Bộ test bao phủ: logic bơm/quạt/đèn/chạm/còi, so sánh ngưỡng đúng biên, thời gian chính xác từng ms, 14 route HTTP, hợp đồng JSON 21 khóa, menu serial, trình diễn 15 bước, bền vững sau khi mất điện, fuzz 90.000 bước với các bất biến an toàn, trường hợp `millis()` tràn số, chặn CSRF và bảo vệ token web tùy chọn. Chi tiết xem `test/README.md`.
+Bộ test bao phủ: logic bơm/quạt/đèn/chạm/còi, so sánh ngưỡng đúng biên, thời gian chính xác từng ms, 15 route HTTP (kèm `/wifi` cấu hình động và callback OTA), hợp đồng JSON 21 khóa, menu serial, trình diễn 15 bước, bền vững sau khi mất điện, reset về mặc định, bỏ qua ghi flash khi giá trị không đổi, fuzz 90.000 bước với các bất biến an toàn, trường hợp `millis()` tràn số, chặn CSRF và bảo vệ token web tùy chọn (gồm cả `/api`). Chi tiết xem `test/README.md`.
 
 Muốn hiểu **từng dòng code** làm gì (giải thích tiếng Việt, trích dẫn theo số dòng), xem [`GIAI_THICH_CODE.md`](GIAI_THICH_CODE.md) — đã phủ toàn bộ `SmartFarm.ino`, `src/`, trang web nhúng và cả bộ test (`test/`).
 

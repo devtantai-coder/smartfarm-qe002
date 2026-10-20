@@ -57,7 +57,7 @@ static void demoAction(DemoAction a) {
     case DA_BREATHE_ON:  setBreatheLed(true); break;
     case DA_BREATHE_OFF: setBreatheLed(false); break;
     case DA_PUMP_ON:
-      if (gWater >= (int)waterThresholdLow) setRelay(true);
+      if (sys.gWater >= (int)sys.waterThresholdLow) setRelay(true);
       else LOG_WARN("Demo: low water, skip pump");
       break;
     case DA_PUMP_OFF:    setRelay(false); break;
@@ -80,6 +80,7 @@ void startDemo() {
   if (sRunning) return;
   setWindmill(false);
   stopFeed();
+  servo.write(FEED_CLOSE_ANGLE);   // cho ăn dở phải đóng cửa trước khi demo tiếp quản servo
   sRunning = true;
   sStep = 0;
   sStepStart = millis();
@@ -118,7 +119,7 @@ void updateDemo() {
     setRgb(0, 0, 0);
     servo.write(WINDMILL_MIN_ANGLE);
     stopFeed();
-    if (breatheAuto) setBreatheLed(true);   // khôi phục chế độ thở đã bật trước đó (bài 3)
+    if (sys.breatheAuto) setBreatheLed(true);   // khôi phục chế độ thở đã bật trước đó (bài 3)
     LOG_INFO("===== DEMO DONE =====");
     return;
   }

@@ -1,22 +1,9 @@
 #include "globals.h"
 
-// ── Trạng thái ──
-bool pumpAuto = true, lightAuto = true, rgbAuto = true, fanAuto = true, breatheAuto = false;
-bool relayState = false, fanState = false, blueLedState = false, breatheLedState = false;
-bool windmillOn = false;
-uint8_t rgbR = 0, rgbG = 0, rgbB = 0;
-uint8_t breatheBrightness = 0;
-int8_t breatheDirection = 1;
-int servoAngle = 0;
-
-// ── Cảm biến ──
-float gTemp = 0, gHum = 0;
-int gLight = 0, gSoil = 0, gWater = 0;
-bool gPir = false, gTouch = false;
-
-// ── Thời gian ──
-unsigned long lastWifiCheck = 0, lastSensorRead = 0, lastOledUpdate = 0;
-unsigned long lastBuzzer = 0, lastTouch = 0, lastBreatheUpdate = 0;
+// ── Trạng thái toàn cục ──
+// Giá trị mặc định nằm ngay trong định nghĩa SystemState (globals.h);
+// ở đây chỉ có đúng một định nghĩa duy nhất cho toàn chương trình.
+SystemState sys;
 
 // ── Phần cứng ──
 DHT dht(DHT_PIN, DHT_TYPE);
@@ -25,17 +12,3 @@ Adafruit_NeoPixel strip(RGB_COUNT, RGB_PIN, NEO_GRB + NEO_KHZ800);
 Servo servo;
 WebServer server(80);
 Preferences preferences;
-
-// ── Sức khỏe ──
-uint8_t sensorFailCount = 0;
-bool sensorHealthy = true;
-
-// ── Mã bảo mật (khởi tạo từ macro compile-time, có thể ghi đè từ Preferences) ──
-char webToken[64] = WEB_TOKEN;
-char otaPassword[64] = OTA_PASSWORD;
-
-// ── Chống replay ──
-uint32_t gLastNonce = 0;
-
-// ── Cờ khởi động lại ──
-bool gNeedRestart = false;

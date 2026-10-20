@@ -22,23 +22,52 @@
 #include "config.h"
 #include "logger.h"
 
-// ── Trạng thái hệ thống ──
-extern bool pumpAuto, lightAuto, rgbAuto, fanAuto, breatheAuto;
-extern bool relayState, fanState, blueLedState, breatheLedState;
-extern bool windmillOn;
-extern uint8_t rgbR, rgbG, rgbB;
-extern uint8_t breatheBrightness;
-extern int8_t breatheDirection;
-extern int servoAngle;
+// ── Trạng thái toàn cục ──
+// Mọi biến mutable được gom vào một struct duy nhất (định nghĩa ở globals.cpp)
+// để rõ chủ sở hữu, dễ reset và tránh biến rời rạc rải khắp chương trình.
+struct SystemState {
+  // Chế độ tự động
+  bool pumpAuto = true, lightAuto = true, rgbAuto = true, fanAuto = true, breatheAuto = false;
 
-// ── Dữ liệu cảm biến ──
-extern float gTemp, gHum;
-extern int gLight, gSoil, gWater;
-extern bool gPir, gTouch;
+  // Trạng thái cơ cấu chấp hành
+  bool relayState = false, fanState = false, blueLedState = false, breatheLedState = false;
+  bool windmillOn = false;
+  uint8_t rgbR = 0, rgbG = 0, rgbB = 0;
+  uint8_t breatheBrightness = 0;
+  int8_t breatheDirection = 1;
+  int servoAngle = 0;
 
-// ── Thời gian ──
-extern unsigned long lastWifiCheck, lastSensorRead, lastOledUpdate;
-extern unsigned long lastBuzzer, lastTouch, lastBreatheUpdate;
+  // Dữ liệu cảm biến (giá trị đã lọc)
+  float gTemp = 0, gHum = 0;
+  int gLight = 0, gSoil = 0, gWater = 0;
+  bool gPir = false, gTouch = false;
+
+  // Ngưỡng điều khiển (người dùng chỉnh được, lưu flash)
+  float soilThresholdLow = 400.0f, soilThresholdHigh = 700.0f;
+  float waterThresholdLow = 200.0f;
+  int   lightThreshold = 500;
+  float tempThresholdHigh = 30.0f, tempThresholdLow = 25.0f;
+
+  // Mốc thời gian (millis)
+  unsigned long lastWifiCheck = 0, lastSensorRead = 0, lastOledUpdate = 0;
+  unsigned long lastBuzzer = 0, lastTouch = 0, lastBreatheUpdate = 0;
+
+  // Sức khỏe cảm biến
+  uint8_t sensorFailCount = 0;
+  bool sensorHealthy = true;
+
+  // Cấu hình kết nối + mã bảo mật (compile-time, KHÔNG ghi flash dạng plaintext)
+  char ssid[32] = "YOUR_WIFI_SSID";
+  char password[64] = "YOUR_WIFI_PASSWORD";
+  char webToken[64] = WEB_TOKEN;
+  char otaPassword[64] = OTA_PASSWORD;
+
+  // Chống replay + cờ khởi động lại
+  uint32_t gLastNonce = 0;
+  bool gNeedRestart = false;
+};
+
+extern SystemState sys;
 
 // ── Đối tượng phần cứng ──
 extern DHT dht;
@@ -47,19 +76,5 @@ extern Adafruit_NeoPixel strip;
 extern Servo servo;
 extern WebServer server;
 extern Preferences preferences;
-
-// ── Sức khỏe cảm biến ──
-extern uint8_t sensorFailCount;
-extern bool sensorHealthy;
-
-// ── Mã bảo mật (lưu trong Preferences, fallback về compile-time) ──
-extern char webToken[64];
-extern char otaPassword[64];
-
-// ── Chống replay ──
-extern uint32_t gLastNonce;
-
-// ── Cờ khởi động lại sau khi lưu cài đặt ──
-extern bool gNeedRestart;
 
 #endif

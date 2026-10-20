@@ -14,6 +14,7 @@ public:
   bool begin(int, int);
   void clearDisplay();
   void display() {}
+  uint8_t *getBuffer();
   void setTextColor(int) {}
   void setCursor(int x, int y);
   void setTextSize(int) {}

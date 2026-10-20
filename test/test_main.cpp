@@ -9,6 +9,13 @@
 //     lưu settings bền qua một chu kỳ nguồn mô phỏng, và một lượt
 //     fuzz/soak có seed kiểm tra các safety invariant sau mỗi loop().
 //
+// Các test gọi runAutomation() — chính hàm firmware mà loop() dùng — nên
+// không có bản sao logic điều khiển nào trong test. Mỗi test được chạy qua
+// RUN_TEST() để in dòng PASS/FAIL kèm số check của riêng nó.
+//
+// Biến môi trường:
+//   FUZZ_ITERS=N   đổi số vòng fuzz mỗi seed (mặc định 30000)
+//
 // Cách build & chạy:  ./test/run_tests.sh   (xem test/README.md)
 #include <cstdio>
 #include <cmath>
@@ -18,6 +25,7 @@
 #include <vector>
 #include <set>
 #include <random>
+#include <type_traits>
 
 #include "mock.h"
 #include "globals.h"
@@ -28,40 +36,61 @@
 #include "settings.h"
 #include "oled.h"
 #include "config.h"
+#include "ArduinoOTA.h"
 
 // Các entry point thật của firmware (SmartFarm.ino)
 void setup();
 void loop();
+void runAutomation();   // logic automation thật, loop() cũng gọi hàm này
 
 static int gChecks = 0, gFails = 0;
+static const char *gCurrentTest = "init";
+
+// CHECK_EQ chỉ dành cho số nguyên/enum: dùng long long (không phải long) và
+// chặn ngay lúc biên dịch nếu ai đó lỡ truyền số thực — phải dùng CHECK_NEAR.
+template <typename A, typename B>
+static void checkEq(A a, B b, int line, const char *sa, const char *sb) {
+  static_assert((std::is_integral<A>::value || std::is_enum<A>::value) &&
+                    (std::is_integral<B>::value || std::is_enum<B>::value),
+                "CHECK_EQ chi dung cho so nguyen/kieu enum; so thuc phai dung CHECK_NEAR");
+  gChecks++;
+  if (static_cast<long long>(a) != static_cast<long long>(b)) {
+    gFails++;
+    printf("  FAIL [%s] line %d: %s (%lld) != %s (%lld)\n", gCurrentTest, line, sa,
+           static_cast<long long>(a), sb, static_cast<long long>(b));
+  }
+}
+#define CHECK_EQ(a, b) checkEq((a), (b), __LINE__, #a, #b)
 
 #define CHECK(cond) do { \
   gChecks++; \
-  if (!(cond)) { gFails++; printf("  FAIL line %d: %s\n", __LINE__, #cond); } \
-} while (0)
-
-#define CHECK_EQ(a, b) do { \
-  gChecks++; \
-  if ((long)(a) != (long)(b)) { \
-    gFails++; printf("  FAIL line %d: %s (%ld) != %s (%ld)\n", \
-                     __LINE__, #a, (long)(a), #b, (long)(b)); \
-  } \
+  if (!(cond)) { gFails++; printf("  FAIL [%s] line %d: %s\n", gCurrentTest, __LINE__, #cond); } \
 } while (0)
 
 #define CHECK_NEAR(a, b, eps) do { \
   gChecks++; \
   if (fabs((double)(a) - (double)(b)) > (eps)) { \
-    gFails++; printf("  FAIL line %d: %s (%.2f) != %s (%.2f)\n", \
-                     __LINE__, #a, (double)(a), #b, (double)(b)); \
+    gFails++; printf("  FAIL [%s] line %d: %s (%.2f) != %s (%.2f)\n", \
+                     gCurrentTest, __LINE__, #a, (double)(a), #b, (double)(b)); \
   } \
 } while (0)
 
 #define CHECK_STR(a, b) do { \
   gChecks++; \
   if (strcmp((a), (b)) != 0) { \
-    gFails++; printf("  FAIL line %d: \"%s\" != \"%s\"\n", __LINE__, (a), (b)); \
+    gFails++; printf("  FAIL [%s] line %d: \"%s\" != \"%s\"\n", gCurrentTest, __LINE__, (a), (b)); \
   } \
 } while (0)
+
+// Chạy một test và in kết quả riêng: giúp khoanh vùng lỗi ngay trên output.
+static void runTest(const char *name, void (*fn)()) {
+  gCurrentTest = name;
+  int checks0 = gChecks, fails0 = gFails;
+  fn();
+  printf("[%s] %s (%d checks, %d fail)\n", gFails == fails0 ? "PASS" : "FAIL",
+         name, gChecks - checks0, gFails - fails0);
+}
+#define RUN_TEST(fn) runTest(#fn, fn)
 
 // ==============================================
 //  Các hàm phụ trợ
@@ -110,7 +139,10 @@ void testResetActuatorStatics();
 void testResetControlStatics();
 void testResetDemoStatics();
 void testResetSensorStatics();
+void testResetSettingsStatics();
 void testResetWifiStatics();
+void testResetLoggerStatics();
+void testResetOledStatics();
 #endif
 
 static void resetState() {
@@ -120,43 +152,27 @@ static void resetState() {
   testResetControlStatics();
   testResetDemoStatics();
   testResetSensorStatics();
+  testResetSettingsStatics();
   testResetWifiStatics();
+  testResetLoggerStatics();
+  testResetOledStatics();
 #endif
-  soilThresholdLow = 400; soilThresholdHigh = 700; waterThresholdLow = 200;
-  lightThreshold = 500; tempThresholdHigh = 30; tempThresholdLow = 25;
-  pumpAuto = lightAuto = rgbAuto = fanAuto = true;
-  breatheAuto = false;
-  relayState = fanState = blueLedState = breatheLedState = false;
-  windmillOn = false;
-  rgbR = rgbG = rgbB = 0;
-  breatheBrightness = 0;
-  breatheDirection = 1;
-  servoAngle = 0;
-  gTemp = 22; gHum = 50; gLight = 300; gSoil = 500; gWater = 800;
-  gPir = false; gTouch = false;
-  lastWifiCheck = lastSensorRead = lastOledUpdate = 0;
-  lastBuzzer = lastTouch = lastBreatheUpdate = 0;
-  sensorFailCount = 0;
-  sensorHealthy = true;
-}
-
-// Mô phỏng đúng phần điều khiển trong loop() của SmartFarm.ino (không có HTTP/OLED)
-static void simLoop() {
-  unsigned long now = mockMillis();
-  gTouch = readTouch();
-  gPir = readPIR();
-  if (now - lastSensorRead >= SENSOR_INTERVAL) {
-    readAllSensors();
-    lastSensorRead = now;
-  }
-  if (gWater < (int)waterThresholdLow && relayState) setRelay(false);
-  if (demoRunning()) {
-    updateDemo();
-    controlBreathe();
-  } else {
-    controlPump(); controlFan(); controlLight(); controlRgb(); controlBreathe();
-    controlTouch(); controlAlerts(); controlWindmill(); controlFeed();
-  }
+  gMinLogLevel = LOG_INFO;
+  // Ngưỡng + cờ auto lấy từ chính firmware (một nguồn sự thật, không chép
+  // lại hằng số mặc định ở đây); resetSettings() cũng xóa flash như mockReset().
+  resetSettings();
+  sys.relayState = sys.fanState = sys.blueLedState = sys.breatheLedState = false;
+  sys.windmillOn = false;
+  sys.rgbR = sys.rgbG = sys.rgbB = 0;
+  sys.breatheBrightness = 0;
+  sys.breatheDirection = 1;
+  sys.servoAngle = 0;
+  sys.gTemp = 22; sys.gHum = 50; sys.gLight = 300; sys.gSoil = 500; sys.gWater = 800;
+  sys.gPir = false; sys.gTouch = false;
+  sys.lastWifiCheck = sys.lastSensorRead = sys.lastOledUpdate = 0;
+  sys.lastBuzzer = sys.lastTouch = sys.lastBreatheUpdate = 0;
+  sys.sensorFailCount = 0;
+  sys.sensorHealthy = true;
 }
 
 static int invoke(const char *path,
@@ -185,7 +201,30 @@ static void primeSensors(int water) {
   mockAdc[LDR_PIN] = 1000; mockAdc[SOIL_PIN] = 600;
   mockAdc[WATER_PIN] = INVERT_WATER ? 4095 - water : water;
   for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
-  lastSensorRead = mockMillis();
+  sys.lastSensorRead = mockMillis();
+}
+
+// Danh sách route là NGUỒN DUY NHẤT: thêm route mới chỉ cần sửa một chỗ,
+// không còn con số 15 lặp lại rải rác trong các test.
+static const char *ALL_ROUTES[] = {
+  "/", "/api", "/toggle", "/auto", "/rgb", "/servo", "/breathe", "/on", "/off",
+  "/windmill", "/feed", "/demo", "/threshold", "/wifi", "/favicon.ico"
+};
+static const int ALL_ROUTE_COUNT = (int)(sizeof(ALL_ROUTES) / sizeof(ALL_ROUTES[0]));
+
+static void checkAllRoutes() {
+  CHECK_EQ(mockServerRouteCount(), ALL_ROUTE_COUNT);
+  for (const char *r : ALL_ROUTES) CHECK(mockServerHasRoute(r));
+}
+
+// Số vòng fuzz mỗi seed; có thể rút ngắn khi phát triển bằng FUZZ_ITERS.
+static int fuzzIterations() {
+  const char *env = getenv("FUZZ_ITERS");
+  if (env && *env) {
+    int v = atoi(env);
+    if (v > 0) return v;
+  }
+  return 30000;
 }
 
 // ==============================================
@@ -201,20 +240,20 @@ static void testSensorsAverage() {
   for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
 
   auto dir = [](int raw, int invert) { return invert ? 4095 - raw : raw; };
-  CHECK_EQ(gLight, dir(3000, INVERT_LIGHT));
-  CHECK_EQ(gSoil, dir(600, INVERT_SOIL));
-  CHECK_EQ(gWater, dir(900, INVERT_WATER));
-  CHECK_NEAR(gTemp, 26.5, 0.05);
-  CHECK_NEAR(gHum, 61.0, 0.05);
+  CHECK_EQ(sys.gLight, dir(3000, INVERT_LIGHT));
+  CHECK_EQ(sys.gSoil, dir(600, INVERT_SOIL));
+  CHECK_EQ(sys.gWater, dir(900, INVERT_WATER));
+  CHECK_NEAR(sys.gTemp, 26.5, 0.05);
+  CHECK_NEAR(sys.gHum, 61.0, 0.05);
 
   mockAdc[LDR_PIN] = 2000;
   for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
-  CHECK_EQ(gLight, dir(2000, INVERT_LIGHT));
+  CHECK_EQ(sys.gLight, dir(2000, INVERT_LIGHT));
 
   mockAdc[LDR_PIN] = 1000;
   readAllSensors();
   int expected = (4 * dir(2000, INVERT_LIGHT) + dir(1000, INVERT_LIGHT)) / 5;
-  CHECK_EQ(gLight, expected);
+  CHECK_EQ(sys.gLight, expected);
 }
 
 // T2: DHT NaN failover + cờ health
@@ -223,24 +262,24 @@ static void testDhtFailover() {
   resetState();
   mockDhtTemp = 26.0f; mockDhtHum = 55.0f;
   for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
-  CHECK_NEAR(gTemp, 26.0, 0.05);
+  CHECK_NEAR(sys.gTemp, 26.0, 0.05);
 
   mockDhtTemp = NAN;
   readAllSensors();
-  CHECK_NEAR(gTemp, 26.0, 0.05);
+  CHECK_NEAR(sys.gTemp, 26.0, 0.05);
   for (int i = 0; i < 6; i++) readAllSensors();
-  CHECK(!sensorHealthy);
+  CHECK(!sys.sensorHealthy);
 
   mockDhtTemp = 24.0f; mockDhtHum = 50.0f;
   for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
-  CHECK(sensorHealthy);
-  CHECK_NEAR(gTemp, 24.0, 0.05);
+  CHECK(sys.sensorHealthy);
+  CHECK_NEAR(sys.gTemp, 24.0, 0.05);
 
   // Độ ẩm NaN dùng lại giá trị lọc tốt cuối cùng (giống nhiệt độ)
   mockDhtTemp = 27.0f; mockDhtHum = NAN;
   readAllSensors();
-  CHECK_NEAR(gHum, 50.0, 0.5);
-  CHECK(sensorHealthy);        // một NaN độ ẩm đơn lẻ không đánh dấu cảm biến lỗi
+  CHECK_NEAR(sys.gHum, 50.0, 0.5);
+  CHECK(sys.sensorHealthy);        // một NaN độ ẩm đơn lẻ không đánh dấu cảm biến lỗi
   mockDhtHum = 50.0f;
   readAllSensors();
 }
@@ -249,86 +288,86 @@ static void testDhtFailover() {
 static void testPumpHysteresis() {
   printf("T3  pump: soil hysteresis\n");
   resetState();
-  gWater = 900;
-  gSoil = 300;
+  sys.gWater = 900;
+  sys.gSoil = 300;
   controlPump();
-  CHECK(relayState);
+  CHECK(sys.relayState);
   checkRelayPin(true);
-  gSoil = 500;                 // giữa các ngưỡng: không đổi
+  sys.gSoil = 500;                 // giữa các ngưỡng: không đổi
   controlPump();
-  CHECK(relayState);
-  gSoil = 800;
+  CHECK(sys.relayState);
+  sys.gSoil = 800;
   controlPump();
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
   checkRelayPin(false);
 
   // Ngưỡng đảo không được làm relay bật/tắt liên tục
   resetState();
-  soilThresholdLow = 700; soilThresholdHigh = 400;
-  gSoil = 500; gWater = 900;
+  sys.soilThresholdLow = 700; sys.soilThresholdHigh = 400;
+  sys.gSoil = 500; sys.gWater = 900;
   controlPump();
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
   controlPump();
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
 }
 
 // T4: an toàn hết nước của bơm kể cả ở chế độ thủ công (hoạt động 8)
 static void testPumpLowWaterSafety() {
   printf("T4  pump: low-water safety\n");
   resetState();
-  pumpAuto = false;
+  sys.pumpAuto = false;
   setRelay(true);
-  CHECK(relayState);
-  gWater = 100;
+  CHECK(sys.relayState);
+  sys.gWater = 100;
   controlPump();
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
 
-  pumpAuto = true;
-  gSoil = 100;                 // rất khô nhưng không có nước
-  gWater = 100;
+  sys.pumpAuto = true;
+  sys.gSoil = 100;                 // rất khô nhưng không có nước
+  sys.gWater = 100;
   controlPump();
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
 }
 
 // T5: trễ bật/tắt quạt theo nhiệt độ
 static void testFanHysteresis() {
   printf("T5  fan: temperature hysteresis\n");
   resetState();
-  gTemp = 31; controlFan(); CHECK(fanState);
-  gTemp = 27; controlFan(); CHECK(fanState);
-  gTemp = 24; controlFan(); CHECK(!fanState);
+  sys.gTemp = 31; controlFan(); CHECK(sys.fanState);
+  sys.gTemp = 27; controlFan(); CHECK(sys.fanState);
+  sys.gTemp = 24; controlFan(); CHECK(!sys.fanState);
 
   // Ngưỡng đảo không được làm relay bật/tắt liên tục
   resetState();
-  tempThresholdHigh = 25; tempThresholdLow = 30;
-  gTemp = 27;
+  sys.tempThresholdHigh = 25; sys.tempThresholdLow = 30;
+  sys.gTemp = 27;
   controlFan();
-  CHECK(!fanState);
+  CHECK(!sys.fanState);
   controlFan();
-  CHECK(!fanState);
+  CHECK(!sys.fanState);
 }
 
 // T6: đèn auto + PIR chiếm quyền + cảnh báo
 static void testLightPirAlerts() {
   printf("T6  light auto / PIR / alerts\n");
   resetState();
-  gLight = 400;                // tối
+  sys.gLight = 400;                // tối
   controlLight();
-  CHECK(blueLedState);
-  gLight = 600;                // sáng
+  CHECK(sys.blueLedState);
+  sys.gLight = 600;                // sáng
   controlLight();
-  CHECK(!blueLedState);
+  CHECK(!sys.blueLedState);
 
-  gPir = true;                 // PIR nắm LED: đèn auto phải nhường
-  gLight = 400;
+  sys.gPir = true;                 // PIR nắm LED: đèn auto phải nhường
+  sys.gLight = 400;
   controlLight();
-  CHECK(!blueLedState);
+  CHECK(!sys.blueLedState);
 
   controlAlerts();             // PIR bật đèn
-  CHECK(blueLedState);
-  gPir = false;
+  CHECK(sys.blueLedState);
+  sys.gPir = false;
   controlAlerts();             // và tắt khi hết chuyển động
-  CHECK(!blueLedState);
+  CHECK(!sys.blueLedState);
 }
 
 // T7: LED xanh sáng đều vs breathing (hoạt động 3) + điều phối PWM
@@ -336,8 +375,8 @@ static void testBreatheAndLedModes() {
   printf("T7  LED: steady/breathe modes + PWM dispatch\n");
   resetState();
   setBreatheLed(true);
-  CHECK(breatheLedState);
-  CHECK(!blueLedState);
+  CHECK(sys.breatheLedState);
+  CHECK(!sys.blueLedState);
   CHECK_EQ(currentLedPwm(), 0);
 
   uint32_t first = 0, peak = 0;
@@ -352,8 +391,8 @@ static void testBreatheAndLedModes() {
   CHECK_EQ(peak, 255);
 
   setBlueLed(true);            // lệnh sáng đều thắng breathing
-  CHECK(!breatheLedState);
-  CHECK(blueLedState);
+  CHECK(!sys.breatheLedState);
+  CHECK(sys.blueLedState);
   CHECK_EQ(currentLedPwm(), 255);
   setBlueLed(false);
   CHECK_EQ(currentLedPwm(), 0);
@@ -367,24 +406,24 @@ static void testTouchToggle() {
   printf("T8  touch: edge toggle + debounce\n");
   resetState();
   mockAdvance(5000);
-  gTouch = true;
+  sys.gTouch = true;
   controlTouch();
-  CHECK(blueLedState);
+  CHECK(sys.blueLedState);
   controlTouch();              // giữ: không lặp lại
-  CHECK(blueLedState);
-  gTouch = false;
+  CHECK(sys.blueLedState);
+  sys.gTouch = false;
   controlTouch();
-  gTouch = true;
+  sys.gTouch = true;
   mockAdvance(TOUCH_DEBOUNCE - 100);
   controlTouch();              // trong thời gian debounce: lần nhấn bị nuốt
-  CHECK(blueLedState);
-  gTouch = false;
+  CHECK(sys.blueLedState);
+  sys.gTouch = false;
   controlTouch();              // nhả
   mockAdvance(200);            // lúc này đã qua cửa sổ debounce
-  gTouch = true;
+  sys.gTouch = true;
   controlTouch();              // tắt
-  CHECK(!blueLedState);
-  CHECK(!lightAuto);           // thao tác thủ công đã tắt auto
+  CHECK(!sys.blueLedState);
+  CHECK(!sys.lightAuto);           // thao tác thủ công đã tắt auto
 }
 
 // T9: đèn RGB trồng cây (hoạt động 9)
@@ -394,21 +433,21 @@ static void testRgbPlant() {
   setRgb(10, 20, 30);
   CHECK_EQ(mockPixel[3], (10 << 16) | (20 << 8) | 30);
 
-  gLight = 400;                // tối -> kiểu đèn cho cây
+  sys.gLight = 400;                // tối -> kiểu đèn cho cây
   controlRgb();
   CHECK_EQ(mockPixel[0], 0xFF0000);
   CHECK_EQ(mockPixel[1], 0x0000FF);
   CHECK_EQ(mockPixel[2], 0xFF0000);
   CHECK_EQ(mockPixel[3], 0x0000FF);
-  CHECK_EQ(rgbR, 255); CHECK_EQ(rgbG, 0); CHECK_EQ(rgbB, 255);
+  CHECK_EQ(sys.rgbR, 255); CHECK_EQ(sys.rgbG, 0); CHECK_EQ(sys.rgbB, 255);
 
-  gLight = 600;                // sáng -> tắt
+  sys.gLight = 600;                // sáng -> tắt
   controlRgb();
   for (int i = 0; i < RGB_COUNT; i++) CHECK_EQ(mockPixel[i], 0);
-  CHECK_EQ(rgbR, 0); CHECK_EQ(rgbB, 0);
+  CHECK_EQ(sys.rgbR, 0); CHECK_EQ(sys.rgbB, 0);
 
   setRgb(10, 20, 30);          // màu thủ công, rồi tối lại
-  gLight = 400;
+  sys.gLight = 400;
   controlRgb();
   CHECK_EQ(mockPixel[0], 0xFF0000);
 }
@@ -418,10 +457,10 @@ static void testBuzzerAlarm() {
   printf("T10 buzzer: low-water alarm\n");
   resetState();
   checkBuzzer(false);
-  gWater = 100;
+  sys.gWater = 100;
   controlAlerts();
   checkBuzzer(true);
-  gWater = 800;
+  sys.gWater = 800;
   controlAlerts();
   checkBuzzer(false);
 }
@@ -431,7 +470,7 @@ static void testWindmillSweep() {
   printf("T11 windmill: servo sweep\n");
   resetState();
   setWindmill(true);
-  CHECK(windmillOn);
+  CHECK(sys.windmillOn);
   int minA = 999, maxA = -1;
   for (int i = 0; i < 120; i++) {
     mockAdvance(WINDMILL_INTERVAL);
@@ -465,11 +504,11 @@ static void testFeedGate() {
   setWindmill(true);
   startFeed();                 // cho ăn chiếm servo dùng chung
   CHECK(feedRunning());
-  CHECK(!windmillOn);
+  CHECK(!sys.windmillOn);
   CHECK_EQ(mockServoAngle, FEED_OPEN_ANGLE);
   setWindmill(true);           // cối xay gió lấy lại
   CHECK(!feedRunning());
-  CHECK(windmillOn);
+  CHECK(sys.windmillOn);
   setWindmill(false);
 }
 
@@ -477,34 +516,135 @@ static void testFeedGate() {
 static void testWeather() {
   printf("T13 weather: light + humidity guess\n");
   resetState();
-  gLight = 800; gHum = 50; CHECK_EQ(weatherStatus(), WEATHER_SUNNY);
-  gHum = 90;               CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
-  gLight = 200; gHum = 90; CHECK_EQ(weatherStatus(), WEATHER_RAIN);
-  gHum = 50;               CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
-  gLight = 500;            CHECK_EQ(weatherStatus(), WEATHER_NORMAL);
+  sys.gLight = 800; sys.gHum = 50; CHECK_EQ(weatherStatus(), WEATHER_SUNNY);
+  sys.gHum = 90;               CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
+  sys.gLight = 200; sys.gHum = 90; CHECK_EQ(weatherStatus(), WEATHER_RAIN);
+  sys.gHum = 50;               CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
+  sys.gLight = 500;            CHECK_EQ(weatherStatus(), WEATHER_NORMAL);
 }
 
 // T14: lưu/đọc settings vòng tròn
 static void testSettingsRoundtrip() {
   printf("T14 settings: save/load roundtrip\n");
   resetState();
-  soilThresholdLow = 111; soilThresholdHigh = 222; waterThresholdLow = 133;
-  lightThreshold = 654; tempThresholdHigh = 35.5f; tempThresholdLow = 21.5f;
-  pumpAuto = false; lightAuto = false; rgbAuto = true; fanAuto = false; breatheAuto = true;
+  sys.soilThresholdLow = 111; sys.soilThresholdHigh = 222; sys.waterThresholdLow = 133;
+  sys.lightThreshold = 654; sys.tempThresholdHigh = 35.5f; sys.tempThresholdLow = 21.5f;
+  sys.pumpAuto = false; sys.lightAuto = false; sys.rgbAuto = true; sys.fanAuto = false; sys.breatheAuto = true;
   saveSettings();
 
-  soilThresholdLow = 0; soilThresholdHigh = 0; waterThresholdLow = 0;
-  lightThreshold = 0; tempThresholdHigh = 0; tempThresholdLow = 0;
-  pumpAuto = true; lightAuto = true; rgbAuto = false; fanAuto = true; breatheAuto = false;
+  sys.soilThresholdLow = 0; sys.soilThresholdHigh = 0; sys.waterThresholdLow = 0;
+  sys.lightThreshold = 0; sys.tempThresholdHigh = 0; sys.tempThresholdLow = 0;
+  sys.pumpAuto = true; sys.lightAuto = true; sys.rgbAuto = false; sys.fanAuto = true; sys.breatheAuto = false;
   loadSettings();
 
-  CHECK_NEAR(soilThresholdLow, 111, 0.01);
-  CHECK_NEAR(soilThresholdHigh, 222, 0.01);
-  CHECK_NEAR(waterThresholdLow, 133, 0.01);
-  CHECK_EQ(lightThreshold, 654);
-  CHECK_NEAR(tempThresholdHigh, 35.5, 0.01);
-  CHECK_NEAR(tempThresholdLow, 21.5, 0.01);
-  CHECK(!pumpAuto); CHECK(!lightAuto); CHECK(rgbAuto); CHECK(!fanAuto); CHECK(breatheAuto);
+  CHECK_NEAR(sys.soilThresholdLow, 111, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 222, 0.01);
+  CHECK_NEAR(sys.waterThresholdLow, 133, 0.01);
+  CHECK_EQ(sys.lightThreshold, 654);
+  CHECK_NEAR(sys.tempThresholdHigh, 35.5, 0.01);
+  CHECK_NEAR(sys.tempThresholdLow, 21.5, 0.01);
+  CHECK(!sys.pumpAuto); CHECK(!sys.lightAuto); CHECK(sys.rgbAuto); CHECK(!sys.fanAuto); CHECK(sys.breatheAuto);
+}
+
+// T18: resetSettings xóa flash + bỏ qua commit khi giá trị không đổi
+static void testSettingsResetAndSkip() {
+  printf("T18 settings: reset defaults + skip unchanged writes\n");
+  resetState();
+
+  // Lưu cấu hình khác mặc định
+  sys.soilThresholdLow = 321; sys.pumpAuto = false;
+  saveSettings();
+  CHECK_NEAR(mockPrefGet("soilLow", 0), 321, 0.01);
+  CHECK_NEAR(mockPrefGet("pumpAuto", 1), 0, 0.01);
+
+  // Mã bảo mật KHÔNG được ghi vào flash dạng plaintext
+  strncpy(sys.otaPassword, "ota-test-123", sizeof(sys.otaPassword) - 1);
+  sys.otaPassword[sizeof(sys.otaPassword) - 1] = '\0';
+  strncpy(sys.webToken, "token-test-456", sizeof(sys.webToken) - 1);
+  sys.webToken[sizeof(sys.webToken) - 1] = '\0';
+  saveSettings();
+  CHECK_STR(mockPrefGetStr("otaPass", ""), "");
+  CHECK_STR(mockPrefGetStr("webToken", ""), "");
+
+  // Lưu lần hai khi mọi giá trị không đổi: bỏ qua, không commit flash
+  gMinLogLevel = LOG_DEBUG;
+  mockSerialClear();
+  saveSettings();
+  CHECK(has(mockSerialOutput(), "Settings unchanged"));
+  gMinLogLevel = LOG_INFO;
+
+  // Đổi một giá trị: khóa đó được ghi lại
+  sys.soilThresholdLow = 322;
+  saveSettings();
+  CHECK_NEAR(mockPrefGet("soilLow", 0), 322, 0.01);
+
+  // loadSettings không đụng tới mã bảo mật trong RAM
+  sys.otaPassword[0] = '\0';
+  loadSettings();
+  CHECK_STR(sys.otaPassword, "");
+
+  // resetSettings: flash sạch, mọi thứ về mặc định
+  resetSettings();
+  CHECK_NEAR(sys.soilThresholdLow, 400, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 700, 0.01);
+  CHECK_NEAR(sys.waterThresholdLow, 200, 0.01);
+  CHECK_EQ(sys.lightThreshold, 500);
+  CHECK_NEAR(sys.tempThresholdHigh, 30, 0.01);
+  CHECK_NEAR(sys.tempThresholdLow, 25, 0.01);
+  CHECK(sys.pumpAuto); CHECK(sys.lightAuto); CHECK(sys.rgbAuto); CHECK(sys.fanAuto);
+  CHECK(!sys.breatheAuto);
+  CHECK_STR(sys.ssid, "YOUR_WIFI_SSID");
+  CHECK_STR(sys.webToken, WEB_TOKEN);
+  CHECK_STR(sys.otaPassword, OTA_PASSWORD);
+  CHECK(!sys.gNeedRestart);
+  CHECK_NEAR(mockPrefGet("soilLow", -1), -1, 0.01);      // flash đã bị xóa
+
+  // Lần lưu sau reset phải ghi lại toàn bộ (bản chụp đã bị vô hiệu)
+  saveSettings();
+  CHECK_NEAR(mockPrefGet("soilLow", -1), 400, 0.01);
+
+  resetState();
+}
+
+// T19: logger an toàn với cấp log ngoài enum
+static void testLoggerLevelGuard() {
+  printf("T19 logger: invalid level label\n");
+  mockSerialClear();
+  logMessage((LogLevel)99, "test", 1, "bad level");
+  CHECK(has(mockSerialOutput(), "?????"));
+  CHECK(has(mockSerialOutput(), "bad level"));
+}
+
+// T20: giá trị NVS không hữu hạn (flash hỏng) quay về mặc định
+static void testSettingsNonFiniteFallback() {
+  printf("T20 settings: non-finite NVS floats fall back to defaults\n");
+  resetState();
+  mockPrefPut("soilLow", NAN);
+  mockPrefPut("soilHigh", INFINITY);
+  mockPrefPut("waterLow", -INFINITY);
+  mockPrefPut("tempHigh", NAN);
+  mockPrefPut("tempLow", INFINITY);
+  mockPrefPut("lightThr", 123);
+
+  loadSettings();
+  CHECK(isfinite(sys.soilThresholdLow));       // không được giữ NaN/Inf
+  CHECK(isfinite(sys.soilThresholdHigh));
+  CHECK(isfinite(sys.waterThresholdLow));
+  CHECK(isfinite(sys.tempThresholdHigh));
+  CHECK(isfinite(sys.tempThresholdLow));
+  CHECK_NEAR(sys.soilThresholdLow, 400, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 700, 0.01);
+  CHECK_NEAR(sys.waterThresholdLow, 200, 0.01);
+  CHECK_NEAR(sys.tempThresholdHigh, 30, 0.01);
+  CHECK_NEAR(sys.tempThresholdLow, 25, 0.01);
+  CHECK_EQ(sys.lightThreshold, 123);           // giá trị hữu hạn vẫn được giữ
+
+  // Điều khiển phải chạy lại bình thường với các giá trị đã sửa
+  sys.gWater = 900; sys.gSoil = 100;
+  controlPump();
+  CHECK(sys.relayState);
+  setRelay(false);
+  resetState();
 }
 
 // T15: chạy demo đầy đủ (hoạt động 2-12)
@@ -512,7 +652,7 @@ static void testDemoFullRun() {
   printf("T15 demo: full sequence\n");
   resetState();
   primeSensors(900);
-  CHECK(gWater > (int)waterThresholdLow);
+  CHECK(sys.gWater > (int)sys.waterThresholdLow);
 
   startDemo();
   CHECK(demoRunning());
@@ -521,8 +661,8 @@ static void testDemoFullRun() {
   unsigned long cap = mockMillis() + 120000;
   while (demoRunning() && mockMillis() < cap) {
     mockAdvance(10);
-    simLoop();
-    if (relayState) sawRelay = true;
+    runAutomation();
+    if (sys.relayState) sawRelay = true;
     if (strstr(demoStepName(), "Den tho")) {
       inBreatheStep = true;
       uint32_t p = currentLedPwm();
@@ -535,9 +675,9 @@ static void testDemoFullRun() {
   CHECK(inBreatheStep);                  // bước HD3 đã chạy
   CHECK(breatheMax > 0);                 // và LED thực sự breathing
   CHECK(breatheMin < breatheMax);
-  CHECK(!relayState);
-  CHECK(!blueLedState);
-  CHECK(!breatheLedState);
+  CHECK(!sys.relayState);
+  CHECK(!sys.blueLedState);
+  CHECK(!sys.breatheLedState);
   CHECK_EQ(mockServoAngle, WINDMILL_MIN_ANGLE);
   CHECK_EQ(currentLedPwm(), 0);
   checkBuzzer(false);
@@ -546,14 +686,14 @@ static void testDemoFullRun() {
   // Hết nước: bước bơm phải bị bỏ qua suốt lượt chạy
   resetState();
   primeSensors(100);
-  CHECK(gWater < (int)waterThresholdLow);
+  CHECK(sys.gWater < (int)sys.waterThresholdLow);
   startDemo();
   sawRelay = false;
   cap = mockMillis() + 120000;
   while (demoRunning() && mockMillis() < cap) {
     mockAdvance(10);
-    simLoop();
-    if (relayState) sawRelay = true;
+    runAutomation();
+    if (sys.relayState) sawRelay = true;
   }
   CHECK(!demoRunning());
   CHECK(!sawRelay);
@@ -566,46 +706,46 @@ static void testBoundaries() {
 
   // Bơm: so sánh nghiêm ngặt < / >
   resetState();
-  gWater = 900;
-  gSoil = 400; controlPump(); CHECK(!relayState);            // == low: không khởi động
-  gSoil = 399; controlPump(); CHECK(relayState);             // < low: khởi động
-  gSoil = 700; controlPump(); CHECK(relayState);             // == high: vẫn bật
-  gSoil = 701; controlPump(); CHECK(!relayState);            // > high: dừng
-  gWater = 200; gSoil = 399; controlPump(); CHECK(relayState);  // == waterLow: được phép
-  gWater = 199; controlPump(); CHECK(!relayState);           // < waterLow: bị chặn
+  sys.gWater = 900;
+  sys.gSoil = 400; controlPump(); CHECK(!sys.relayState);            // == low: không khởi động
+  sys.gSoil = 399; controlPump(); CHECK(sys.relayState);             // < low: khởi động
+  sys.gSoil = 700; controlPump(); CHECK(sys.relayState);             // == high: vẫn bật
+  sys.gSoil = 701; controlPump(); CHECK(!sys.relayState);            // > high: dừng
+  sys.gWater = 200; sys.gSoil = 399; controlPump(); CHECK(sys.relayState);  // == waterLow: được phép
+  sys.gWater = 199; controlPump(); CHECK(!sys.relayState);           // < waterLow: bị chặn
 
   // Quạt: nghiêm ngặt > / <
   resetState();
-  gTemp = 30;    controlFan(); CHECK(!fanState);             // == high: không khởi động
-  gTemp = 30.01f; controlFan(); CHECK(fanState);             // > high: khởi động
-  gTemp = 25;    controlFan(); CHECK(fanState);              // == low: vẫn bật
-  gTemp = 24.99f; controlFan(); CHECK(!fanState);            // < low: dừng
+  sys.gTemp = 30;    controlFan(); CHECK(!sys.fanState);             // == high: không khởi động
+  sys.gTemp = 30.01f; controlFan(); CHECK(sys.fanState);             // > high: khởi động
+  sys.gTemp = 25;    controlFan(); CHECK(sys.fanState);              // == low: vẫn bật
+  sys.gTemp = 24.99f; controlFan(); CHECK(!sys.fanState);            // < low: dừng
 
   // Đèn: ngưỡng +/- 50 với so sánh nghiêm ngặt
   resetState();
-  gLight = 450; controlLight(); CHECK(!blueLedState);        // == t-50: không bật
-  gLight = 449; controlLight(); CHECK(blueLedState);         // < t-50: bật
-  gLight = 550; controlLight(); CHECK(blueLedState);         // == t+50: vẫn bật
-  gLight = 551; controlLight(); CHECK(!blueLedState);        // > t+50: tắt
+  sys.gLight = 450; controlLight(); CHECK(!sys.blueLedState);        // == t-50: không bật
+  sys.gLight = 449; controlLight(); CHECK(sys.blueLedState);         // < t-50: bật
+  sys.gLight = 550; controlLight(); CHECK(sys.blueLedState);         // == t+50: vẫn bật
+  sys.gLight = 551; controlLight(); CHECK(!sys.blueLedState);        // > t+50: tắt
 
   // Thời tiết: cùng dải +/- 50 và độ ẩm > 80
   resetState();
-  gHum = 50;
-  gLight = 550; CHECK_EQ(weatherStatus(), WEATHER_NORMAL);
-  gLight = 551; CHECK_EQ(weatherStatus(), WEATHER_SUNNY);
-  gLight = 450; CHECK_EQ(weatherStatus(), WEATHER_NORMAL);
-  gLight = 449; CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
-  gHum = 80;    CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);   // == 80 không tính là ẩm
-  gHum = 81;    CHECK_EQ(weatherStatus(), WEATHER_RAIN);
-  gLight = 551; CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
-  gHum = 50.5f; CHECK_EQ(weatherStatus(), WEATHER_SUNNY);
+  sys.gHum = 50;
+  sys.gLight = 550; CHECK_EQ(weatherStatus(), WEATHER_NORMAL);
+  sys.gLight = 551; CHECK_EQ(weatherStatus(), WEATHER_SUNNY);
+  sys.gLight = 450; CHECK_EQ(weatherStatus(), WEATHER_NORMAL);
+  sys.gLight = 449; CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
+  sys.gHum = 80;    CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);   // == 80 không tính là ẩm
+  sys.gHum = 81;    CHECK_EQ(weatherStatus(), WEATHER_RAIN);
+  sys.gLight = 551; CHECK_EQ(weatherStatus(), WEATHER_CLOUDY);
+  sys.gHum = 50.5f; CHECK_EQ(weatherStatus(), WEATHER_SUNNY);
 
   // Còi: nghiêm ngặt < waterLow
   resetState();
-  gPir = false;
-  gWater = 200; controlAlerts(); checkBuzzer(false);
-  gWater = 199; controlAlerts(); checkBuzzer(true);
-  gWater = 200; controlAlerts(); checkBuzzer(false);
+  sys.gPir = false;
+  sys.gWater = 200; controlAlerts(); checkBuzzer(false);
+  sys.gWater = 199; controlAlerts(); checkBuzzer(true);
+  sys.gWater = 200; controlAlerts(); checkBuzzer(false);
 }
 
 // D2: tính idempotent của actuator + nhất quán dây chân
@@ -669,6 +809,23 @@ static void testIdempotency() {
   int p1 = mockLedcWriteCount;
   setBreatheLed(false);                          // đã tắt: không làm gì
   CHECK_EQ(mockLedcWriteCount, p1);
+
+  // NeoPixel: màu không đổi -> bỏ qua strip.show() (giao dịch RMT ngắt interrupts)
+  int s0 = mockStripShowCount;
+  setRgb(255, 0, 0);
+  CHECK_EQ(mockStripShowCount, s0 + 1);
+  setRgb(255, 0, 0);                             // idempotent: không show lại
+  CHECK_EQ(mockStripShowCount, s0 + 1);
+  setRgb(0, 0, 255);
+  CHECK_EQ(mockStripShowCount, s0 + 2);
+  setRgbPlant();                                 // hoa văn đỏ/xanh xen kẽ
+  CHECK_EQ(mockStripShowCount, s0 + 3);
+  setRgb(255, 0, 255);                           // hoa văn -> màu đơn sắc trùng giá trị: vẫn phải show
+  CHECK_EQ(mockStripShowCount, s0 + 4);
+  setRgb(255, 0, 255);                           // giờ mới thực sự idempotent
+  CHECK_EQ(mockStripShowCount, s0 + 4);
+  setRgbPlant();                                 // bật lại hoa văn luôn show
+  CHECK_EQ(mockStripShowCount, s0 + 5);
 }
 
 // D3: biên thời gian chính xác + ghi servo tại các mốc biên
@@ -678,19 +835,19 @@ static void testTimingBoundaries() {
   // Debounce chạm: >= TOUCH_DEBOUNCE
   resetState();
   mockAdvance(10000);
-  gTouch = false; controlTouch();
-  lastTouch = mockMillis();
+  sys.gTouch = false; controlTouch();
+  sys.lastTouch = mockMillis();
   setBlueLed(false);
-  gTouch = true; controlTouch();                  // delta 0: bị nuốt
-  CHECK(!blueLedState);
-  gTouch = false; controlTouch();
+  sys.gTouch = true; controlTouch();                  // delta 0: bị nuốt
+  CHECK(!sys.blueLedState);
+  sys.gTouch = false; controlTouch();
   mockAdvance(TOUCH_DEBOUNCE - 1);                // 299: bị nuốt
-  gTouch = true; controlTouch();
-  CHECK(!blueLedState);
-  gTouch = false; controlTouch();
+  sys.gTouch = true; controlTouch();
+  CHECK(!sys.blueLedState);
+  sys.gTouch = false; controlTouch();
   mockAdvance(1);                                 // đúng 300: được phép
-  gTouch = true; controlTouch();
-  CHECK(blueLedState);
+  sys.gTouch = true; controlTouch();
+  CHECK(sys.blueLedState);
 
   // Cửa cho ăn: đóng đúng tại FEED_DURATION
   resetState();
@@ -702,7 +859,7 @@ static void testTimingBoundaries() {
   resetState();
   setBreatheLed(true);
   setLedPwm(0);
-  lastBreatheUpdate = mockMillis();
+  sys.lastBreatheUpdate = mockMillis();
   mockAdvance(BREATHE_INTERVAL - 1); controlBreathe(); CHECK_EQ(currentLedPwm(), 0);
   mockAdvance(1);                    controlBreathe(); CHECK_EQ(currentLedPwm(), 5);
   setBreatheLed(false);
@@ -719,9 +876,9 @@ static void testTimingBoundaries() {
 
   // Ghi servo tại đúng các mốc biên
   resetState();
-  servoAngle = 0;   servo.write(servoAngle);   CHECK_EQ(mockServoAngle, 0);
-  servoAngle = 180; servo.write(servoAngle);   CHECK_EQ(mockServoAngle, 180);
-  servoAngle = 0;   servo.write(servoAngle);
+  sys.servoAngle = 0;   servo.write(sys.servoAngle);   CHECK_EQ(mockServoAngle, 0);
+  sys.servoAngle = 180; servo.write(sys.servoAngle);   CHECK_EQ(mockServoAngle, 180);
+  sys.servoAngle = 0;   servo.write(sys.servoAngle);
 }
 
 // ==============================================
@@ -734,10 +891,7 @@ static void testInoBoot() {
   mockSerialClear();
   mockServerReset();
   setup();
-  CHECK_EQ(mockServerRouteCount(), 15);
-  const char *routes[] = {"/", "/api", "/toggle", "/auto", "/rgb", "/servo", "/breathe",
-                          "/on", "/off", "/windmill", "/feed", "/demo", "/threshold", "/favicon.ico"};
-  for (const char *r : routes) CHECK(mockServerHasRoute(r));
+  checkAllRoutes();     // gồm cả /wifi (trước đây bị bỏ sót trong danh sách)
   CHECK(has(mockSerialOutput(), "SMART FARM DEBUG MENU"));
   CHECK(has(mockSerialOutput(), "System ready"));
 }
@@ -745,9 +899,9 @@ static void testInoBoot() {
 // I2: JSON contract của /api
 static void testHttpApi() {
   printf("I2  http: /api JSON\n");
-  gTemp = 26.5f; gHum = 61.2f;
-  gLight = 800; gSoil = 650; gWater = 900;
-  gPir = true; gTouch = false;
+  sys.gTemp = 26.5f; sys.gHum = 61.2f;
+  sys.gLight = 800; sys.gSoil = 650; sys.gWater = 900;
+  sys.gPir = true; sys.gTouch = false;
   CHECK_EQ(invoke("/api"), 200);
   CHECK_STR(mockServerLastType(), "application/json");
   const char *b = mockServerLastBody();
@@ -771,11 +925,11 @@ static void testHttpApi() {
 static void testHttpLedOnOff() {
   printf("I3  http: /on /off\n");
   CHECK_EQ(invoke("/on"), 200);
-  CHECK(blueLedState);
-  CHECK(!lightAuto);
+  CHECK(sys.blueLedState);
+  CHECK(!sys.lightAuto);
   CHECK_STR(mockServerLastBody(), "LED ON");
   CHECK_EQ(invoke("/off"), 200);
-  CHECK(!blueLedState);
+  CHECK(!sys.blueLedState);
   CHECK_STR(mockServerLastBody(), "LED OFF");
 }
 
@@ -783,22 +937,22 @@ static void testHttpLedOnOff() {
 static void testHttpMechanisms() {
   printf("I4  http: windmill / feed / servo arbitration\n");
   invoke("/windmill", "on", "true");
-  CHECK(windmillOn);
+  CHECK(sys.windmillOn);
   invoke("/windmill", "on", "false");
-  CHECK(!windmillOn);
+  CHECK(!sys.windmillOn);
 
   invoke("/feed");
   CHECK(feedRunning());
   CHECK_EQ(mockServoAngle, FEED_OPEN_ANGLE);
 
   invoke("/servo", "angle", "45");           // điều khiển thủ công giải phóng cơ cấu
-  CHECK_EQ(servoAngle, 45);
+  CHECK_EQ(sys.servoAngle, 45);
   CHECK_EQ(mockServoAngle, 45);
   CHECK(!feedRunning());
   invoke("/servo", "angle", "999");          // bị kẹp
-  CHECK_EQ(servoAngle, 180);
+  CHECK_EQ(sys.servoAngle, 180);
   invoke("/servo", "angle", "-5");           // bị kẹp
-  CHECK_EQ(servoAngle, 0);
+  CHECK_EQ(sys.servoAngle, 0);
 
   invoke("/demo");
   CHECK(demoRunning());
@@ -810,25 +964,25 @@ static void testHttpMechanisms() {
 static void testHttpControlRoutes() {
   printf("I5  http: toggle/auto/rgb/threshold\n");
   invoke("/toggle", "id", "pump");
-  CHECK(!pumpAuto);
-  CHECK(relayState);
+  CHECK(!sys.pumpAuto);
+  CHECK(sys.relayState);
   invoke("/toggle", "id", "pump");
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
   CHECK_EQ(invoke("/toggle", "id", "bogus"), 400);
 
   invoke("/auto", "id", "rgb", "on", "false");
-  CHECK(!rgbAuto);
+  CHECK(!sys.rgbAuto);
 
   invoke("/rgb", "r", "300", "g", "-5", "b", "128");
-  CHECK_EQ(rgbR, 255);
-  CHECK_EQ(rgbG, 0);
-  CHECK_EQ(rgbB, 128);
-  CHECK(!rgbAuto);
+  CHECK_EQ(sys.rgbR, 255);
+  CHECK_EQ(sys.rgbG, 0);
+  CHECK_EQ(sys.rgbB, 128);
+  CHECK(!sys.rgbAuto);
   CHECK_EQ(mockPixel[1], (255 << 16) | (0 << 8) | 128);
 
   invoke("/auto", "id", "breathe", "on", "true");
-  CHECK(breatheAuto);
-  CHECK(breatheLedState);
+  CHECK(sys.breatheAuto);
+  CHECK(sys.breatheLedState);
   runLoop(2000);
   uint32_t peak = 0;
   for (int i = 0; i < 60; i++) {
@@ -838,25 +992,25 @@ static void testHttpControlRoutes() {
   }
   CHECK(peak > 0);                           // breathing được animate qua loop()
   invoke("/auto", "id", "breathe", "on", "false");
-  CHECK(!breatheAuto);
-  CHECK(!breatheLedState);
+  CHECK(!sys.breatheAuto);
+  CHECK(!sys.breatheLedState);
   CHECK_EQ(invoke("/auto", "id", "bogus", "on", "true"), 400);
 
   invoke("/threshold", "soilLow", "2000");
-  CHECK_NEAR(soilThresholdLow, 2000, 0.01);
-  CHECK(soilThresholdHigh > soilThresholdLow);   // tự sửa thứ tự
+  CHECK_NEAR(sys.soilThresholdLow, 2000, 0.01);
+  CHECK(sys.soilThresholdHigh > sys.soilThresholdLow);   // tự sửa thứ tự
   CHECK_NEAR(mockPrefGet("soilLow", 0), 2000, 0.01);  // đã lưu bền
   invoke("/threshold", "soilLow", "9000");
-  CHECK_NEAR(soilThresholdLow, 4095, 0.01);      // bị kẹp
-  CHECK_NEAR(soilThresholdHigh, 4095, 0.01);
+  CHECK_NEAR(sys.soilThresholdLow, 4095, 0.01);      // bị kẹp
+  CHECK_NEAR(sys.soilThresholdHigh, 4095, 0.01);
   CHECK_EQ(invoke("/threshold"), 400);           // không có tham số
-  soilThresholdLow = 400; soilThresholdHigh = 700;
+  sys.soilThresholdLow = 400; sys.soilThresholdHigh = 700;
 
   invoke("/threshold", "tempLow", "50");         // dải nhiệt độ đảo được tự sửa
-  CHECK_NEAR(tempThresholdLow, 50, 0.01);
-  CHECK(tempThresholdHigh > tempThresholdLow);
-  CHECK_NEAR(mockPrefGet("tempHigh", 0), tempThresholdHigh, 0.01);
-  tempThresholdHigh = 30; tempThresholdLow = 25;
+  CHECK_NEAR(sys.tempThresholdLow, 50, 0.01);
+  CHECK(sys.tempThresholdHigh > sys.tempThresholdLow);
+  CHECK_NEAR(mockPrefGet("tempHigh", 0), sys.tempThresholdHigh, 0.01);
+  sys.tempThresholdHigh = 30; sys.tempThresholdLow = 25;
 }
 
 // I6: trang gốc + favicon
@@ -870,13 +1024,78 @@ static void testHttpRootFavicon() {
   CHECK_EQ(invoke("/favicon.ico"), 204);
 }
 
+// I12: cấu hình WiFi động qua web (lưu flash rồi yêu cầu khởi động lại)
+static void testHttpWifiConfig() {
+  printf("I12 http: /wifi dynamic config\n");
+  resetState();
+  mockServerReset();
+  setup();
+
+  CHECK_EQ(invoke("/wifi"), 400);                        // thiếu tham số
+  CHECK_STR(mockServerLastBody(), "no params");
+  CHECK(!sys.gNeedRestart);
+
+  invoke("/wifi", "ssid", "NhaToi", "password", "matkhau123");
+  CHECK_STR(sys.ssid, "NhaToi");
+  CHECK_STR(sys.password, "matkhau123");
+  CHECK_STR(mockPrefGetStr("wifiSsid", ""), "NhaToi");
+  CHECK_STR(mockPrefGetStr("wifiPass", ""), "matkhau123");
+  CHECK(sys.gNeedRestart);                                   // chờ restart để áp dụng
+
+  // loop() đi qua nhánh restart (mock ESP.restart là no-op); chạy quá 200 ms
+  // để chạm đúng mốc RESTART_DELAY_MS tính từ lần loop() đầu tiên
+  sys.gNeedRestart = true;
+  runLoop(RESTART_DELAY_MS + 20);
+  sys.gNeedRestart = false;
+
+  // khôi phục trạng thái nền cho các test sau
+  strncpy(sys.ssid, "YOUR_WIFI_SSID", sizeof(sys.ssid) - 1);
+  sys.ssid[sizeof(sys.ssid) - 1] = '\0';
+  strncpy(sys.password, "YOUR_WIFI_PASSWORD", sizeof(sys.password) - 1);
+  sys.password[sizeof(sys.password) - 1] = '\0';
+  resetState();
+  mockServerReset();
+  setup();
+}
+
+// I13: callback OTA in đúng trạng thái ra serial
+static void testOtaCallbacks() {
+  printf("I13 ota: callbacks\n");
+  resetState();
+  mockServerReset();
+  setup();                                               // đăng ký callback
+  mockSerialClear();
+
+  mockOtaStart();
+  CHECK(has(mockSerialOutput(), "OTA: start"));
+  mockOtaProgress(50, 100);
+  CHECK(has(mockSerialOutput(), "OTA: 50%"));
+  mockOtaError(OTA_AUTH_ERROR);
+  CHECK(has(mockSerialOutput(), "Auth Failed"));
+  mockOtaError(OTA_BEGIN_ERROR);
+  CHECK(has(mockSerialOutput(), "Begin Failed"));
+  mockOtaError(OTA_CONNECT_ERROR);
+  CHECK(has(mockSerialOutput(), "Connect Failed"));
+  mockOtaError(OTA_RECEIVE_ERROR);
+  CHECK(has(mockSerialOutput(), "Receive Failed"));
+  mockOtaError(OTA_END_ERROR);
+  CHECK(has(mockSerialOutput(), "End Failed"));
+  mockOtaEnd();
+  CHECK(has(mockSerialOutput(), "OTA: end"));
+
+  // khôi phục trạng thái nền cho các test sau
+  resetState();
+  mockServerReset();
+  setup();
+}
+
 // I7: render OLED
 static void testOled() {
   printf("I7  oled: status frame\n");
   mockWifiStatus = WL_CONNECTED;
-  gTemp = 26.5f; gHum = 61; gLight = 800; gSoil = 650; gWater = 900;
-  relayState = false;
-  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  sys.gTemp = 26.5f; sys.gHum = 61; sys.gLight = 800; sys.gSoil = 650; sys.gWater = 900;
+  sys.relayState = false;
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
   const char *t = mockOledText();
   CHECK(has(t, "Smart Farm"));
   CHECK(has(t, "TT: Nang"));
@@ -888,16 +1107,16 @@ static void testOled() {
   CHECK(has(t, "San sang"));
 
   mockWifiStatus = WL_DISCONNECTED;
-  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
   CHECK(has(mockOledText(), "WiFi: ---"));
   mockWifiStatus = WL_CONNECTED;
 
-  windmillOn = true;
-  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  sys.windmillOn = true;
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
   CHECK(has(mockOledText(), "Coi xay: ON"));
-  windmillOn = false;
+  sys.windmillOn = false;
   startFeed();
-  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
   CHECK(has(mockOledText(), "Cho an..."));
   stopFeed();
 }
@@ -945,21 +1164,89 @@ static void testSerialDemo() {
   CHECK(demoRunning());
   CHECK(has(mockSerialOutput(), "DEMO START"));
 
-  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
   CHECK(has(mockOledText(), "HD2: Thap sang"));      // tên bước trên OLED
 
   runLoop(40000);
   CHECK(!demoRunning());
   CHECK(has(mockSerialOutput(), "DEMO DONE"));
-  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
   CHECK(has(mockOledText(), "San sang"));
+}
+
+// I14: trình tự test cơ cấu chạy KHÔNG chặn (bấm '2', loop() tự bơm từng bước)
+static void testSerialActuatorSequence() {
+  printf("I14 serial: non-blocking actuator self-test\n");
+  resetState();
+  mockWifiStatus = WL_CONNECTED;
+  mockSerialClear();
+
+  mockSerialPush("2");
+  loop();                                            // bắt đầu, trả về ngay
+  CHECK(has(mockSerialOutput(), "--- ACTUATORS ---"));
+  CHECK(has(mockSerialOutput(), "Pump on/off..."));
+  CHECK(sys.relayState);                             // bước 1: bơm bật
+  CHECK(sys.fanState == false);
+
+  mockAdvance(799);                                  // 799 ms: chưa hết bước
+  loop();
+  CHECK(sys.relayState);
+  mockAdvance(1);                                    // đúng 800 ms: sang bước kế
+  loop();
+  CHECK(!sys.relayState);
+  mockAdvance(400);                                  // 400 ms sau: quạt bật
+  loop();
+  CHECK(sys.fanState);
+
+  // Chạy hết trình tự (~10,3 s), bơm bằng loop() 10 ms/lần
+  bool sawBreathe = false, sawPlant = false;
+  unsigned long cap = mockMillis() + 20000;
+  while (mockMillis() < cap) {
+    mockAdvance(10);
+    loop();
+    if (sys.breatheLedState) sawBreathe = true;
+    if (sys.rgbR == 255 && sys.rgbG == 0 && sys.rgbB == 255) sawPlant = true;
+    if (has(mockSerialOutput(), "Servo sweep...")) break;
+  }
+  CHECK(sawBreathe);                                 // HD3: bước thở đã chạy
+  CHECK(sawPlant);                                   // HD9: đèn tăng trưởng đã chạy
+  CHECK(has(mockSerialOutput(), "Buzzer on/off..."));// HD8: còi đã hét thử
+  // Kết thúc sạch: mọi cơ cấu tắt, servo về góc gốc
+  runLoop(3000);
+  CHECK(!sys.relayState);
+  CHECK(!sys.fanState);
+  CHECK(!sys.blueLedState);
+  CHECK(!sys.breatheLedState);
+  CHECK_EQ(mockServoAngle, WINDMILL_MIN_ANGLE);
+
+  // Thoát chế độ debug để chuẩn bị phần sau
+  mockSerialPush("0");
+  loop();
+
+  // Thoát debug giữa chừng: trình tự dừng ngay và tắt an toàn
+  resetState();
+  mockSerialClear();
+  mockSerialPush("2");
+  loop();
+  CHECK(sys.relayState);
+  mockAdvance(300);
+  mockSerialPush("0");
+  loop();
+  CHECK(!sys.relayState);
+  CHECK(has(mockSerialOutput(), "Actuator test stopped."));
+  CHECK(has(mockSerialOutput(), "Running normally..."));
+
+  setBuzzer(false);      // dọn trạng thái còi trước khi trả về nền test sạch
+  resetState();
+  setup();               // mockReset() xoá route đã đăng ký; các test HTTP phía sau cần lại
+  mockSerialClear();
 }
 
 // I10: xử lý mất/kết nối lại WiFi
 static void testWifiRecovery() {
   printf("I10 wifi: loss + reconnect logging\n");
   mockWifiStatus = WL_DISCONNECTED;
-  lastWifiCheck = mockMillis() - WIFI_CHECK_INTERVAL - 1;
+  sys.lastWifiCheck = mockMillis() - WIFI_CHECK_INTERVAL - 1;
   mockSerialClear();
   loop();
   CHECK(has(mockSerialOutput(), "WiFi lost"));
@@ -1087,27 +1374,27 @@ static bool validateApiResponse(std::string &err) {
     if (p->type[0] != API_KEYS[i].type) { err = std::string("bad type: ") + API_KEYS[i].key; return false; }
   }
 
-  if (fabs(numOf(pairs, "temp") - gTemp) > 0.06) { err = "temp mismatch"; return false; }
-  if (fabs(numOf(pairs, "hum") - gHum) > 0.06) { err = "hum mismatch"; return false; }
-  if ((long)numOf(pairs, "light") != gLight) { err = "light mismatch"; return false; }
-  if ((long)numOf(pairs, "soil") != gSoil) { err = "soil mismatch"; return false; }
-  if ((long)numOf(pairs, "water") != gWater) { err = "water mismatch"; return false; }
+  if (fabs(numOf(pairs, "temp") - sys.gTemp) > 0.06) { err = "temp mismatch"; return false; }
+  if (fabs(numOf(pairs, "hum") - sys.gHum) > 0.06) { err = "hum mismatch"; return false; }
+  if ((long)numOf(pairs, "light") != sys.gLight) { err = "light mismatch"; return false; }
+  if ((long)numOf(pairs, "soil") != sys.gSoil) { err = "soil mismatch"; return false; }
+  if ((long)numOf(pairs, "water") != sys.gWater) { err = "water mismatch"; return false; }
   if ((int)numOf(pairs, "weather") != (int)weatherStatus()) { err = "weather mismatch"; return false; }
 
-  if (boolOf(pairs, "pir") != gPir) { err = "pir mismatch"; return false; }
-  if (boolOf(pairs, "touch") != gTouch) { err = "touch mismatch"; return false; }
-  if (boolOf(pairs, "relay") != relayState) { err = "relay mismatch"; return false; }
-  if (boolOf(pairs, "fan") != fanState) { err = "fan mismatch"; return false; }
-  if (boolOf(pairs, "led") != blueLedState) { err = "led mismatch"; return false; }
-  if (boolOf(pairs, "breathe") != breatheLedState) { err = "breathe mismatch"; return false; }
-  if (boolOf(pairs, "windmill") != windmillOn) { err = "windmill mismatch"; return false; }
+  if (boolOf(pairs, "pir") != sys.gPir) { err = "pir mismatch"; return false; }
+  if (boolOf(pairs, "touch") != sys.gTouch) { err = "touch mismatch"; return false; }
+  if (boolOf(pairs, "relay") != sys.relayState) { err = "relay mismatch"; return false; }
+  if (boolOf(pairs, "fan") != sys.fanState) { err = "fan mismatch"; return false; }
+  if (boolOf(pairs, "led") != sys.blueLedState) { err = "led mismatch"; return false; }
+  if (boolOf(pairs, "breathe") != sys.breatheLedState) { err = "breathe mismatch"; return false; }
+  if (boolOf(pairs, "windmill") != sys.windmillOn) { err = "windmill mismatch"; return false; }
   if (boolOf(pairs, "feed") != feedRunning()) { err = "feed mismatch"; return false; }
   if (boolOf(pairs, "demo") != demoRunning()) { err = "demo mismatch"; return false; }
-  if (boolOf(pairs, "pumpAuto") != pumpAuto) { err = "pumpAuto mismatch"; return false; }
-  if (boolOf(pairs, "lightAuto") != lightAuto) { err = "lightAuto mismatch"; return false; }
-  if (boolOf(pairs, "rgbAuto") != rgbAuto) { err = "rgbAuto mismatch"; return false; }
-  if (boolOf(pairs, "fanAuto") != fanAuto) { err = "fanAuto mismatch"; return false; }
-  if (boolOf(pairs, "breatheAuto") != breatheAuto) { err = "breatheAuto mismatch"; return false; }
+  if (boolOf(pairs, "pumpAuto") != sys.pumpAuto) { err = "pumpAuto mismatch"; return false; }
+  if (boolOf(pairs, "lightAuto") != sys.lightAuto) { err = "lightAuto mismatch"; return false; }
+  if (boolOf(pairs, "rgbAuto") != sys.rgbAuto) { err = "rgbAuto mismatch"; return false; }
+  if (boolOf(pairs, "fanAuto") != sys.fanAuto) { err = "fanAuto mismatch"; return false; }
+  if (boolOf(pairs, "breatheAuto") != sys.breatheAuto) { err = "breatheAuto mismatch"; return false; }
 
   const JsonPair *ds = findPair(pairs, "demoStep");
   const char *expectedStep = demoRunning() ? demoStepName() : "";
@@ -1122,9 +1409,9 @@ static void testApiJsonContract() {
   std::string err;
 
   // Trạng thái đã biết
-  gTemp = 26.5f; gHum = 61.2f;
-  gLight = 800; gSoil = 650; gWater = 900;
-  gPir = true; gTouch = false;
+  sys.gTemp = 26.5f; sys.gHum = 61.2f;
+  sys.gLight = 800; sys.gSoil = 650; sys.gWater = 900;
+  sys.gPir = true; sys.gTouch = false;
   invoke("/api");
   if (!validateApiResponse(err)) printf("  FAIL: %s\n", err.c_str());
   CHECK(err.empty());
@@ -1154,13 +1441,13 @@ static void testApiJsonContract() {
   std::mt19937 rng(1234);
   int bad = 0;
   for (int i = 0; i < 200; i++) {
-    gTemp = (float)(rng() % 500) / 10.0f;
-    gHum = (float)(rng() % 101);
-    gLight = (int)(rng() % 4096);
-    gSoil = (int)(rng() % 4096);
-    gWater = (int)(rng() % 4096);
-    gPir = (rng() % 2) != 0;
-    gTouch = (rng() % 2) != 0;
+    sys.gTemp = (float)(rng() % 500) / 10.0f;
+    sys.gHum = (float)(rng() % 101);
+    sys.gLight = (int)(rng() % 4096);
+    sys.gSoil = (int)(rng() % 4096);
+    sys.gWater = (int)(rng() % 4096);
+    sys.gPir = (rng() % 2) != 0;
+    sys.gTouch = (rng() % 2) != 0;
     invoke("/api");
     err.clear();
     if (!validateApiResponse(err)) {
@@ -1188,24 +1475,24 @@ static void testResponseExactness() {
   CHECK_EQ(invoke("/auto", "id", "nope", "on", "true"), 400);
   CHECK_STR(mockServerLastBody(), "unknown id");
   CHECK_EQ(invoke("/auto", "id", "light", "on", "TRUE"), 200);
-  CHECK(!lightAuto);                       // chỉ "true" mới bật auto
+  CHECK(!sys.lightAuto);                       // chỉ "true" mới bật auto
 
   invoke("/rgb", "r", "0", "g", "255", "b", "255");
-  CHECK_EQ(rgbR, 0); CHECK_EQ(rgbG, 255); CHECK_EQ(rgbB, 255);
+  CHECK_EQ(sys.rgbR, 0); CHECK_EQ(sys.rgbG, 255); CHECK_EQ(sys.rgbB, 255);
   CHECK_STR(mockServerLastBody(), "ok");
 
   invoke("/breathe");
   CHECK_STR(mockServerLastBody(), "ok");
-  CHECK(breatheLedState);
-  CHECK(!breatheAuto);
+  CHECK(sys.breatheLedState);
+  CHECK(!sys.breatheAuto);
   invoke("/breathe");
-  CHECK(!breatheLedState);
+  CHECK(!sys.breatheLedState);
 
   invoke("/windmill");                     // không tham số -> tắt
   CHECK_STR(mockServerLastBody(), "windmill off");
   invoke("/windmill", "on", "true");
   CHECK_STR(mockServerLastBody(), "windmill on");
-  CHECK(windmillOn);
+  CHECK(sys.windmillOn);
   invoke("/windmill", "on", "false");
   CHECK_STR(mockServerLastBody(), "windmill off");
 
@@ -1224,47 +1511,47 @@ static void testResponseExactness() {
   CHECK_EQ(invoke("/threshold"), 400);
   CHECK_STR(mockServerLastBody(), "no params");
   invoke("/threshold", "soilLow", "4095");
-  CHECK_NEAR(soilThresholdLow, 4095, 0.01);
-  CHECK_NEAR(soilThresholdHigh, 4095, 0.01);        // mức sửa tốt nhất tại biên
+  CHECK_NEAR(sys.soilThresholdLow, 4095, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 4095, 0.01);        // mức sửa tốt nhất tại biên
   // Ngưỡng bằng nhau không được làm bơm bật/tắt liên tục (guard điều khiển):
-  gWater = 900; gSoil = 100; relayState = false; pumpAuto = true;
+  sys.gWater = 900; sys.gSoil = 100; sys.relayState = false; sys.pumpAuto = true;
   controlPump();
-  CHECK(!relayState);
-  soilThresholdLow = 400; soilThresholdHigh = 700;
+  CHECK(!sys.relayState);
+  sys.soilThresholdLow = 400; sys.soilThresholdHigh = 700;
 
   invoke("/threshold", "soilLow", "-5");
-  CHECK_NEAR(soilThresholdLow, 0, 0.01);
-  CHECK_NEAR(soilThresholdHigh, 700, 0.01);         // không đổi (vẫn > low)
+  CHECK_NEAR(sys.soilThresholdLow, 0, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 700, 0.01);         // không đổi (vẫn > low)
   invoke("/threshold", "soilLow", "abc");
-  CHECK_NEAR(soilThresholdLow, 0, 0.01);            // toFloat("abc") trả về 0
-  soilThresholdLow = 400; soilThresholdHigh = 700;
+  CHECK_NEAR(sys.soilThresholdLow, 0, 0.01);            // toFloat("abc") trả về 0
+  sys.soilThresholdLow = 400; sys.soilThresholdHigh = 700;
 
   invoke("/threshold", "waterLow", "99999");
-  CHECK_NEAR(waterThresholdLow, 4095, 0.01);
-  waterThresholdLow = 200;
+  CHECK_NEAR(sys.waterThresholdLow, 4095, 0.01);
+  sys.waterThresholdLow = 200;
 
   invoke("/threshold", "tempLow", "60");
-  CHECK_NEAR(tempThresholdLow, 60, 0.01);
-  CHECK_NEAR(tempThresholdHigh, 61, 0.01);          // giữ nghiêm ngặt trên low
+  CHECK_NEAR(sys.tempThresholdLow, 60, 0.01);
+  CHECK_NEAR(sys.tempThresholdHigh, 61, 0.01);          // giữ nghiêm ngặt trên low
   invoke("/threshold", "tempLow", "25");
-  CHECK_NEAR(tempThresholdLow, 25, 0.01);
+  CHECK_NEAR(sys.tempThresholdLow, 25, 0.01);
   invoke("/threshold", "tempHigh", "0");
-  CHECK_NEAR(tempThresholdHigh, 26, 0.01);          // sửa thành low + 1
-  tempThresholdHigh = 30; tempThresholdLow = 25;
+  CHECK_NEAR(sys.tempThresholdHigh, 26, 0.01);          // sửa thành low + 1
+  sys.tempThresholdHigh = 30; sys.tempThresholdLow = 25;
   invoke("/threshold", "light", "5000");
-  CHECK_EQ(lightThreshold, 4095);
-  lightThreshold = 500;
+  CHECK_EQ(sys.lightThreshold, 4095);
+  sys.lightThreshold = 500;
 
   invoke("/rgb");                                    // không tham số -> toàn số 0
-  CHECK_EQ(rgbR, 0); CHECK_EQ(rgbG, 0); CHECK_EQ(rgbB, 0);
-  CHECK(!rgbAuto);
+  CHECK_EQ(sys.rgbR, 0); CHECK_EQ(sys.rgbG, 0); CHECK_EQ(sys.rgbB, 0);
+  CHECK(!sys.rgbAuto);
   invoke("/servo", "angle", "0");
-  CHECK_EQ(servoAngle, 0);
+  CHECK_EQ(sys.servoAngle, 0);
   invoke("/servo", "angle", "180");
-  CHECK_EQ(servoAngle, 180);
+  CHECK_EQ(sys.servoAngle, 180);
   invoke("/servo", "angle", "abc");
-  CHECK_EQ(servoAngle, 0);
-  servoAngle = 0;
+  CHECK_EQ(sys.servoAngle, 0);
+  sys.servoAngle = 0;
 }
 
 // D7: bố cục từng dòng OLED + giới hạn độ dài dòng
@@ -1272,9 +1559,9 @@ static void testOledLines() {
   printf("D7  oled: per-row layout + 21-char line limit\n");
   mockWifiStatus = WL_CONNECTED;
   mockWifiIp = "255.255.255.255";
-  gTemp = 26.5f; gHum = 61; gLight = 800; gSoil = 650; gWater = 900;
-  relayState = false; windmillOn = false;
-  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  sys.gTemp = 26.5f; sys.gHum = 61; sys.gLight = 800; sys.gSoil = 650; sys.gWater = 900;
+  sys.relayState = false; sys.windmillOn = false;
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
   CHECK_STR(mockOledLine(0), "Smart Farm");
   CHECK_STR(mockOledLine(1), "TT: Nang");
   CHECK_STR(mockOledLine(2), "T:26.5C H:61%");
@@ -1285,22 +1572,73 @@ static void testOledLines() {
   CHECK_STR(mockOledLine(7), "San sang");
 
   // Giá trị xấu nhất: mỗi dòng vẫn phải vừa 21 ký tự (128 px / 6 px)
-  gTemp = 99.9f; gHum = 100; gLight = 4095; gSoil = 4095; gWater = 4095;
-  relayState = true;
-  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  sys.gTemp = 99.9f; sys.gHum = 100; sys.gLight = 4095; sys.gSoil = 4095; sys.gWater = 4095;
+  sys.relayState = true;
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
   for (int r = 0; r < mockOledLineCount(); r++) {
     CHECK(strlen(mockOledLine(r)) <= 21);
     CHECK(strlen(mockOledLine(r)) > 0);
   }
   CHECK_STR(mockOledLine(5), "H2O:4095 P:ON");
-  relayState = false;
+  sys.relayState = false;
   mockWifiIp = "192.168.1.50";
+}
+
+// D20: OLED chỉ đẩy I2C các page 8-hàng thay đổi (delta), không gửi đủ 1024 byte
+static void testOledDelta() {
+  printf("D20 oled: delta page updates over I2C\n");
+  resetState();
+  mockWifiStatus = WL_CONNECTED;
+  mockWifiIp = "192.168.1.50";
+  sys.gTemp = 26.5f; sys.gHum = 61; sys.gLight = 800; sys.gSoil = 650; sys.gWater = 900;
+
+  // Khung đầu tiên sau khi bật: phải gửi đủ 8 page = 1024 byte dữ liệu
+  int t0 = mockI2cTransactions, c0 = mockI2cCmdBytes, d0 = mockI2cDataBytes;
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+  CHECK_EQ(mockI2cDataBytes - d0, 1024);
+  CHECK_EQ(mockI2cCmdBytes - c0, 16);           // 7 byte lệnh + 9 byte 0x40 (1/chunk)
+  CHECK_EQ(mockI2cTransactions - t0, 10);       // 1 lệnh + 9 chunk dữ liệu (127×8+8)
+
+  // Không có gì đổi: không chạm I2C
+  t0 = mockI2cTransactions; d0 = mockI2cDataBytes;
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+  CHECK_EQ(mockI2cDataBytes - d0, 0);
+  CHECK_EQ(mockI2cTransactions - t0, 0);
+
+  // Mực nước đổi -> chỉ page 5 (dòng H2O) được gửi lại: 128 byte
+  sys.gWater = 500;
+  t0 = mockI2cTransactions; d0 = mockI2cDataBytes;
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+  CHECK_EQ(mockI2cDataBytes - d0, 128);
+  CHECK_EQ(mockI2cTransactions - t0, 3);        // 1 lệnh + 2 chunk (127+1)
+  CHECK_STR(mockOledLine(5), "H2O:500 P:OFF");
+
+  // Nhiệt độ (page 2) + độ ẩm đất (page 4) đổi -> gửi cả dải page 2..4
+  sys.gTemp = 30.0f; sys.gSoil = 123;
+  t0 = mockI2cTransactions; d0 = mockI2cDataBytes;
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+  CHECK_EQ(mockI2cDataBytes - d0, 384);         // 3 page × 128 (page 3 giữa không đổi vẫn nằm trong dải)
+  CHECK_EQ(mockI2cTransactions - t0, 5);        // 1 lệnh + 4 chunk (127×3+3)
+
+  // Ép vẽ lại toàn bộ (code khác đã ghi đè màn hình) -> lại đủ 1024 byte
+  oledForceRedraw();
+  t0 = mockI2cTransactions; d0 = mockI2cDataBytes;
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+  CHECK_EQ(mockI2cDataBytes - d0, 1024);
+  CHECK_EQ(mockI2cTransactions - t0, 10);
+
+  // Trả trạng thái sạch cho test kế tiếp (testSerialEdges gọi loop() và đòi
+  // hỏi không có log/automation nào phát sinh).
+  resetState();
 }
 
 // D8: các ca biên serial + hành vi debug-mode
 static void testSerialEdges() {
   printf("D8  serial: edge cases + debug mode\n");
 
+  // loop() đầu "nhả" các việc một-lần (thông báo IP, chốt trạng thái chạm...)
+  // để test không phụ thuộc test chạy trước đó.
+  loop();
   mockSerialClear();
   mockSerialPush("\r\n");                    // dòng trống: bỏ qua
   loop();
@@ -1332,18 +1670,18 @@ static void testSerialEdges() {
 
   // Chế độ debug tạm dừng automation (chế độ bảo trì)...
   resetState();
-  gWater = 900; gSoil = 100; pumpAuto = true;
+  sys.gWater = 900; sys.gSoil = 100; sys.pumpAuto = true;
   controlPump();
-  CHECK(relayState);
+  CHECK(sys.relayState);
   mockSerialClear();
   mockSerialPush("3");
   loop();
   CHECK(has(mockSerialOutput(), "--- CONTROL ---"));
-  gWater = 50;
+  sys.gWater = 50;
   mockAdc[WATER_PIN] = INVERT_WATER ? 4045 : 50;
-  lastSensorRead = mockMillis();
+  sys.lastSensorRead = mockMillis();
   loop();
-  CHECK(relayState);                          // chế độ debug: automation tạm dừng
+  CHECK(sys.relayState);                          // chế độ debug: automation tạm dừng
   // trong chế độ debug mọi phím khác đều bị từ chối
   mockSerialClear();
   mockSerialPush("x");
@@ -1354,7 +1692,7 @@ static void testSerialEdges() {
   mockSerialPush("0");
   loop();
   CHECK(has(mockSerialOutput(), "Running normally..."));
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
 
   // Menu debug '5' khi WiFi mất sẽ đi qua nhánh kết nối lại
   resetState();
@@ -1402,19 +1740,19 @@ static void testDemoDiagnostics() {
   CHECK(demoRunning());
   std::vector<std::string> names;
   names.push_back(demoStepName());
-  updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
   CHECK_STR(mockOledLine(7), names.back().c_str());
   CHECK(strlen(names.back().c_str()) <= 21);
 
   unsigned long cap = mockMillis() + 120000;
   while (demoRunning() && mockMillis() < cap) {
     mockAdvance(10);
-    simLoop();
+    runAutomation();
     if (!demoRunning()) break;
     const char *n = demoStepName();
     if (names.back() != n) {
       names.push_back(n);
-      updateOLED(gTemp, gHum, gLight, gSoil, gWater);
+      updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
       CHECK_STR(mockOledLine(7), n);
       CHECK(strlen(n) <= 21);
     }
@@ -1428,7 +1766,7 @@ static void testDemoDiagnostics() {
   CHECK(elapsed >= 30700 && elapsed <= 30800);       // tổng thời gian các bước chính xác
   CHECK_EQ(countOccurrences(mockSerialOutput(), "[DEMO] "), DEMO_STEP_COUNT);
   CHECK(has(mockSerialOutput(), "DEMO DONE"));
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
   CHECK_EQ(mockServoAngle, WINDMILL_MIN_ANGLE);
   CHECK_EQ(currentLedPwm(), 0);
   checkBuzzer(false);
@@ -1443,19 +1781,19 @@ static void testDemoDiagnostics() {
     mockAdvance(10);
     if (!dropped && strstr(demoStepName(), "HD7")) {
       dropped = true;
-      gWater = 50;                                     // bồn cạn giữa bước
+      sys.gWater = 50;                                     // bồn cạn giữa bước
       mockAdc[WATER_PIN] = INVERT_WATER ? 4045 : 50;
-      lastSensorRead = mockMillis();
+      sys.lastSensorRead = mockMillis();
     }
-    simLoop();
-    if (relayState) sawPumpOn = true;
-    if (relayState && gWater < (int)waterThresholdLow) violated = true;
+    runAutomation();
+    if (sys.relayState) sawPumpOn = true;
+    if (sys.relayState && sys.gWater < (int)sys.waterThresholdLow) violated = true;
   }
   CHECK(dropped);
   CHECK(sawPumpOn);                                    // bơm chạy khi nước còn ổn
   CHECK(!violated);                                    // sau đó không bao giờ chạy khô
   CHECK(!demoRunning());
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
 }
 
 // D10: bộ đếm throttle kết nối lại WiFi
@@ -1467,7 +1805,7 @@ static void testWifiThrottle() {
   CHECK_EQ(mockWifiBeginCalls, c0);                    // đã kết nối: không thử kết nối lại
 
   mockWifiStatus = WL_DISCONNECTED;
-  lastWifiCheck = mockMillis();
+  sys.lastWifiCheck = mockMillis();
   const int b0 = mockWifiBeginCalls, d0 = mockWifiDisconnectCalls;
   mockSerialClear();
 
@@ -1496,7 +1834,7 @@ static void testWifiThrottle() {
 
   // Một lần mất mạng mới lại ghi log (cờ cảnh báo đã được reset bởi lần kết nối lại)
   mockWifiStatus = WL_DISCONNECTED;
-  lastWifiCheck = mockMillis() - WIFI_CHECK_INTERVAL - 1;
+  sys.lastWifiCheck = mockMillis() - WIFI_CHECK_INTERVAL - 1;
   mockSerialClear();
   loop();
   CHECK_EQ(countOccurrences(mockSerialOutput(), "WiFi lost"), 1);
@@ -1529,61 +1867,63 @@ static void testBootOrder() {
 
   CHECK(mockWdtInitCalls >= 1);
   CHECK_EQ(mockWdtAddCalls, 1);
-  CHECK_EQ(mockServerRouteCount(), 15);
+  CHECK_EQ(mockWifiPersistentCalls, 1);   // không để WiFi tự ghi creds xuống NVS
+  CHECK_EQ(mockWifiSleepDisableCalls, 1); // tắt modem-sleep cho web phản hồi nhanh
+  checkAllRoutes();
 }
 
 // D12: settings sống sót qua chu kỳ nguồn mô phỏng
 static void testRebootPersistence() {
   printf("D12 settings: power-cycle persistence\n");
   invoke("/threshold", "soilLow", "1234");
-  CHECK_NEAR(soilThresholdLow, 1234, 0.01);
-  CHECK_NEAR(soilThresholdHigh, 1284, 0.01);
+  CHECK_NEAR(sys.soilThresholdLow, 1234, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 1284, 0.01);
   invoke("/auto", "id", "pump", "on", "false");
   invoke("/auto", "id", "breathe", "on", "true");
   invoke("/toggle", "id", "fan");
-  CHECK(!pumpAuto);
-  CHECK(breatheAuto);
-  CHECK(!fanAuto);
-  CHECK(fanState);
+  CHECK(!sys.pumpAuto);
+  CHECK(sys.breatheAuto);
+  CHECK(!sys.fanAuto);
+  CHECK(sys.fanState);
 
   // chu kỳ nguồn: flash giữ prefs, trạng thái chỉ trong RAM bị mất
   mockServerReset();
-  fanState = relayState = windmillOn = blueLedState = breatheLedState = false;
-  rgbR = rgbG = rgbB = 0;
+  sys.fanState = sys.relayState = sys.windmillOn = sys.blueLedState = sys.breatheLedState = false;
+  sys.rgbR = sys.rgbG = sys.rgbB = 0;
   setup();
 
-  CHECK_EQ(mockServerRouteCount(), 15);
-  CHECK_NEAR(soilThresholdLow, 1234, 0.01);
-  CHECK_NEAR(soilThresholdHigh, 1284, 0.01);
-  CHECK(!pumpAuto);
-  CHECK(!fanAuto);
-  CHECK(breatheAuto);
-  CHECK(breatheLedState);                              // setup bật lại breathing
-  CHECK(!fanState);                                    // trạng thái runtime được reset
-  CHECK_EQ(rgbR, 0);                                   // RGB thủ công không được lưu bền
+  checkAllRoutes();
+  CHECK_NEAR(sys.soilThresholdLow, 1234, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 1284, 0.01);
+  CHECK(!sys.pumpAuto);
+  CHECK(!sys.fanAuto);
+  CHECK(sys.breatheAuto);
+  CHECK(sys.breatheLedState);                              // setup bật lại breathing
+  CHECK(!sys.fanState);                                    // trạng thái runtime được reset
+  CHECK_EQ(sys.rgbR, 0);                                   // RGB thủ công không được lưu bền
 }
 
 // D13: fuzz/soak có seed với các safety invariant
 static void checkFuzzInvariants(bool demoAtLoopStart) {
   // 1. Bơm không bao giờ chạy khi hết nước (safety line + controlPump).
-  CHECK(!(gWater < (int)waterThresholdLow && relayState));
+  CHECK(!(sys.gWater < (int)sys.waterThresholdLow && sys.relayState));
   // 2. Mức chân luôn khớp với trạng thái logic.
-  CHECK((mockPinLevel[RELAY_PIN] != 0) == (relayState != (bool)RELAY_ACTIVE_LOW));
-  CHECK((mockPinLevel[FAN_PIN] != 0) == fanState);
+  CHECK((mockPinLevel[RELAY_PIN] != 0) == (sys.relayState != (bool)RELAY_ACTIVE_LOW));
+  CHECK((mockPinLevel[FAN_PIN] != 0) == sys.fanState);
   // 3. Các cơ cấu servo dùng chung không bao giờ chạy cùng lúc.
-  CHECK(!(windmillOn && feedRunning()));
+  CHECK(!(sys.windmillOn && feedRunning()));
   // 4. Các chế độ LED xanh loại trừ lẫn nhau.
-  CHECK(!(blueLedState && breatheLedState));
+  CHECK(!(sys.blueLedState && sys.breatheLedState));
   // 5. Ghi servo và PWM luôn nằm trong dải hợp lệ.
   CHECK(mockServoMinSeen >= 0 && mockServoMaxSeen <= 180);
   CHECK_EQ(mockInvalidPixelWrites, 0);
   CHECK_EQ(mockInvalidPwmWrites, 0);
   // 6. Không còn PWM cũ khi cả hai chế độ LED đều tắt.
-  if (!blueLedState && !breatheLedState) CHECK_EQ(currentLedPwm(), 0);
+  if (!sys.blueLedState && !sys.breatheLedState) CHECK_EQ(currentLedPwm(), 0);
   // 7. Khi còi đang báo động (không phải demo), còi phải thực sự bật.
   // Bỏ qua loop mà demo đang chạy vừa kết thúc: automation (và
   // còi báo) chỉ hoạt động lại ở loop kế tiếp.
-  if (!demoRunning() && !demoAtLoopStart && gWater < (int)waterThresholdLow) {
+  if (!demoRunning() && !demoAtLoopStart && sys.gWater < (int)sys.waterThresholdLow) {
 #if BUZZER_PASSIVE
     CHECK(mockBuzzerToneHz > 0);
 #else
@@ -1609,16 +1949,16 @@ static void fuzzRun(unsigned seed, int iters) {
   for (int i = 0; i < iters; i++) {
     switch (rng() % 10) {
       case 0: {  // môi trường ngẫu nhiên
-        gWater = (int)(rng() % 4096);
-        mockAdc[WATER_PIN] = INVERT_WATER ? 4095 - gWater : gWater;
-        gSoil = (int)(rng() % 4096);
-        mockAdc[SOIL_PIN] = INVERT_SOIL ? 4095 - gSoil : gSoil;
-        gLight = (int)(rng() % 4096);
-        mockAdc[LDR_PIN] = INVERT_LIGHT ? 4095 - gLight : gLight;
-        gTemp = (float)(rng() % 500) / 10.0f;
-        mockDhtTemp = gTemp;
-        gHum = (float)(rng() % 101);
-        mockDhtHum = gHum;
+        sys.gWater = (int)(rng() % 4096);
+        mockAdc[WATER_PIN] = INVERT_WATER ? 4095 - sys.gWater : sys.gWater;
+        sys.gSoil = (int)(rng() % 4096);
+        mockAdc[SOIL_PIN] = INVERT_SOIL ? 4095 - sys.gSoil : sys.gSoil;
+        sys.gLight = (int)(rng() % 4096);
+        mockAdc[LDR_PIN] = INVERT_LIGHT ? 4095 - sys.gLight : sys.gLight;
+        sys.gTemp = (float)(rng() % 500) / 10.0f;
+        mockDhtTemp = sys.gTemp;
+        sys.gHum = (float)(rng() % 101);
+        mockDhtHum = sys.gHum;
         mockDigital[TOUCH_PIN] = (rng() % 2) ? HIGH : LOW;
         mockDigital[PIR_PIN] = (rng() % 2) ? HIGH : LOW;
         break;
@@ -1643,10 +1983,10 @@ static void fuzzRun(unsigned seed, int iters) {
         break;
       case 3:  // bật/tắt actuator thủ công
         switch (rng() % 4) {
-          case 0: setRelay(!relayState); break;
-          case 1: setFan(!fanState); break;
-          case 2: setBlueLed(!blueLedState); break;
-          case 3: setBreatheLed(!breatheLedState); break;
+          case 0: setRelay(!sys.relayState); break;
+          case 1: setFan(!sys.fanState); break;
+          case 2: setBlueLed(!sys.blueLedState); break;
+          case 3: setBreatheLed(!sys.breatheLedState); break;
         }
         break;
       case 4:  // cơ cấu servo dùng chung
@@ -1695,9 +2035,10 @@ static void testFuzzSoak() {
   mockServerReset();
   setup();                                   // route + giá trị mặc định từ "flash"
 
-  fuzzRun(1,    30000);
-  fuzzRun(42,   30000);
-  fuzzRun(2026, 30000);
+  const int iters = fuzzIterations();
+  fuzzRun(1,    iters);
+  fuzzRun(42,   iters);
+  fuzzRun(2026, iters);
 
   // ổn định: để demo đang chạy kết thúc, rồi kiểm tra trạng thái yên tĩnh
   stopFeed();
@@ -1718,10 +2059,10 @@ static void testClockWrap() {
   mockSetMillis(0xFFFFFF00UL);
   mockDhtTemp = 41.0f; mockDhtHum = 33.0f;
   mockAdc[LDR_PIN] = 1500; mockAdc[SOIL_PIN] = 800; mockAdc[WATER_PIN] = 1200;
-  lastSensorRead = mockMillis();
+  sys.lastSensorRead = mockMillis();
   runLoop(5100);                             // vượt mốc wrap tại +256 ms
-  CHECK_NEAR(gTemp, 41.0, 0.01);
-  CHECK_NEAR(gHum, 33.0, 0.01);
+  CHECK_NEAR(sys.gTemp, 41.0, 0.01);
+  CHECK_NEAR(sys.gHum, 33.0, 0.01);
 
   // B: timer cho ăn trải qua mốc wrap
   mockSetMillis(0xFFFFFFFFUL);
@@ -1740,7 +2081,7 @@ static void testClockWrap() {
   mockSetMillis(0xFFFFFFFFUL);
   setBreatheLed(true);
   setLedPwm(0);
-  lastBreatheUpdate = mockMillis();
+  sys.lastBreatheUpdate = mockMillis();
   mockAdvance(BREATHE_INTERVAL - 1);
   controlBreathe();
   CHECK_EQ(currentLedPwm(), 0);
@@ -1752,14 +2093,14 @@ static void testClockWrap() {
   // D: chạm bật/tắt với timestamp lớn
   mockSetMillis(0xF0000000UL);
   mockAdvance(10000);
-  gTouch = false; controlTouch();
-  lastTouch = mockMillis();
+  sys.gTouch = false; controlTouch();
+  sys.lastTouch = mockMillis();
   setBlueLed(false);
-  bool before = blueLedState;
+  bool before = sys.blueLedState;
   mockAdvance(TOUCH_DEBOUNCE);               // xóa cửa sổ debounce trước
-  gTouch = true; controlTouch();
-  CHECK(blueLedState != before);
-  gTouch = false; controlTouch();
+  sys.gTouch = true; controlTouch();
+  CHECK(sys.blueLedState != before);
+  sys.gTouch = false; controlTouch();
   setBlueLed(false);
 
   // E: demo đầy đủ phải kết thúc sạch khi mốc wrap xảy ra giữa lượt chạy
@@ -1769,10 +2110,10 @@ static void testClockWrap() {
   unsigned long cap = mockMillis() + 120000;
   while (demoRunning() && mockMillis() < cap) {
     mockAdvance(10);
-    simLoop();
+    runAutomation();
   }
   CHECK(!demoRunning());
-  CHECK(!relayState);
+  CHECK(!sys.relayState);
   CHECK_EQ(currentLedPwm(), 0);
 
   // F: timer thử lại WiFi trải qua mốc wrap
@@ -1781,7 +2122,7 @@ static void testClockWrap() {
   loop();                                            // xóa cờ đã cảnh báo
   int b0 = mockWifiBeginCalls;
   mockWifiStatus = WL_DISCONNECTED;
-  lastWifiCheck = 0xFFFFFF00UL;
+  sys.lastWifiCheck = 0xFFFFFF00UL;
   mockAdvance(9999);                                  // wrap qua mốc biên
   loop();
   CHECK_EQ(mockWifiBeginCalls, b0);                   // 9999 ms: chưa đến hạn
@@ -1800,47 +2141,47 @@ static void testAlertLedOwnership() {
 
   // Có chuyển động khi đang breathing: cảnh báo chiếm LED; breathing tiếp tục sau đó
   resetState();
-  gPir = false; controlAlerts();          // xóa mọi trạng thái cảnh báo đang chờ
+  sys.gPir = false; controlAlerts();          // xóa mọi trạng thái cảnh báo đang chờ
   setBreatheAuto(true);
   setBreatheLed(true);
-  CHECK(breatheLedState);
-  gPir = true;
+  CHECK(sys.breatheLedState);
+  sys.gPir = true;
   controlAlerts();
-  CHECK(blueLedState);
-  CHECK(!breatheLedState);                // cảnh báo đã chiếm LED
-  gPir = false;
+  CHECK(sys.blueLedState);
+  CHECK(!sys.breatheLedState);                // cảnh báo đã chiếm LED
+  sys.gPir = false;
   controlAlerts();
-  CHECK(!blueLedState);
-  CHECK(breatheLedState);                 // breathing tự chọn được bật lại
-  CHECK(breatheAuto);
+  CHECK(!sys.blueLedState);
+  CHECK(sys.breatheLedState);                 // breathing tự chọn được bật lại
+  CHECK(sys.breatheAuto);
   setBreatheAuto(false);
   setBreatheLed(false);
 
   // LED bật thủ công không bị ảnh hưởng khi có người đi qua (PIR không sở hữu nó)
   resetState();
-  gPir = false; controlAlerts();
+  sys.gPir = false; controlAlerts();
   setBlueLed(true);
-  gPir = true;  controlAlerts();
-  CHECK(blueLedState);
-  gPir = false; controlAlerts();
-  CHECK(blueLedState);
+  sys.gPir = true;  controlAlerts();
+  CHECK(sys.blueLedState);
+  sys.gPir = false; controlAlerts();
+  CHECK(sys.blueLedState);
   setBlueLed(false);
 
   // Không có breathing auto, cảnh báo chỉ tắt LED trở lại
   resetState();
-  gPir = false; controlAlerts();
-  gPir = true;  controlAlerts();
-  CHECK(blueLedState);
-  gPir = false; controlAlerts();
-  CHECK(!blueLedState);
-  CHECK(!breatheLedState);
+  sys.gPir = false; controlAlerts();
+  sys.gPir = true;  controlAlerts();
+  CHECK(sys.blueLedState);
+  sys.gPir = false; controlAlerts();
+  CHECK(!sys.blueLedState);
+  CHECK(!sys.breatheLedState);
 
   // Phòng thủ: giá trị ramp cũ được xóa khi breathing tắt
   resetState();
-  breatheBrightness = 100;
+  sys.breatheBrightness = 100;
   setLedPwm(222);
   controlBreathe();
-  CHECK_EQ(breatheBrightness, 0);
+  CHECK_EQ(sys.breatheBrightness, 0);
   CHECK_EQ(currentLedPwm(), 0);
 }
 
@@ -1853,11 +2194,11 @@ static void testDemoBreathingRestore() {
   setBreatheLed(true);
   startDemo();
   unsigned long cap = mockMillis() + 120000;
-  while (demoRunning() && mockMillis() < cap) { mockAdvance(10); simLoop(); }
+  while (demoRunning() && mockMillis() < cap) { mockAdvance(10); runAutomation(); }
   CHECK(!demoRunning());
-  CHECK(breatheAuto);
-  CHECK(breatheLedState);                 // breathing bật lại sau DEMO DONE
-  CHECK(!blueLedState);
+  CHECK(sys.breatheAuto);
+  CHECK(sys.breatheLedState);                 // breathing bật lại sau DEMO DONE
+  CHECK(!sys.blueLedState);
   setBreatheAuto(false);
   setBreatheLed(false);
 }
@@ -1871,15 +2212,15 @@ static void testWebSecurity() {
   const String me = String("http://") + String(mockWifiIp);
 
   // Yêu cầu không kèm header (curl, app tự viết) vẫn được phép
-  bool before = relayState;
+  bool before = sys.relayState;
   CHECK_EQ(invoke("/toggle", "id", "pump"), 200);
-  CHECK(relayState != before);
+  CHECK(sys.relayState != before);
 
   // Origin lạ (trang web khác gọi fetch/XHR) → 403, trạng thái không đổi
-  before = relayState;
+  before = sys.relayState;
   mockServerSetHeader("Origin", "http://evil.example");
   CHECK_EQ(invoke("/toggle", "id", "pump"), 403);
-  CHECK(relayState == before);
+  CHECK(sys.relayState == before);
   CHECK_STR(mockServerLastBody(), "forbidden");
 
   // Referer lạ (thẻ <img> không gửi Origin) → 403
@@ -1901,7 +2242,21 @@ static void testWebSecurity() {
   mockServerSetHeader("Referer", (me + "/").c_str());
   mockServerSetHeader("Sec-Fetch-Site", "same-origin");
   CHECK_EQ(invoke("/windmill", "on", "true"), 200);
-  CHECK(windmillOn);
+  CHECK(sys.windmillOn);
+
+  // Request cùng nguồn lần hai dùng lại tiền tố origin đã nhớ (không dựng lại)
+  mockServerSetHeader("Origin", me.c_str());
+  mockServerSetHeader("Sec-Fetch-Site", "same-origin");
+  CHECK_EQ(invoke("/windmill", "on", "false"), 200);
+  CHECK(!sys.windmillOn);
+
+  // DHCP cấp IP mới → tiền tố origin phải được dựng lại theo IP mới
+  const char *savedIp = mockWifiIp;
+  mockWifiIp = "10.0.0.7";
+  mockServerSetHeader("Origin", "http://10.0.0.7");
+  CHECK_EQ(invoke("/windmill", "on", "true"), 200);
+  CHECK(sys.windmillOn);
+  mockWifiIp = savedIp;
 
   resetState();
 }
@@ -1917,41 +2272,124 @@ static void testWebToken() {
   setup();
 
   // Không kèm token → 401, trạng thái không đổi
-  bool before = relayState;
+  bool before = sys.relayState;
   mockServerSetArg("id", "pump");
   CHECK(mockServerInvoke("/toggle"));
   CHECK_EQ(mockServerLastCode(), 401);
   CHECK_STR(mockServerLastBody(), "unauthorized");
-  CHECK(relayState == before);
+  CHECK(sys.relayState == before);
 
   // Token sai qua query → 401
   mockServerSetArg("id", "pump");
   mockServerSetArg("token", "sai-token");
   CHECK(mockServerInvoke("/toggle"));
   CHECK_EQ(mockServerLastCode(), 401);
-  CHECK(relayState == before);
+  CHECK(sys.relayState == before);
 
   // Token đúng qua query → 200
   mockServerSetArg("id", "pump");
   mockServerSetArg("token", WEB_TOKEN);
   CHECK(mockServerInvoke("/toggle"));
   CHECK_EQ(mockServerLastCode(), 200);
-  CHECK(relayState != before);
+  CHECK(sys.relayState != before);
 
   // Token đúng qua header X-Auth-Token → 200
-  before = relayState;
+  before = sys.relayState;
   mockServerSetArg("id", "pump");
   mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
   CHECK(mockServerInvoke("/toggle"));
   CHECK_EQ(mockServerLastCode(), 200);
-  CHECK(relayState != before);
+  CHECK(sys.relayState != before);
+
+  // /api cũng yêu cầu token (trả dữ liệu cảm biến + nonce)
+  CHECK(mockServerInvoke("/api"));            // không kèm token → 401
+  CHECK_EQ(mockServerLastCode(), 401);
+  mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
+  CHECK(mockServerInvoke("/api"));            // kèm token → 200
+  CHECK_EQ(mockServerLastCode(), 200);
 
   resetState();
 }
 
-// I11: boot suy giảm - thiếu OLED và timeout kết nối WiFi
+// D18: bắt đầu trình diễn phải đóng cửa máng ăn đang mở
+static void testDemoClosesFeed() {
+  printf("D18 demo: starting the show closes an open feed gate\n");
+  resetState();
+  primeSensors(900);
+  startFeed();
+  CHECK(feedRunning());
+  CHECK_EQ(mockServoAngle, FEED_OPEN_ANGLE);
+
+  startDemo();
+  CHECK(!feedRunning());                     // demo tiếp quản servo
+  CHECK_EQ(mockServoAngle, FEED_CLOSE_ANGLE);  // cửa phải đóng ngay
+  unsigned long cap = mockMillis() + 120000;
+  while (demoRunning() && mockMillis() < cap) { mockAdvance(10); runAutomation(); }
+  CHECK(!demoRunning());
+  resetState();
+}
+
+// D19: vòng loop đầu tiên đọc cảm biến TRƯỚC khi automation chạy
+static void testBootFirstSample() {
+  printf("D19 boot: first loop samples sensors before automation\n");
+  resetState();
+  mockServerReset();
+  mockWifiStatus = WL_CONNECTED;             // boot nhanh: millis < 1000
+  mockDhtTemp = 33.5f; mockDhtHum = 44.0f;
+  mockAdc[LDR_PIN] = 3000;                   // sáng -> không bật đèn
+  mockAdc[SOIL_PIN] = 900;                   // đất ẩm -> không bật bơm
+  mockAdc[WATER_PIN] = INVERT_WATER ? 2095 : 2000;  // đủ nước -> không hú còi
+
+  setup();
+  CHECK(mockMillis() < SENSOR_INTERVAL);     // đúng kịch bản: chưa đủ 1 giây
+  mockSerialClear();
+  loop();
+  CHECK_NEAR(sys.gTemp, 33.5, 0.05);         // đã đọc cảm biến ngay vòng đầu
+  CHECK_NEAR(sys.gHum, 44.0, 0.05);
+  checkBuzzer(false);                        // không hú còi oan với nước "0"
+  CHECK(!sys.blueLedState);                  // không chớp đèn vì trời "tối"
+  CHECK(!sys.relayState);
+  resetState();
+}
+
+// D17: tham số ngưỡng không hữu hạn ("nan"/"inf") không được lọt vào state
+static void testThresholdNonFinite() {
+  printf("D17 http: non-finite threshold args sanitized\n");
+  resetState();
+  mockServerReset();
+  setup();
+
+  CHECK_EQ(invoke("/threshold", "soilLow", "nan"), 200);
+  CHECK(isfinite(sys.soilThresholdLow));
+  CHECK_NEAR(sys.soilThresholdLow, 0, 0.01);   // quy về 0, giống toFloat("abc")
+  CHECK(sys.soilThresholdHigh > sys.soilThresholdLow);
+
+  invoke("/threshold", "soilHigh", "inf");
+  CHECK(isfinite(sys.soilThresholdHigh));
+  CHECK(sys.soilThresholdHigh > sys.soilThresholdLow);
+
+  invoke("/threshold", "waterLow", "-inf");
+  CHECK(isfinite(sys.waterThresholdLow));
+  CHECK_NEAR(sys.waterThresholdLow, 0, 0.01);
+
+  invoke("/threshold", "tempHigh", "nan");
+  invoke("/threshold", "tempLow", "inf");
+  CHECK(isfinite(sys.tempThresholdHigh));
+  CHECK(isfinite(sys.tempThresholdLow));
+  CHECK(sys.tempThresholdHigh > sys.tempThresholdLow);   // tự sửa thứ tự ngưỡng
+
+  // Cảm biến hữu hạn bình thường: logic bơm không bị kẹt vì NaN
+  sys.soilThresholdLow = 400; sys.soilThresholdHigh = 700;
+  sys.gWater = 900; sys.gSoil = 100; sys.pumpAuto = true;
+  controlPump();
+  CHECK(sys.relayState);
+  setRelay(false);
+  resetState();
+}
+
+// I11: boot suy giảm - thiếu OLED và timeout kết nối WiFi (setup KHÔNG chặn)
 static void testBootDegraded() {
-  printf("I11 boot: missing OLED + WiFi timeout\n");
+  printf("I11 boot: missing OLED + non-blocking WiFi timeout\n");
   resetState();
   mockServerReset();
   mockDisplayBeginOk = false;
@@ -1959,12 +2397,19 @@ static void testBootDegraded() {
   mockSerialClear();
   setup();
 
-  CHECK_EQ(mockServerRouteCount(), 15);              // route vẫn được đăng ký
+  checkAllRoutes();                                  // route vẫn được đăng ký
   CHECK(has(mockSerialOutput(), "MA LOI: 101"));     // không tìm thấy OLED
-  CHECK(has(mockSerialOutput(), "MA LOI: 102"));     // WiFi timeout
-  CHECK(mockWdtResetCalls >= 100);                   // watchdog được feed trong lúc chờ
+  CHECK(!has(mockSerialOutput(), "MA LOI: 102"));    // setup trả về ngay, chưa timeout
   CHECK(mockWifiBeginCalls >= 1);
   CHECK(!demoRunning());
+
+  // Timeout WiFi giờ báo nền trong loop() (không chặn boot), watchdog vẫn được nuôi
+  mockSerialClear();
+  primeSensors(900);
+  runLoop(WIFI_CONNECT_TIMEOUT + 1000);
+  CHECK(has(mockSerialOutput(), "MA LOI: 102"));
+  CHECK(mockWdtResetCalls > 0);
+  CHECK(mockWifiBeginCalls >= 2);                    // ít nhất một lần thử lại trong nền
 
   mockDisplayBeginOk = true;
   mockWifiStatus = WL_CONNECTED;
@@ -1980,54 +2425,64 @@ int main() {
          ESP_ARDUINO_VERSION_MAJOR, INVERT_LIGHT, INVERT_SOIL, INVERT_WATER,
          RELAY_ACTIVE_LOW, BUZZER_PASSIVE);
 
-  testSensorsAverage();
-  testDhtFailover();
-  testPumpHysteresis();
-  testPumpLowWaterSafety();
-  testFanHysteresis();
-  testLightPirAlerts();
-  testBreatheAndLedModes();
-  testTouchToggle();
-  testRgbPlant();
-  testBuzzerAlarm();
-  testWindmillSweep();
-  testFeedGate();
-  testWeather();
-  testSettingsRoundtrip();
-  testDemoFullRun();
-  testAlertLedOwnership();
-  testDemoBreathingRestore();
+  RUN_TEST(testSensorsAverage);
+  RUN_TEST(testDhtFailover);
+  RUN_TEST(testPumpHysteresis);
+  RUN_TEST(testPumpLowWaterSafety);
+  RUN_TEST(testFanHysteresis);
+  RUN_TEST(testLightPirAlerts);
+  RUN_TEST(testBreatheAndLedModes);
+  RUN_TEST(testTouchToggle);
+  RUN_TEST(testRgbPlant);
+  RUN_TEST(testBuzzerAlarm);
+  RUN_TEST(testWindmillSweep);
+  RUN_TEST(testFeedGate);
+  RUN_TEST(testWeather);
+  RUN_TEST(testSettingsRoundtrip);
+  RUN_TEST(testSettingsResetAndSkip);
+  RUN_TEST(testLoggerLevelGuard);
+  RUN_TEST(testSettingsNonFiniteFallback);
+  RUN_TEST(testDemoFullRun);
+  RUN_TEST(testAlertLedOwnership);
+  RUN_TEST(testDemoBreathingRestore);
 
-  testBoundaries();
-  testIdempotency();
-  testTimingBoundaries();
+  RUN_TEST(testBoundaries);
+  RUN_TEST(testIdempotency);
+  RUN_TEST(testTimingBoundaries);
 
   printf("--- integration ---\n");
-  testInoBoot();
-  testHttpApi();
-  testHttpLedOnOff();
-  testHttpMechanisms();
-  testHttpControlRoutes();
-  testHttpRootFavicon();
-  testOled();
-  testSerialMenu();
-  testSerialDemo();
-  testWifiRecovery();
+  RUN_TEST(testInoBoot);
+  RUN_TEST(testHttpApi);
+  RUN_TEST(testHttpLedOnOff);
+  RUN_TEST(testHttpMechanisms);
+  RUN_TEST(testHttpControlRoutes);
+  RUN_TEST(testHttpRootFavicon);
+  RUN_TEST(testHttpWifiConfig);
+  RUN_TEST(testOtaCallbacks);
+  RUN_TEST(testOled);
+  RUN_TEST(testSerialMenu);
+  RUN_TEST(testSerialDemo);
+  RUN_TEST(testSerialActuatorSequence);
+  RUN_TEST(testWifiRecovery);
 
   printf("--- deep ---\n");
-  testApiJsonContract();
-  testResponseExactness();
-  testOledLines();
-  testSerialEdges();
-  testDemoDiagnostics();
-  testWifiThrottle();
-  testBootOrder();
-  testRebootPersistence();
-  testFuzzSoak();
-  testClockWrap();
-  testWebSecurity();
-  testWebToken();
-  testBootDegraded();
+  RUN_TEST(testApiJsonContract);
+  RUN_TEST(testResponseExactness);
+  RUN_TEST(testOledLines);
+  RUN_TEST(testOledDelta);
+  RUN_TEST(testSerialEdges);
+  RUN_TEST(testDemoDiagnostics);
+  RUN_TEST(testWifiThrottle);
+  RUN_TEST(testBootOrder);
+  RUN_TEST(testRebootPersistence);
+  RUN_TEST(testFuzzSoak);
+  RUN_TEST(testClockWrap);
+  RUN_TEST(testWebSecurity);
+  RUN_TEST(testWebToken);
+  RUN_TEST(testThresholdNonFinite);
+  RUN_TEST(testDemoClosesFeed);
+  RUN_TEST(testBootFirstSample);
+  RUN_TEST(testBootDegraded);
 
   printf("=== %d checks, %d failures ===\n", gChecks, gFails);
   return gFails ? 1 : 0;
