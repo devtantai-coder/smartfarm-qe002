@@ -450,6 +450,20 @@ static void testRgbPlant() {
   sys.gLight = 400;
   controlRgb();
   CHECK_EQ(mockPixel[0], 0xFF0000);
+
+  // Màu đơn (255,0,255) trùng đúng giá trị RGB của hoa văn: nếu suy đoán
+  // "đã bật hoa văn" từ màu RGB thì đèn tăng trưởng sẽ không bật khi trời tối.
+  // Phải theo cờ thật của dải LED mới đúng.
+  resetState();
+  setRgb(255, 0, 255);
+  CHECK(!rgbPlantPatternActive());          // màu đơn ≠ hoa văn
+  sys.gLight = 400;
+  controlRgb();
+  CHECK(rgbPlantPatternActive());           // hoa văn đã bật
+  CHECK_EQ(mockPixel[0], 0xFF0000);
+  CHECK_EQ(mockPixel[1], 0x0000FF);
+  CHECK_EQ(mockPixel[2], 0xFF0000);
+  CHECK_EQ(mockPixel[3], 0x0000FF);
 }
 
 // T10: còi báo động hết nước (hoạt động 8)
@@ -510,6 +524,20 @@ static void testFeedGate() {
   CHECK(!feedRunning());
   CHECK(sys.windmillOn);
   setWindmill(false);
+
+  // stopFeed() phải ĐÓNG cửa máng ăn: servo dùng chung với cối xay gió,
+  // nếu chỉ ngừng mà không đóng lại thì cửa bị kẹt mở khi servo chạy sang
+  // mục khác.
+  startFeed();
+  CHECK_EQ(mockServoAngle, FEED_OPEN_ANGLE);
+  stopFeed();
+  CHECK(!feedRunning());
+  CHECK_EQ(mockServoAngle, FEED_CLOSE_ANGLE);
+
+  // stopFeed() khi không có cho ăn thì không được đụng servo
+  mockServoWriteCount = 0;
+  stopFeed();
+  CHECK_EQ(mockServoWriteCount, 0);
 }
 
 // T13: đoán thời tiết (hoạt động 11)
@@ -1584,7 +1612,8 @@ static void testOledLines() {
   mockWifiIp = "192.168.1.50";
 }
 
-// D20: OLED chỉ đẩy I2C các page 8-hàng thay đổi (delta), không gửi đủ 1024 byte
+// D20: OLED chỉ đẩy I2C vùng thực sự thay đổi (delta theo dải cột trong
+// từng page 8-hàng), không gửi đủ 1024 byte
 static void testOledDelta() {
   printf("D20 oled: delta page updates over I2C\n");
   resetState();
@@ -1605,20 +1634,24 @@ static void testOledDelta() {
   CHECK_EQ(mockI2cDataBytes - d0, 0);
   CHECK_EQ(mockI2cTransactions - t0, 0);
 
-  // Mực nước đổi -> chỉ page 5 (dòng H2O) được gửi lại: 128 byte
+  // Mực nước đổi -> chỉ 1 ký tự trong dòng H2O đổi ('9'->'5' tại cột 24..29).
+  // Font 6x8: mỗi ký tự chiếm 6 cột -> chỉ 6 byte dữ liệu thay vì 128 byte
+  // của cả page (giảm 95% lưu lượng I2C, rút ngắn thời gian chặn loop).
   sys.gWater = 500;
   t0 = mockI2cTransactions; d0 = mockI2cDataBytes;
   updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
-  CHECK_EQ(mockI2cDataBytes - d0, 128);
-  CHECK_EQ(mockI2cTransactions - t0, 3);        // 1 lệnh + 2 chunk (127+1)
+  CHECK_EQ(mockI2cDataBytes - d0, 6);
+  CHECK_EQ(mockI2cTransactions - t0, 2);        // 1 lệnh địa chỉ + 1 gói dữ liệu
   CHECK_STR(mockOledLine(5), "H2O:500 P:OFF");
 
-  // Nhiệt độ (page 2) + độ ẩm đất (page 4) đổi -> gửi cả dải page 2..4
+  // Nhiệt độ (page 2) + độ ẩm đất (page 4) đổi -> mỗi page gửi đúng dải cột
+  // của các ký tự đổi: page 2 đổi 3 ký tự (cột 12..35 = 24 byte), page 4 đổi
+  // 3 ký tự (cột 36..53 = 18 byte) -> 42 byte thay vì 384 byte (giảm 89%).
   sys.gTemp = 30.0f; sys.gSoil = 123;
   t0 = mockI2cTransactions; d0 = mockI2cDataBytes;
   updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
-  CHECK_EQ(mockI2cDataBytes - d0, 384);         // 3 page × 128 (page 3 giữa không đổi vẫn nằm trong dải)
-  CHECK_EQ(mockI2cTransactions - t0, 5);        // 1 lệnh + 4 chunk (127×3+3)
+  CHECK_EQ(mockI2cDataBytes - d0, 42);
+  CHECK_EQ(mockI2cTransactions - t0, 4);        // 2 lệnh địa chỉ + 2 gói dữ liệu
 
   // Ép vẽ lại toàn bộ (code khác đã ghi đè màn hình) -> lại đủ 1024 byte
   oledForceRedraw();

@@ -90,7 +90,21 @@ run_coverage() {
   g++ "${FLAGS[@]}" -DWEB_TOKEN='"token-bao-mat-test"' --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.o"
   objs+=("$cov/SmartFarm.o")
   g++ --coverage -o "$cov/test.bin" "${objs[@]}"
+  # Xóa .gcda cũ nếu còn (tránh cộng dồn số liệu của lần chạy trước).
+  rm -f "$cov"/*.gcda
   "$cov/test.bin" | tail -n 1
+  # gcov chỉ có số liệu khi tìm thấy .gcda cho từng file. Nếu .gcda bị thiếu
+  # (lỗi ghi file tạm khi chạy song song) thì chạy lại test một lần để thu
+  # thập đủ dữ liệu, tránh báo độ phủ sai rồi fail CI.
+  local missing=0 o2
+  for o2 in "$cov"/*.gcno; do
+    [ -e "$o2" ] || continue
+    [ -e "${o2%.gcno}.gcda" ] || missing=1
+  done
+  if [ "$missing" = "1" ]; then
+    echo "coverage: thiếu file .gcda — chạy lại test để thu thập lại dữ liệu"
+    "$cov/test.bin" | tail -n 1
+  fi
   echo
 
   echo "=== Coverage (production code: src/*.cpp + SmartFarm.ino) ==="

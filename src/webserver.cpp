@@ -17,7 +17,12 @@ static const char ROOT_HTML[] PROGMEM = R"rawliteral(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="referrer" content="no-referrer">
 <title>Smart Farm IoT</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" referrerpolicy="no-referrer">
+<!-- Font Awesome tải KHÔNG chặn hiển thị: thiết bị thường chỉ có mạng nội
+     bộ (không có Internet) — nếu để link chặn render, trình duyệt phải chờ
+     hết thời gian chờ DNS rồi mới hiện trang. media="print" + onload làm
+     trang hiện ngay, biểu tượng sẽ tự thêm sau nếu CDN truy cập được. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" referrerpolicy="no-referrer" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" referrerpolicy="no-referrer"></noscript>
 <style>
 :root{--primary:#2e7d32;--primary-dark:#1b5e20;--accent:#1565c0;--danger:#c62828;--bg:#f8fafc;--card-bg:#fff;--text:#1f2937;--muted:#6b7280;--border:#e5e7eb;--radius:14px;--shadow:0 4px 6px -1px rgba(0,0,0,.08),0 2px 4px -1px rgba(0,0,0,.04)}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -313,12 +318,15 @@ static bool checkSameOrigin() {
 static bool checkToken() {
   if (sys.webToken[0] == '\0') return true;
   char token[64] = {0};
-  if (server.hasHeader("X-Auth-Token")) {
-    strncpy(token, server.header("X-Auth-Token").c_str(), sizeof(token) - 1);
-  } else if (server.hasArg("token")) {
-    strncpy(token, server.arg("token").c_str(), sizeof(token) - 1);
+  // Đọc mỗi nguồn token ĐÚNG MỘT lần: WebServer cấp phát một String mới cho
+  // mỗi lần đọc (và cả cho tham số const String&), nên gọi hasHeader() rồi
+  // header() sẽ cấp phát 3 lần cho cùng một giá trị.
+  const String hdr = server.header("X-Auth-Token");
+  if (hdr.length() > 0) {
+    strncpy(token, hdr.c_str(), sizeof(token) - 1);
   } else {
-    token[0] = '\0';
+    const String q = server.arg("token");
+    if (q.length() > 0) strncpy(token, q.c_str(), sizeof(token) - 1);
   }
   token[sizeof(token) - 1] = '\0';
   if (!secretMatches(token, sys.webToken)) {
@@ -335,13 +343,12 @@ static bool guardWeb() {
 
 #if ANTI_REPLAY
   // Chống replay: yêu cầu nonce lớn hơn lần dùng cuối cùng.
-  char nonceStr[16] = {0};
-  if (server.hasArg("nonce")) {
-    strncpy(nonceStr, server.arg("nonce").c_str(), sizeof(nonceStr) - 1);
-    nonceStr[sizeof(nonceStr) - 1] = '\0';
-  }
-  uint32_t nonce = (uint32_t)strtoul(nonceStr, nullptr, 10);
-  if (nonce == 0 || nonce <= sys.gLastNonce) {
+  // So sánh bằng hiệu có dấu (int32) để bộ đếm tràn 32 bit vẫn đúng: nếu
+  // dùng phép so sánh thường thì một nonce = 0xFFFFFFFF sẽ "chết" mọi lệnh
+  // sau đó (không còn số nào lớn hơn được), tức là tự khóa thiết bị.
+  const String nonceStr = server.arg("nonce");
+  uint32_t nonce = (uint32_t)strtoul(nonceStr.c_str(), nullptr, 10);
+  if (nonce == 0 || (int32_t)(nonce - sys.gLastNonce) <= 0) {
     server.send(403, "text/plain", "replay");
     return false;
   }
@@ -406,13 +413,19 @@ static uint8_t clampByte(long v) {
   return (uint8_t)v;
 }
 
-// Đọc tham số float từ query. Giá trị không hữu hạn (client gửi "nan"/"inf")
-// được quy về 0 giống toFloat("abc") — nếu không, NaN sẽ lọt qua constrain()
-// (mọi so sánh với NaN đều sai) rồi gây ép kiểu float->int không xác định
-// trong các phép so ngưỡng và làm logic điều khiển kẹt.
-static float floatArg(const char* name) {
-  float v = server.arg(name).toFloat();
-  return isfinite(v) ? v : 0.0f;
+// Đọc tham số float từ query. Đọc ĐÚNG MỘT lần: WebServer cấp phát một
+// String mới cho mỗi lần đọc nên gọi hasArg() rồi arg() sẽ cấp phát 3 lần.
+// Giá trị không hữu hạn (client gửi "nan"/"inf") được quy về 0 giống
+// toFloat("abc") — nếu không, NaN sẽ lọt qua constrain() (mọi so sánh với
+// NaN đều sai) rồi gây ép kiểu float->int không xác định trong các phép so
+// ngưỡng và làm logic điều khiển kẹt.
+// Trả false nếu tham số không có (hoặc rỗng) -> không thay đổi ngưỡng nào.
+static bool floatArg(const char* name, float* out) {
+  const String v = server.arg(name);
+  if (v.length() == 0) return false;
+  const float f = v.toFloat();
+  *out = isfinite(f) ? f : 0.0f;
+  return true;
 }
 
 // ── Bật/tắt thiết bị (thao tác thủ công sẽ tắt chế độ tự động tương ứng) ──
@@ -546,12 +559,17 @@ void handleDemo() {
 void handleThreshold() {
   if (!guardWeb()) return;
   bool changed = false;
-  if (server.hasArg("soilLow"))  { sys.soilThresholdLow  = constrain(floatArg("soilLow"),  0.0f, 4095.0f); changed = true; }
-  if (server.hasArg("soilHigh")) { sys.soilThresholdHigh = constrain(floatArg("soilHigh"), 0.0f, 4095.0f); changed = true; }
-  if (server.hasArg("waterLow")) { sys.waterThresholdLow = constrain(floatArg("waterLow"), 0.0f, 4095.0f); changed = true; }
-  if (server.hasArg("light"))    { sys.lightThreshold    = constrain(server.arg("light").toInt(),      0,    4095);   changed = true; }
-  if (server.hasArg("tempHigh")) { sys.tempThresholdHigh = constrain(floatArg("tempHigh"), 0.0f, 60.0f);   changed = true; }
-  if (server.hasArg("tempLow"))  { sys.tempThresholdLow  = constrain(floatArg("tempLow"),  0.0f, 60.0f);   changed = true; }
+  float f = 0.0f;
+  if (floatArg("soilLow", &f))  { sys.soilThresholdLow  = constrain(f, 0.0f, 4095.0f); changed = true; }
+  if (floatArg("soilHigh", &f)) { sys.soilThresholdHigh = constrain(f, 0.0f, 4095.0f); changed = true; }
+  if (floatArg("waterLow", &f)) { sys.waterThresholdLow = constrain(f, 0.0f, 4095.0f); changed = true; }
+  if (floatArg("tempHigh", &f)) { sys.tempThresholdHigh = constrain(f, 0.0f, 60.0f);   changed = true; }
+  if (floatArg("tempLow", &f))  { sys.tempThresholdLow  = constrain(f, 0.0f, 60.0f);   changed = true; }
+  const String lightArg = server.arg("light");
+  if (lightArg.length() > 0) {
+    sys.lightThreshold = constrain(lightArg.toInt(), 0, 4095);
+    changed = true;
+  }
 
   if (!changed) {
     server.send(400, "text/plain", "no params");
@@ -572,13 +590,15 @@ void handleThreshold() {
 void handleWifi() {
   if (!guardWeb()) return;
   bool changed = false;
-  if (server.hasArg("ssid")) {
-    strncpy(sys.ssid, server.arg("ssid").c_str(), sizeof(sys.ssid) - 1);
+  const String ssidArg = server.arg("ssid");
+  if (ssidArg.length() > 0) {
+    strncpy(sys.ssid, ssidArg.c_str(), sizeof(sys.ssid) - 1);
     sys.ssid[sizeof(sys.ssid) - 1] = '\0';
     changed = true;
   }
-  if (server.hasArg("password")) {
-    strncpy(sys.password, server.arg("password").c_str(), sizeof(sys.password) - 1);
+  const String passArg = server.arg("password");
+  if (passArg.length() > 0) {
+    strncpy(sys.password, passArg.c_str(), sizeof(sys.password) - 1);
     sys.password[sizeof(sys.password) - 1] = '\0';
     changed = true;
   }

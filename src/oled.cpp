@@ -15,10 +15,13 @@ static const char* weatherText() {
   }
 }
 
-// ── Đẩy framebuffer qua I2C theo PAGE thay đổi ──
+// ── Đẩy framebuffer qua I2C theo vùng thực sự đổi ──
 // display.display() của thư viện luôn gửi đủ 1024 byte (~23 ms ở 400 kHz).
-// Ở đây chỉ gửi các page 8-hàng thực sự đổi (mỗi page 128 byte ≈ 3 ms):
-// thường chỉ 1-4 dòng số liệu đổi nên mỗi lần cập nhật rẻ hơn nhiều.
+// Ở đây chỉ gửi đúng vùng pixel thay đổi: theo từng page 8-hàng, và trong
+// mỗi page chỉ gửi dải cột đã đổi (mỗi ký tự chiếm 6 cột với font mặc định).
+// Ví dụ đổi "H2O:900" -> "H2O:500" chỉ đổi 1 ký tự = 6 cột = 6 byte thay vì
+// gửi lại cả page 128 byte — giảm ~95% lưu lượng I2C và rút ngắn thời gian
+// chặn loop() (mỗi byte I2C ở 400 kHz tốn ~22 µs).
 static uint8_t sPrevFrame[SCREEN_WIDTH * SCREEN_HEIGHT / 8];
 static bool sPrevFrameValid = false;
 
@@ -38,6 +41,29 @@ static void oledWriteData(const uint8_t* data, size_t n) {
   }
 }
 
+// Ghi một dải cột [c0..c1] của một page.
+//
+// SSD1306 đang ở chế độ địa chỉ ngang (horizontal addressing, 0x20 0x00 —
+// thư viện Adafruit_SSD1306 đặt trong begin()): lệnh 0x21 đặt cột đầu/cuối,
+// lệnh 0x22 đặt page đầu/cuối. Con trỏ cột tự tăng khi ghi byte và quay về
+// cột đầu khi chạm cột cuối — nhưng vì ta ghi ĐÚNG (c1-c0+1) byte và đặt page
+// là một page duy nhất (p..p) nên con trỏ không bao giờ vượt qua cột cuối và
+// không nhảy sang page kế tiếp. Vì vậy ghi đúng số byte là đủ.
+static void oledWriteCols(const uint8_t* pageData, uint8_t page, uint8_t c0, uint8_t c1) {
+  Wire.beginTransmission(OLED_I2C_ADDR);
+  Wire.write((uint8_t)0x00);                 // control: toàn lệnh
+  Wire.write((uint8_t)0x21);                 // set column address
+  Wire.write(c0);                            // từ cột c0
+  Wire.write(c1);                            // đến cột c1
+  Wire.write((uint8_t)0x22);                 // set page address
+  Wire.write(page);
+  Wire.write(page);                          // chỉ một page
+  Wire.endTransmission();
+  oledWriteData(pageData + c0, (size_t)(c1 - c0 + 1));
+}
+
+// Ghi trọn dải page liên tiếp [p0..p1] bằng MỘT lệnh địa chỉ + một luồng dữ
+// liệu. Dùng cho lần vẽ đầu tiên (màn hình trắng) — ít giao dịch I2C nhất.
 static void oledWritePages(const uint8_t* frame, uint8_t p0, uint8_t p1) {
   Wire.beginTransmission(OLED_I2C_ADDR);
   Wire.write((uint8_t)0x00);                 // control: toàn lệnh
@@ -115,23 +141,40 @@ void updateOLED(float t, float h, int light, int soil, int water) {
 
   const uint8_t pages = SCREEN_HEIGHT / 8;
   const uint8_t* frame = display.getBuffer();
-  uint8_t p0 = 0xFF, p1 = 0;
-  if (sPrevFrameValid) {
-    for (uint8_t p = 0; p < pages; p++) {
-      if (memcmp(frame + (size_t)p * SCREEN_WIDTH, sPrevFrame + (size_t)p * SCREEN_WIDTH,
-                 SCREEN_WIDTH) != 0) {
-        if (p0 == 0xFF) p0 = p;
-        p1 = p;
+
+  // Lần vẽ đầu tiên (màn hình vừa bật): ghi trọn màn hình bằng một lệnh
+  // địa chỉ duy nhất + một luồng dữ liệu — ít giao dịch I2C nhất.
+  if (!sPrevFrameValid) {
+    memcpy(sPrevFrame, frame, sizeof(sPrevFrame));
+    sPrevFrameValid = true;
+    oledWritePages(frame, 0, pages - 1);
+    return;
+  }
+
+  // Các lần sau: quét từng page, tìm dải cột đầu..cuối bị đổi so với khung
+  // trước và chỉ gửi đúng vùng đó.
+  bool wroteAny = false;
+  for (uint8_t p = 0; p < pages; p++) {
+    const uint8_t* cur  = frame + (size_t)p * SCREEN_WIDTH;
+    const uint8_t* prev = sPrevFrame + (size_t)p * SCREEN_WIDTH;
+
+    uint8_t c0 = 0xFF, c1 = 0;
+    for (uint8_t c = 0; c < SCREEN_WIDTH; c++) {
+      if (cur[c] != prev[c]) {
+        if (c0 == 0xFF) c0 = c;
+        c1 = c;
       }
     }
-    if (p0 == 0xFF) return;                    // giống hệt: không chạm I2C
-  } else {
-    p0 = 0;
-    p1 = pages - 1;
+    if (c0 == 0xFF) continue;                // page này không đổi -> không đụng I2C
+
+    oledWriteCols(cur, p, c0, c1);
+    wroteAny = true;
   }
+
+  // Không có gì đổi: giữ nguyên khung trước, không ghi lại (không tốn I2C).
+  if (!wroteAny) return;
+
   memcpy(sPrevFrame, frame, sizeof(sPrevFrame));
-  sPrevFrameValid = true;
-  oledWritePages(frame, p0, p1);
 }
 
 #ifdef SMARTFARM_TEST_HOOKS

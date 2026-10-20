@@ -29,15 +29,15 @@ Tùy biến bằng biến môi trường:
 | `asan+ubsan` | `-fsanitize=address,undefined -fno-omit-frame-pointer` | Phát hiện tràn bộ nhớ/UB; script tự bỏ `LD_PRELOAD` khi chạy |
 | `webtoken` | `-DWEB_TOKEN='"token-bao-mat-test"'` | Bật `WEB_TOKEN` để chạy D16 (bảo vệ token web) |
 
-Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.448 lượt kiểm tra,
+Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.507 lượt kiểm tra,
 0 lỗi** trên 4 bản build thường; bản `webtoken` và bản `--coverage` (cũng đặt
-`WEB_TOKEN`) chạy **772.465 lượt**. Độ phủ dòng lệnh: **99,9%**
-(`SmartFarm.ino` 99,4% — chỉ còn nhánh `default` phòng vệ không thể chạm tới
-của `handleDebugCmd()`; các file còn lại 100%). Độ phủ nhánh (taken at least
-once): **~79,7%** cho toàn bộ code production — phần thiếu chủ yếu là các
-nhánh phòng vệ một chiều (`errno` của thư viện, `else` bất khả thi, nhánh
-compile-time của ternary). Mỗi test in một dòng `[PASS]/[FAIL]` kèm tên và
-số check của riêng nó để khoanh vùng lỗi nhanh.
+`WEB_TOKEN`) chạy **772.524 lượt**. Độ phủ dòng lệnh: **100%**
+(đã kiểm bằng `--coverage`; nhánh `default` phòng vệ của `handleDebugCmd()` là
+nhánh compile-time không thể chạm tới nên không tính vào dòng lệnh). Độ phủ
+nhánh (taken at least once): **~80,3%** cho toàn bộ code production — phần
+thiếu chủ yếu là các nhánh phòng vệ một chiều (`errno` của thư viện, `else`
+bất khả thi, nhánh compile-time của ternary). Mỗi test in một dòng
+`[PASS]/[FAIL]` kèm tên và số check của riêng nó để khoanh vùng lỗi nhanh.
 
 ## Cấu trúc
 
@@ -74,5 +74,8 @@ số check của riêng nó để khoanh vùng lỗi nhanh.
   và các header thay thế `Arduino.h`, `WiFi.h`, `WebServer.h`, `Adafruit_SSD1306.h`,
   `Adafruit_NeoPixel.h`, `ESP32Servo.h`, `DHT.h`, `Preferences.h`, `Wire.h`,
   `esp_task_wdt.h`, `esp_arduino_version.h`.
+  Bộ đệm OLED giả mô phỏng đúng bố cục 6 cột/ký tự của font 6×8 thật, nên phép
+  diff theo dải cột của firmware được kiểm chứng đúng (đổi 1 ký tự → 6 byte
+  I2C, không phải 128 byte của cả page).
 - `run_tests.sh` — script build + chạy (và chế độ coverage).
 - `build/` — thư mục build tạm (đã `.gitignore`).

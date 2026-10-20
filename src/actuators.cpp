@@ -90,20 +90,25 @@ void setRgb(uint8_t r, uint8_t g, uint8_t b) {
   if (!sPlantPattern && sys.rgbR == r && sys.rgbG == g && sys.rgbB == b) return;
   sPlantPattern = false;
   sys.rgbR = r; sys.rgbG = g; sys.rgbB = b;
+  const uint32_t color = strip.Color(r, g, b);   // tính 1 lần, dùng cho mọi LED
   for (int i = 0; i < RGB_COUNT; i++) {
-    strip.setPixelColor(i, strip.Color(r, g, b));
+    strip.setPixelColor(i, color);
   }
   strip.show();
   MOD_DEBUG(Rgb, "RGB set");
 }
 
+bool rgbPlantPatternActive() { return sPlantPattern; }
+
 // Đèn tăng trưởng cho cây (bài 9): LED 1 & 3 đỏ, LED 2 & 4 xanh dương.
 void setRgbPlant() {
   sPlantPattern = true;
   sys.rgbR = 255; sys.rgbG = 0; sys.rgbB = 255;
+  const uint32_t colorRed  = strip.Color(255, 0, 0);
+  const uint32_t colorBlue = strip.Color(0, 0, 255);
   for (int i = 0; i < RGB_COUNT; i++) {
     bool red = (i % 2 == 0);
-    strip.setPixelColor(i, red ? strip.Color(255, 0, 0) : strip.Color(0, 0, 255));
+    strip.setPixelColor(i, red ? colorRed : colorBlue);
   }
   strip.show();
   MOD_DEBUG(Rgb, "RGB plant light");

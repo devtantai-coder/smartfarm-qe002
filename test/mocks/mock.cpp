@@ -295,17 +295,25 @@ const char *mockServerLastBody() { return sLastBody.c_str(); }
 static std::string sOledText;
 static std::string sOledLines[8];
 static int sOledRow = 0;
-// Framebuffer giả 1024 byte: mỗi page 128 byte giữ hash nội dung dòng text
-// tương ứng (page = dòng text 8-px) để updateOLED() diff từng page giống
-// phần cứng thật — page nào đổi thì chỉ page đó được gửi qua I2C.
+// Framebuffer giả 1024 byte mô phỏng đúng cách sắp xếp pixel của font 6x8:
+// mỗi ký tự chiếm 6 cột (cột 6i..6i+5) trong page 8-hàng tương ứng. Nhờ vậy
+// khi đổi 1 ký tự thì chỉ 6 cột của page đó đổi — giống phần cứng thật — để
+// updateOLED() diff theo dải cột được kiểm chứng đúng.
 static uint8_t sOledBuf[128 * 64 / 8];
 
 static void oledSyncBuffer() {
   memset(sOledBuf, 0, sizeof(sOledBuf));
   for (int row = 0; row < 8; row++) {
-    uint32_t h = 2166136261u;
-    for (char c : sOledLines[row]) { h ^= (uint8_t)c; h *= 16777619u; }
-    memcpy(sOledBuf + row * 128, &h, sizeof(h));
+    const std::string &line = sOledLines[row];
+    for (size_t i = 0; i < line.size(); i++) {
+      // Chữ ký riêng cho từng ký tự: đổi ký tự này chỉ đổi 6 cột của nó.
+      uint8_t sig = (uint8_t)((uint32_t)line[i] * 31u + (uint32_t)i * 13u + 7u);
+      for (int k = 0; k < 6; k++) {
+        size_t col = i * 6 + k;
+        if (col >= 128) break;
+        sOledBuf[row * 128 + col] = sig;
+      }
+    }
   }
 }
 

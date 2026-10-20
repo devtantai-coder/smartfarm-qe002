@@ -208,7 +208,7 @@ void debugControl() {
 void debugWebserver() {
   Serial.println(F("\n--- WEBSERVER ---"));
   Serial.printf("WiFi:%s  IP:%s\n", WiFi.status()==WL_CONNECTED?"OK":"FAIL", WiFi.localIP().toString().c_str());
-  Serial.println(F("Routes: / /api /toggle /auto /rgb /breathe /on /off /windmill /feed /demo /servo /threshold"));
+  Serial.println(F("Routes: / /api /toggle /auto /rgb /breathe /on /off /windmill /feed /demo /servo /threshold /wifi"));
 }
 
 // ── Debug: WiFi ──

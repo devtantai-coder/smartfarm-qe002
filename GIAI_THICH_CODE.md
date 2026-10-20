@@ -2181,20 +2181,69 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   display.setCursor(0, 56);
   if (demoRunning()) {
     display.print(demoStepName());
-  } else if (windmillOn) {
+  } else if (sys.windmillOn) {
     display.print(F("Coi xay: ON"));
   } else if (feedRunning()) {
     display.print(F("Cho an..."));
   } else {
     display.print(F("San sang"));
   }
-
-  display.display();
 }
 ```
 
 - Dòng 67–76: dòng 7 — "dòng trạng thái" theo thứ tự ưu tiên: đang demo → tên bước; đang quay cối xay → ON; đang cho ăn → "Cho an..."; bình thường → "San sang".
-- Dòng 78: `display()` mới thật sự đẩy bộ đệm ra màn hình — nhờ vẽ vào bộ đệm trước, cả khung hình thay đổi trong 1 nhịp, không bị xé hình.
+
+### 9.3. Đẩy I2C kiểu "delta" — chỉ gửi vùng pixel thực sự đổi
+
+Sau khi vẽ xong vào bộ đệm RAM, firmware **không** gọi `display.display()` (hàm này luôn gửi đủ 1024 byte ra I2C ≈ 23 ms ở 400 kHz). Thay vào đó nó tự so sánh bộ đệm với khung trước và chỉ gửi phần thay đổi:
+
+```cpp
+static uint8_t sPrevFrame[SCREEN_WIDTH * SCREEN_HEIGHT / 8];
+static bool sPrevFrameValid = false;
+```
+
+- `sPrevFrame`: bản sao khung hình đã hiển thị lần trước (1024 byte, đúng bằng kích thước bộ đệm SSD1306).
+- `sPrevFrameValid = false` lúc đầu → lần vẽ đầu tiên gửi trọn màn hình (`oledWritePages`) bằng **một** lệnh địa chỉ + một luồng dữ liệu, rẻ nhất.
+
+Với các lần vẽ sau, firmware quét từng page (page = 8 hàng pixel, tức đúng 1 dòng text với font 6×8) và tìm **dải cột đầu..cuối** bị đổi:
+
+```cpp
+for (uint8_t p = 0; p < pages; p++) {
+  const uint8_t* cur  = frame + (size_t)p * SCREEN_WIDTH;
+  const uint8_t* prev = sPrevFrame + (size_t)p * SCREEN_WIDTH;
+  uint8_t c0 = 0xFF, c1 = 0;
+  for (uint8_t c = 0; c < SCREEN_WIDTH; c++) {
+    if (cur[c] != prev[c]) { if (c0 == 0xFF) c0 = c; c1 = c; }
+  }
+  if (c0 == 0xFF) continue;          // page này không đổi -> không đụng I2C
+  oledWriteCols(cur, p, c0, c1);
+}
+```
+
+- Quét **byte** trong page chứ không chỉ so sánh cả page: với font 6×8, mỗi ký tự chiếm đúng 6 cột, nên đổi 1 ký tự chỉ làm đổi 6 byte thay vì 128 byte của cả page.
+- `oledWriteCols()` đặt địa chỉ rồi gói dữ liệu:
+
+```cpp
+Wire.write((uint8_t)0x21);   // set column address -> c0, c1
+Wire.write((uint8_t)0x22);   // set page address  -> page, page (một page duy nhất)
+...
+oledWriteData(pageData + c0, (size_t)(c1 - c0 + 1));
+```
+
+- SSD1306 đang ở chế độ **địa chỉ ngang** (lệnh `0x20 0x00`, thư viện Adafruit_SSD1306 đặt trong `begin()`): con trỏ cột tự tăng khi ghi byte và quay về cột đầu khi chạm cột cuối. Vì ta đặt page là **một page duy nhất** (`page, page`) và ghi **đúng** `c1 - c0 + 1` byte, con trỏ không bao giờ vượt cột cuối và không nhảy sang page kế tiếp — nên gói dữ liệu rơi đúng vào vùng cần sửa.
+- `oledWriteData()` chia gói theo 127 byte + 1 byte điều khiển `0x40` (D/C# = 1) vì buffer I2C mặc định của `Wire` chỉ chứa 128 byte.
+
+**Hiệu quả đo được** (xem test `testOledDelta` — bộ đệm giả của mock mô phỏng đúng bố cục 6 cột/ký tự của font thật):
+
+| Tình huống | Cách cũ (gửi cả dải page) | Cách mới (gửi đúng dải cột) |
+|---|---|---|
+| Vẽ lần đầu | 1024 byte | 1024 byte (không đổi) |
+| Đổi 1 ký tự ("H2O:900"→"H2O:500") | 128 byte | **6 byte** (−95%) |
+| Đổi 2 dòng số liệu | 384 byte | **42 byte** (−89%) |
+
+Nhờ vậy thời gian chặn `loop()` mỗi lần cập nhật màn hình giảm mạnh (mỗi byte I2C ở 400 kHz tốn ~22 µs), web server phản hồi nhanh hơn.
+
+`oledForceRedraw()` đặt `sPrevFrameValid = false` — dùng khi code khác vẽ trực tiếp lên màn hình (màn hình test của `debugOled()`) để bộ đệm so sánh delta không tưởng nhầm "không đổi" rồi bỏ qua.
 
 ---
 

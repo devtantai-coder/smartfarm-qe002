@@ -67,11 +67,15 @@ void controlLight() {
 // ── RGB: đèn tăng trưởng cây khi trời tối (bài 9), tắt khi trời sáng ──
 // Không lưu trạng thái: so sánh với màu RGB thực tế nên màu thủ công
 // không bao giờ bị bỏ quên khi bật lại chế độ tự động.
+// Trạng thái "đang hiển thị hoa văn" lấy từ cờ sPlantPattern (nguồn sự thật
+// của dải LED) chứ không suy đoán từ RGB: nếu người dùng tự đặt màu đơn
+// (255,0,255) thì màu đó trùng giá trị RGB của hoa văn — suy đoán kiểu cũ sẽ
+// tưởng hoa văn đang bật và không bật đèn tăng trưởng khi trời tối.
 void controlRgb() {
   if (!sys.rgbAuto) return;
   bool isDark = sys.gLight < (sys.lightThreshold - 50);
   bool isBright = sys.gLight > (sys.lightThreshold + 50);
-  bool plantOn = (sys.rgbR == 255 && sys.rgbG == 0 && sys.rgbB == 255);
+  bool plantOn = rgbPlantPatternActive();
   bool rgbOff = (sys.rgbR == 0 && sys.rgbG == 0 && sys.rgbB == 0);
   if (isDark && !plantOn) {
     setRgbPlant();
@@ -197,7 +201,11 @@ void startFeed() {
 }
 
 void stopFeed() {
+  if (!sFeedActive) return;      // không có cho ăn thì không đụng servo
   sFeedActive = false;
+  // Đóng cửa máng ăn: servo dùng chung với cối xay gió nên nếu chỉ ngừng
+  // mà không đóng lại, cửa có thể bị kẹt mở khi servo chạy sang mục khác.
+  servo.write(FEED_CLOSE_ANGLE);
 }
 
 void controlFeed() {

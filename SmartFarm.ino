@@ -159,7 +159,10 @@ void setup() {
     Serial.println(F("\nOTA: end"));
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("OTA: %u%%\r", (progress / (total / 100)));
+    // total có thể nhỏ hơn 100 (ảnh firmware rất nhỏ) -> chia cho (total/100)
+    // sẽ là chia cho 0. Tính theo phép nhân rồi chia một lần cho an toàn.
+    unsigned int pct = total ? (progress * 100u) / total : 0u;
+    Serial.printf("OTA: %u%%\r", pct);
   });
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("OTA: error[%u] ", error);
