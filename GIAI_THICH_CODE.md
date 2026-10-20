@@ -2245,6 +2245,35 @@ Nhờ vậy thời gian chặn `loop()` mỗi lần cập nhật màn hình gi�
 
 `oledForceRedraw()` đặt `sPrevFrameValid = false` — dùng khi code khác vẽ trực tiếp lên màn hình (màn hình test của `debugOled()`) để bộ đệm so sánh delta không tưởng nhầm "không đổi" rồi bỏ qua.
 
+### 9.4. Khởi tạo và "chế độ suy giảm" — `oledInit()` / `oledNoteFailure()`
+
+Mỗi giao dịch I2C mà không có thiết bị phản hồi sẽ **chặn tới hết thời gian chờ**
+(mặc định của thư viện `Wire` là 50 ms!). Nếu màn hình không cắm, `display.begin()`
+gửi hàng chục lệnh khởi tạo → mỗi lệnh là một lần chờ 50 ms → **khởi động bị treo
+~500 ms**, và cứ mỗi 2 giây lặp lại khi vẽ. Đó là lý do firmware có "chế độ suy giảm":
+
+```cpp
+bool oledInit() {
+  Wire.begin(OLED_SDA, OLED_SCL, 400000);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  Wire.setTimeOut(OLED_I2C_TIMEOUT_MS);      // 50 ms -> 20 ms
+#endif
+  // Dò màn hình TRƯỚC display.begin(): chỉ tốn 1 lần chờ thay vì hàng chục lệnh
+  Wire.beginTransmission(OLED_I2C_ADDR);
+  if (Wire.endTransmission() != 0) { sOledOk = false; return false; }
+
+  sOledOk = display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR);
+  if (!sOledOk) return false;
+  ...
+  return true;
+}
+```
+
+- `oledInit()` trả `false` khi không thấy màn hình → `setup()` ghi mã lỗi **101** và firmware **không đụng I2C nữa** (`updateOLED()` thoát ngay, `debugOled()` bỏ qua). Như vậy thiết bị vẫn chạy mượt, chỉ mất màn hình.
+- `oledNoteFailure()` xử lý I2C **hỏng giữa chừng** (màn hình bị rút khi đang chạy): đánh dấu khung so sánh không còn đúng (để lần sau ghi lại toàn bộ thay vì chỉ phần đổi) và sau `OLED_FAIL_LIMIT = 3` lỗi liên tiếp thì **tự tắt màn hình** + ghi mã lỗi **103**.
+- `Wire.setTimeOut()` chỉ có từ core 3.x nên mới được bọc `#if`; core 2.x dùng mặc định 50 ms nhưng vẫn được lợi ích lớn nhất: **không đụng I2C nữa khi không có màn hình**.
+- Test `testOledAbsentOrBroken` (D20b) kiểm tra cả hai tình huống bằng bộ đếm giao dịch I2C của mock: khi không có màn hình thì **0 giao dịch I2C** được gửi đi.
+
 ---
 
 ## PHẦN 10 — src/settings.h và src/settings.cpp (lưu cài đặt)
@@ -2340,6 +2369,27 @@ void manageWiFi() {
 
 - Dòng 8: cờ "đã cảnh báo mất mạng cho đợt này chưa" — nay là biến static phạm vi file (khai báo ở đầu file thay vì bên trong `manageWiFi()`), nhờ vậy hook test ở cuối file mới reset được nó.
 - Dòng 13–19: nếu đang kết nối tốt: vừa nối lại thành công (cờ đang bật) thì ghi log "WiFi reconnected" **một lần** rồi hạ cờ; sau đó liên tục dời mốc `lastWifiCheck` về hiện tại để "đồng hồ thử lại" luôn được nạp đầy khi mạng ổn.
+
+### 11.3. Cache trạng thái kết nối — `wifiStatusCached()`
+
+```cpp
+static int sLastStatus = WL_DISCONNECTED;
+static unsigned long sStatusAt = 0;
+static bool sStatusValid = false;
+
+static int wifiStatusCached(unsigned long now) {
+  if (!sStatusValid || (now - sStatusAt >= WIFI_STATUS_POLL_MS)) {
+    sLastStatus = WiFi.status();
+    sStatusAt = now;
+    sStatusValid = true;
+  }
+  return sLastStatus;
+}
+```
+
+- `WiFi.status()` **không** chỉ đọc biến trong RAM của Arduino — nó gọi xuống driver WiFi (`esp_wifi_sta_get_ap_info`) qua một khóa toàn cục. Khóa đó cũng do chính stack WiFi dùng khi xử lý gói tin, nên hỏi ở tần số của `loop()` (~1 kHz) là tranh giành khóa với stack WiFi mà không tăng thêm giá trị gì: trạng thái kết nối thay đổi theo **giây**, không theo mili-giây.
+- `WIFI_STATUS_POLL_MS = 250`: hỏi lại tối đa 4 lần/giây thay vì ~1000 lần. Nhánh thử lại kết nối vẫn chạy mỗi 10 s (`WIFI_CHECK_INTERVAL`) nên độ trễ phát hiện mất mạng tối đa 250 ms là không đáng kể.
+- Test `testWifiStatusPoll` (D10b) đo trực tiếp số lần gọi `WiFi.status()` bằng bộ đếm trong mock, nên tối ưu này được **kiểm chứng bằng số đo** chứ không phải bằng lời.
 
 ```cpp
   if (now - lastWifiCheck < WIFI_CHECK_INTERVAL) return;
@@ -7461,6 +7511,7 @@ esac
 |---|---|---|
 | 101 | Không tìm thấy màn hình OLED | Vẫn chạy tiếp; kiểm tra dây I2C, địa chỉ 0x3C |
 | 102 | Hết 30 giây chưa kết nối WiFi | Tự thử lại mỗi 10 giây ở nền |
+| 103 | I2C OLED hỏng 3 lần liên tiếp | Màn hình đã bị tắt để loop không bị nghẽn; kiểm tra dây I2C rồi khởi động lại |
 | 201 | Nước thấp, buộc tắt bơm | Châm nước; bơm tự được phép chạy lại |
 | 202 | Đất khô, bật bơm (thông tin) | Bình thường |
 | 203 | Đất đủ ẩm, tắt bơm (thông tin) | Bình thường |

@@ -32,13 +32,29 @@
 // ── Thời gian (ms) ──
 extern const unsigned long WIFI_CONNECT_TIMEOUT;
 extern const unsigned long WIFI_CHECK_INTERVAL;
+extern const unsigned long WIFI_STATUS_POLL_MS;   // chu kỳ hỏi trạng thái WiFi
 extern const unsigned long SENSOR_INTERVAL;
 extern const unsigned long OLED_INTERVAL;
+extern const unsigned long OTA_HANDLE_INTERVAL;    // chu kỳ xử lý gói OTA
 extern const unsigned long TOUCH_DEBOUNCE;
 extern const unsigned long BREATHE_INTERVAL;
 extern const unsigned long WINDMILL_INTERVAL;
 extern const unsigned long FEED_DURATION;
 extern const unsigned long RESTART_DELAY_MS;   // trễ trước khi ESP.restart() sau khi lưu WiFi
+
+// ── I2C (OLED) ──
+// Thời gian chờ tối đa cho một giao dịch I2C. Mặc định của thư viện Wire là
+// 50 ms — quá dài: khi màn hình không cắm hoặc bus hỏng, MỖI giao dịch lỗi sẽ
+// chặn loop() tới 50 ms. Hạ xuống 20 ms để loop không bị nghẽn.
+constexpr uint16_t OLED_I2C_TIMEOUT_MS = 20;
+
+// ── Web ──
+// Kích thước buffer dựng JSON cho /api. JSON hiện khoảng 350 byte, để dư
+// trên 150 byte để thêm trường mới. Bản build thử nghiệm đặt nhỏ hơn để kiểm
+// tra nhánh "JSON bị cắt cụt" (firmware phải báo lỗi thay vì trả JSON hỏng).
+#ifndef API_JSON_BUF_SIZE
+#define API_JSON_BUF_SIZE 512
+#endif
 
 // ── Lọc cảm biến ──
 constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động

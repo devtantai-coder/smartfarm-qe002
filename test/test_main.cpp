@@ -36,6 +36,8 @@
 #include "settings.h"
 #include "oled.h"
 #include "config.h"
+#include "wifi.h"
+#include "logger.h"
 #include "ArduinoOTA.h"
 
 // Các entry point thật của firmware (SmartFarm.ino)
@@ -143,6 +145,9 @@ void testResetSettingsStatics();
 void testResetWifiStatics();
 void testResetLoggerStatics();
 void testResetOledStatics();
+// Hook từ src/webserver.cpp: dựng JSON /api vào buffer cho trước để kiểm
+// tra nhánh "JSON bị cắt cụt".
+int testBuildApiJson(char* buf, size_t cap);
 #endif
 
 static void resetState() {
@@ -203,6 +208,15 @@ static void primeSensors(int water) {
   for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
   sys.lastSensorRead = mockMillis();
 }
+
+// Bản build "tinyjson" dùng buffer dựng JSON /api cố ý nhỏ (64 byte) để kiểm
+// tra nhánh "JSON bị cắt cụt" — khi đó /api phải trả lỗi 500 thay vì JSON
+// hỏng, nên các kiểm tra nội dung JSON không áp dụng cho bản đó.
+#if API_JSON_BUF_SIZE < 512
+#define API_JSON_IS_TINY 1
+#else
+#define API_JSON_IS_TINY 0
+#endif
 
 // Danh sách route là NGUỒN DUY NHẤT: thêm route mới chỉ cần sửa một chỗ,
 // không còn con số 15 lặp lại rải rác trong các test.
@@ -927,6 +941,11 @@ static void testInoBoot() {
 // I2: JSON contract của /api
 static void testHttpApi() {
   printf("I2  http: /api JSON\n");
+#if API_JSON_IS_TINY
+  CHECK_EQ(invoke("/api"), 500);                 // JSON bị cắt -> báo lỗi
+  CHECK(has(mockServerLastBody(), "too large"));
+  return;
+#endif
   sys.gTemp = 26.5f; sys.gHum = 61.2f;
   sys.gLight = 800; sys.gSoil = 650; sys.gWater = 900;
   sys.gPir = true; sys.gTouch = false;
@@ -1280,6 +1299,9 @@ static void testWifiRecovery() {
   CHECK(has(mockSerialOutput(), "WiFi lost"));
   mockWifiStatus = WL_CONNECTED;
   mockSerialClear();
+  // Chờ hết cửa sổ poll trạng thái (WiFi.status() được cache) thì firmware
+  // mới nhận ra đã kết nối lại
+  mockAdvance(WIFI_STATUS_POLL_MS);
   loop();
   CHECK(has(mockSerialOutput(), "WiFi reconnected"));
 }
@@ -1434,6 +1456,11 @@ static bool validateApiResponse(std::string &err) {
 // D5: JSON contract nghiêm ngặt của /api
 static void testApiJsonContract() {
   printf("D5  api: strict JSON contract (21 keys)\n");
+#if API_JSON_IS_TINY
+  CHECK_EQ(invoke("/api"), 500);                 // buffer JSON nhỏ -> báo lỗi
+  CHECK(has(mockServerLastBody(), "too large"));
+  return;
+#endif
   std::string err;
 
   // Trạng thái đã biết
@@ -1665,6 +1692,69 @@ static void testOledDelta() {
   resetState();
 }
 
+// D20b: OLED vắng mặt / I2C hỏng — firmware phải ngừng đụng I2C
+// (mỗi giao dịch I2C lỗi chặn loop tới hết thời gian chờ).
+static void testOledAbsentOrBroken() {
+  printf("D20b oled: absent display + broken I2C self-disable\n");
+  resetState();
+  mockServerReset();
+  mockDisplayBeginOk = false;             // không có màn hình
+  mockSerialClear();
+  setup();
+
+  CHECK(!oledAvailable());                // oledInit() báo không có màn hình
+  CHECK(has(mockSerialOutput(), "MA LOI: 101"));
+  const int t0 = mockI2cTransactions;
+  updateOLED(25, 60, 500, 400, 800);      // vẽ -> không được đụng I2C
+  CHECK_EQ(mockI2cTransactions - t0, 0);
+
+  // Có màn hình nhưng bus I2C hỏng giữa chừng -> sau vài lần lỗi thì tự tắt
+  mockDisplayBeginOk = true;
+  resetState();
+  mockServerReset();
+  setup();
+  CHECK(oledAvailable());
+
+  updateOLED(25, 60, 500, 400, 800);      // vẽ thành công -> khung so sánh hợp lệ
+  CHECK(oledAvailable());
+
+  mockI2cFailCount = 1000;                // mọi giao dịch đều lỗi
+  for (int i = 0; i < 3; i++) {
+    sys.gTemp = 20.0f + i;                // ép vẽ lại để có dữ liệu mới
+    updateOLED(sys.gTemp, 60, 500, 400, 800);
+  }
+  CHECK(!oledAvailable());                // đã tự tắt màn hình
+  const int t1 = mockI2cTransactions;
+  updateOLED(30, 60, 500, 400, 800);      // đã tắt -> không đụng I2C nữa
+  CHECK_EQ(mockI2cTransactions - t1, 0);
+
+  // Lệnh debug cũng phải bỏ qua khi không có màn hình
+  mockSerialClear();
+  debugOled();
+  CHECK(has(mockSerialOutput(), "OLED not available"));
+
+  mockI2cFailCount = 0;
+  mockDisplayBeginOk = true;
+  resetState();
+  mockServerReset();
+  setup();
+}
+
+// D21: JSON /api bị cắt cụt khi buffer quá nhỏ -> phải báo lỗi, không trả JSON hỏng
+static void testApiJsonTruncation() {
+  printf("D21 api: truncated JSON is reported as error\n");
+  char tiny[16];
+  const int need = testBuildApiJson(tiny, sizeof(tiny));
+  CHECK(need > (int)sizeof(tiny));              // snprintf báo cần nhiều hơn buffer
+  CHECK(strlen(tiny) == sizeof(tiny) - 1);      // buffer đầy, không tràn
+#if API_JSON_IS_TINY
+  CHECK_EQ(invoke("/api"), 500);
+  CHECK(has(mockServerLastBody(), "too large"));
+#else
+  CHECK_EQ(invoke("/api"), 200);                 // buffer mặc định: JSON vừa khít
+#endif
+}
+
 // D8: các ca biên serial + hành vi debug-mode
 static void testSerialEdges() {
   printf("D8  serial: edge cases + debug mode\n");
@@ -1861,6 +1951,10 @@ static void testWifiThrottle() {
 
   mockWifiStatus = WL_CONNECTED;
   mockSerialClear();
+  // Trạng thái WiFi được cache WIFI_STATUS_POLL_MS (WiFi.status() gọi vào
+  // driver WiFi qua khóa dùng chung với stack WiFi) — phải chờ hết cửa sổ
+  // poll thì firmware mới hỏi lại driver.
+  mockAdvance(WIFI_STATUS_POLL_MS);
   loop();
   CHECK(has(mockSerialOutput(), "WiFi reconnected"));
   CHECK_EQ(mockWifiBeginCalls, b0 + 2);                // không thử thêm
@@ -1869,10 +1963,66 @@ static void testWifiThrottle() {
   mockWifiStatus = WL_DISCONNECTED;
   sys.lastWifiCheck = mockMillis() - WIFI_CHECK_INTERVAL - 1;
   mockSerialClear();
+  mockAdvance(WIFI_STATUS_POLL_MS);
   loop();
   CHECK_EQ(countOccurrences(mockSerialOutput(), "WiFi lost"), 1);
   mockWifiStatus = WL_CONNECTED;
+  mockAdvance(WIFI_STATUS_POLL_MS);
   loop();
+}
+
+// D10b: tần số hỏi trạng thái WiFi — không hỏi driver ở tần số của loop()
+static void testWifiStatusPoll() {
+  printf("D10b wifi: status poll is throttled\n");
+  resetState();
+  mockWifiStatus = WL_CONNECTED;
+
+  // Một lần hỏi để nạp cache ban đầu
+  manageWiFi();
+  const int s0 = mockWifiStatusCalls;
+  CHECK_EQ(s0, 1);
+
+  // 100 vòng loop liên tiếp (100 ms) — vẫn nằm trong cửa sổ poll
+  // -> KHÔNG hỏi driver thêm (trước đây mỗi vòng loop hỏi 1 lần)
+  for (int i = 0; i < 100; i++) {
+    mockAdvance(1);
+    loop();
+  }
+  CHECK_EQ(mockWifiStatusCalls, s0);
+
+  // Sau khi hết cửa sổ poll thì hỏi lại
+  mockAdvance(WIFI_STATUS_POLL_MS);
+  manageWiFi();
+  CHECK_EQ(mockWifiStatusCalls, s0 + 1);
+
+  resetState();
+}
+
+// D10c: tần số xử lý gói OTA — không đọc UDP ở tần số của loop()
+static void testOtaHandleThrottle() {
+  printf("D10c ota: handle() is throttled\n");
+  resetState();
+  mockServerReset();
+  setup();
+
+  const int h0 = mockOtaHandleCalls;
+  // 100 vòng loop trong 100 ms -> OTA chỉ được xử lý ở mốc OTA_HANDLE_INTERVAL
+  for (int i = 0; i < 100; i++) {
+    mockAdvance(1);
+    loop();
+  }
+  const int calls = mockOtaHandleCalls - h0;
+  CHECK(calls >= 1);
+  CHECK(calls <= 100 / (int)OTA_HANDLE_INTERVAL + 2);   // không quá ~5 lần/100 ms
+
+  // Sau khi hết cửa sổ thì lại xử lý
+  mockAdvance(OTA_HANDLE_INTERVAL);
+  loop();
+  CHECK(mockOtaHandleCalls > h0 + calls);
+
+  resetState();
+  mockServerReset();
+  setup();
 }
 
 // D11: thứ tự chống glitch khi boot + khởi tạo watchdog
@@ -2005,7 +2155,12 @@ static void fuzzRun(unsigned seed, int iters) {
         bool found = mockServerInvoke(routes[rng() % nRoutes]);
         CHECK(found);
         int code = mockServerLastCode();
+#if API_JSON_IS_TINY
+        // Buffer JSON cố ý nhỏ -> /api trả 500 thay vì JSON hỏng (vẫn hợp lệ)
+        CHECK(code == 200 || code == 204 || code == 400 || code == 500);
+#else
         CHECK(code == 200 || code == 204 || code == 400);
+#endif
         break;
       }
       case 2:  // input serial ngẫu nhiên
@@ -2339,7 +2494,11 @@ static void testWebToken() {
   CHECK_EQ(mockServerLastCode(), 401);
   mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
   CHECK(mockServerInvoke("/api"));            // kèm token → 200
+#if API_JSON_IS_TINY
+  CHECK_EQ(mockServerLastCode(), 500);        // buffer JSON nhỏ -> báo lỗi
+#else
   CHECK_EQ(mockServerLastCode(), 200);
+#endif
 
   resetState();
 }
@@ -2500,12 +2659,16 @@ int main() {
 
   printf("--- deep ---\n");
   RUN_TEST(testApiJsonContract);
+  RUN_TEST(testApiJsonTruncation);
   RUN_TEST(testResponseExactness);
   RUN_TEST(testOledLines);
   RUN_TEST(testOledDelta);
+  RUN_TEST(testOledAbsentOrBroken);
   RUN_TEST(testSerialEdges);
   RUN_TEST(testDemoDiagnostics);
   RUN_TEST(testWifiThrottle);
+  RUN_TEST(testWifiStatusPoll);
+  RUN_TEST(testOtaHandleThrottle);
   RUN_TEST(testBootOrder);
   RUN_TEST(testRebootPersistence);
   RUN_TEST(testFuzzSoak);

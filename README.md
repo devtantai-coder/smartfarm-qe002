@@ -294,6 +294,12 @@ Màn hình OLED hiển thị 8 dòng: tên hệ thống, trạng thái thời ti
 | Trang web không chờ CDN | Font Awesome tải không chặn hiển thị → mở trang trên thiết bị chỉ có mạng nội bộ vẫn hiện ngay, không chờ hết thời gian chờ DNS | `webserver.cpp: handleRoot()` |
 | Cửa máng ăn đóng đúng | `stopFeed()` đóng cửa thật (servo dùng chung với cối xay gió) nên cửa không bị kẹt mở | `control.cpp: stopFeed()` |
 | Đèn tăng trưởng bật đúng | Chế độ tự động bật hoa văn đèn cây dựa trên trạng thái thật của dải LED, không suy đoán từ màu RGB (màu đơn `(255,0,255)` trùng giá trị RGB của hoa văn) | `control.cpp: controlRgb()`, `actuators.cpp: rgbPlantPatternActive()` |
+| Thiếu OLED không nghẽn máy | Dò màn hình trước khi vẽ; không có màn hình (hoặc I2C hỏng) thì **không đụng I2C nữa** — mỗi giao dịch lỗi vốn chặn `loop()` tới 50 ms | `oled.cpp: oledInit(), updateOLED()` |
+| I2C tự tắt khi hỏng | Sau 3 lần lỗi liên tiếp, firmware tự tắt màn hình và ghi mã lỗi 103 thay vì cứ thử mãi | `oled.cpp: oledNoteFailure()` |
+| Hỏi trạng thái WiFi thưa thớt | `WiFi.status()` (khóa driver dùng chung với stack WiFi) chỉ hỏi mỗi 250 ms thay vì mỗi vòng `loop()` | `wifi.cpp: wifiStatusCached()` |
+| OTA không vồ đập CPU | `ArduinoOTA.handle()` chỉ chạy mỗi 20 ms (OTA không nhạy cảm độ trễ) thay vì mỗi vòng `loop()` | `SmartFarm.ino: loop()` |
+| Giao diện không treo | Mọi `fetch` có thời gian chờ 5 s; poll chồng nhau bị bỏ qua; nonce cũ tự lấy lại và thử lại | `webserver.cpp: handleRoot()` (JavaScript) |
+| JSON không bị cắt cụt | `/api` kiểm tra độ dài thực tế của JSON và trả lỗi 500 thay vì trả JSON hỏng cho trình duyệt | `webserver.cpp: buildApiJson(), handleApi()` |
 
 ---
 
@@ -391,13 +397,14 @@ LOG_DEBUG("Extra detail only at DEBUG level");    // Chỉ hiển thị nếu c�
 
 ## 15. Kiểm thử tự động trên máy tính (không cần phần cứng)
 
-Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy **772.507 lượt kiểm tra** trên mỗi bản build thường (bản `webtoken` kiểm tra thêm bảo vệ token: 772.524 lượt). Các test gọi thẳng `runAutomation()` — hàm mà `loop()` dùng — nên không có logic nào bị sao chép khỏi firmware.
+Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy **772.525 lượt kiểm tra** trên mỗi bản build thường (bản `webtoken` kiểm tra thêm bảo vệ token: 772.542 lượt). Các test gọi thẳng `runAutomation()` — hàm mà `loop()` dùng — nên không có logic nào bị sao chép khỏi firmware.
 
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh (core 3.x, cấu hình kit)
-./test/run_tests.sh --full       # 5 bản build: core 3.x, core 2.x + cảm biến đảo,
-                                 # còi passive + relay active-LOW, ASan + UBSan, token web
-./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh + nhánh bằng gcov (hiện 99,9% dòng, ~79,7% nhánh)
+./test/run_tests.sh --full       # 6 bản build: core 3.x, core 2.x + cảm biến đảo,
+                                 # còi passive + relay active-LOW, ASan + UBSan, token web,
+                                 # buffer JSON nhỏ (nhánh JSON bị cắt)
+./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh + nhánh bằng gcov (hiện 99,8% dòng, ~81% nhánh)
 ```
 
 Bộ test bao phủ: logic bơm/quạt/đèn/chạm/còi, so sánh ngưỡng đúng biên, thời gian chính xác từng ms, 15 route HTTP (kèm `/wifi` cấu hình động và callback OTA), hợp đồng JSON 21 khóa, menu serial, trình diễn 15 bước, bền vững sau khi mất điện, reset về mặc định, bỏ qua ghi flash khi giá trị không đổi, fuzz 90.000 bước với các bất biến an toàn, trường hợp `millis()` tràn số, chặn CSRF và bảo vệ token web tùy chọn (gồm cả `/api`). Chi tiết xem `test/README.md`.

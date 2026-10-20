@@ -225,6 +225,10 @@ void debugWifi() {
 // ── Debug: OLED ──
 void debugOled() {
   Serial.println(F("\n--- OLED ---"));
+  if (!oledAvailable()) {
+    Serial.println(F("OLED not available (skipped)."));
+    return;
+  }
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0,0);

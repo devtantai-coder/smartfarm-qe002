@@ -121,12 +121,11 @@ void setup() {
 
   // OLED: I2C 400 kHz (SSD1306 hỗ trợ tối đa 400 kHz) — display() đẩy cả
   // framebuffer 1024 byte nên tăng tốc I2C giúp giảm mạnh thời gian chặn loop.
-  Wire.begin(OLED_SDA, OLED_SCL, 400000);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
+  // oledInit() tự dò màn hình và trả false nếu không có: khi đó firmware
+  // không đụng I2C nữa, tránh mỗi lần vẽ phải chờ hết thời gian chờ I2C.
+  if (!oledInit()) {
     LOG_ERROR_CODE(101, "OLED not found");
   }
-  display.clearDisplay();
-  display.display();
 
   // Nạp cài đặt từ flash
   loadSettings();
@@ -240,7 +239,17 @@ void runAutomation() {
 void loop() {
   esp_task_wdt_reset();
   server.handleClient();
-  ArduinoOTA.handle();
+
+  // ArduinoOTA.handle() đọc một gói UDP mỗi lần gọi. OTA không nhạy cảm với
+  // độ trễ (bắt tay OTA mất hàng trăm ms) nên gọi mỗi OTA_HANDLE_INTERVAL là
+  // quá đủ — tiết kiệm ~50 lần recvfrom mỗi giây, không ảnh hưởng gì.
+  static unsigned long sLastOtaHandle = 0;
+  unsigned long nowMs = millis();
+  if (nowMs - sLastOtaHandle >= OTA_HANDLE_INTERVAL) {
+    sLastOtaHandle = nowMs;
+    ArduinoOTA.handle();
+  }
+
   manageWiFi();
 
   // Khởi động lại sau khi lưu cài đặt WiFi/mật khẩu (chờ phản hồi HTTP xong).

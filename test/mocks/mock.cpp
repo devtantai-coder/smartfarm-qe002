@@ -25,6 +25,7 @@ uint32_t mockPwm[40] = {0};
 int mockBuzzerToneHz = 0;
 uint32_t mockPixel[8] = {0};
 int mockWifiStatus = WL_CONNECTED;
+int mockWifiStatusCalls = 0;
 const char *mockWifiIp = "192.168.1.50";
 bool mockDisplayBeginOk = true;
 
@@ -39,6 +40,9 @@ int mockToneCalls = 0, mockNoToneCalls = 0;
 int mockWifiBeginCalls = 0, mockWifiDisconnectCalls = 0, mockWifiReconnectCalls = 0;
 int mockWifiPersistentCalls = 0, mockWifiSleepDisableCalls = 0;
 int mockI2cCmdBytes = 0, mockI2cDataBytes = 0, mockI2cTransactions = 0;
+int mockI2cFailCount = 0;
+int mockI2cTxBytes = 0;
+int mockOtaHandleCalls = 0;
 int mockStripShowCount = 0;
 int mockWdtInitCalls = 0, mockWdtAddCalls = 0, mockWdtResetCalls = 0;
 
@@ -430,6 +434,7 @@ void mockReset() {
   mockServoAngle = 0;
   mockBuzzerToneHz = 0;
   mockWifiStatus = WL_CONNECTED;
+  mockWifiStatusCalls = 0;
   mockWifiIp = "192.168.1.50";
   mockDisplayBeginOk = true;
 
@@ -444,6 +449,9 @@ void mockReset() {
   mockWifiBeginCalls = mockWifiDisconnectCalls = mockWifiReconnectCalls = 0;
   mockWifiPersistentCalls = mockWifiSleepDisableCalls = 0;
   mockI2cCmdBytes = mockI2cDataBytes = mockI2cTransactions = 0;
+  mockI2cFailCount = 0;
+  mockI2cTxBytes = 0;
+  mockOtaHandleCalls = 0;
   mockStripShowCount = 0;
   mockWdtInitCalls = mockWdtAddCalls = mockWdtResetCalls = 0;
 

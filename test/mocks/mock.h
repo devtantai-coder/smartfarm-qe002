@@ -29,6 +29,7 @@ extern int mockToneCalls, mockNoToneCalls;
 extern int mockWifiBeginCalls, mockWifiDisconnectCalls, mockWifiReconnectCalls;
 extern int mockWdtInitCalls, mockWdtAddCalls, mockWdtResetCalls;
 extern int mockI2cCmdBytes, mockI2cDataBytes, mockI2cTransactions;
+extern int mockI2cFailCount;        // số lần endTransmission() trả lỗi (bus I2C hỏng)
 extern int mockStripShowCount;          // số lần strip.show() (giao dịch RMT)
 
 unsigned long mockMillis();

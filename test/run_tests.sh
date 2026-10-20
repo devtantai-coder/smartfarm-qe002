@@ -6,8 +6,9 @@
 #
 # Cách dùng:
 #   ./test/run_tests.sh --quick      một bản build (mặc định core 3.x, cấu hình kit mặc định)
-#   ./test/run_tests.sh --full       năm bản build: core3, core2+inverts,
-#                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan, web token
+#   ./test/run_tests.sh --full       sáu bản build: core3, core2+inverts,
+#                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan, web token,
+#                                    buffer JSON nhỏ (nhánh JSON bị cắt)
 #   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng + nhánh
 #
 # Biến môi trường:
@@ -59,7 +60,11 @@ run_core2()    { build_and_run core2-invert -DESP_ARDUINO_VERSION_MAJOR=2 \
 run_buzzer()   { build_and_run passive-lowrelay -DESP_ARDUINO_VERSION_MAJOR=3 \
                    -DBUZZER_PASSIVE=1 -DRELAY_ACTIVE_LOW=1; }
 run_token()    { build_and_run webtoken -DESP_ARDUINO_VERSION_MAJOR=3 \
-                   -DWEB_TOKEN='"token-bao-mat-test"'; }
+                    -DWEB_TOKEN='"token-bao-mat-test"'; }
+# Buffer JSON /api cố ý nhỏ để kiểm tra nhánh "JSON bị cắt cụt": firmware
+# phải trả lỗi 500 thay vì trả JSON hỏng cho trình duyệt.
+run_tinyjson() { build_and_run tinyjson -DESP_ARDUINO_VERSION_MAJOR=3 \
+                    -DAPI_JSON_BUF_SIZE=64; }
 run_asan() {
   local bin="$BUILD/asan.bin"
   echo "=== Build: asan+ubsan ==="
@@ -204,13 +209,14 @@ case "$MODE" in
     run_default
     echo "QUICK: PASSED"
     ;;
-  --full)
+    --full)
     run_default
     run_core2
     run_buzzer
     run_asan
     run_token
-    echo "FULL: ALL 5 BUILDS PASSED"
+    run_tinyjson
+    echo "FULL: ALL 6 BUILDS PASSED"
     ;;
   --coverage)
     run_coverage

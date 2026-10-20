@@ -13,6 +13,7 @@ extern int mockWifiStatus;
 extern const char *mockWifiIp;
 extern int mockWifiBeginCalls, mockWifiDisconnectCalls, mockWifiReconnectCalls;
 extern int mockWifiPersistentCalls, mockWifiSleepDisableCalls;
+extern int mockWifiStatusCalls;      // số lần gọi WiFi.status() (đo tần số hỏi driver)
 
 class IPAddress {
 public:
@@ -27,7 +28,7 @@ private:
 };
 
 struct WiFiStub {
-  int status() { return mockWifiStatus; }
+  int status() { mockWifiStatusCalls++; return mockWifiStatus; }
   IPAddress localIP() { return IPAddress(); }
   String macAddress() { return String("AA:BB:CC:DD:EE:FF"); }
   int RSSI() { return -55; }

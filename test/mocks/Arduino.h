@@ -108,13 +108,27 @@ extern SerialStub Serial;
 // Hook đếm giao dịch I2C (mock.cpp): tách byte lệnh (write(uint8_t)) và
 // byte dữ liệu (write(buffer)) để test kiểm tra cơ chế cập nhật delta của OLED.
 extern int mockI2cCmdBytes, mockI2cDataBytes, mockI2cTransactions;
+// Số lần gọi endTransmission() trả về lỗi (mô phỏng màn hình/bus hỏng).
+extern int mockI2cFailCount;
+// Số byte đã ghi trong giao dịch I2C đang mở (0 = giao dịch dò thiết bị).
+extern int mockI2cTxBytes;
+// Mô phỏng "không có màn hình": giao dịch dò (không gửi byte nào) sẽ lỗi.
+extern bool mockDisplayBeginOk;
 
 struct TwoWire {
   void begin(int, int, unsigned long = 0) {}
-  void beginTransmission(uint8_t) {}
-  void write(uint8_t) { mockI2cCmdBytes++; }
-  void write(const uint8_t *, size_t n) { mockI2cDataBytes += (int)n; }
-  uint8_t endTransmission() { mockI2cTransactions++; return 0; }
+  void setTimeOut(unsigned short) {}
+  void beginTransmission(uint8_t) { mockI2cTxBytes = 0; }
+  void write(uint8_t) { mockI2cCmdBytes++; mockI2cTxBytes++; }
+  void write(const uint8_t *, size_t n) { mockI2cDataBytes += (int)n; mockI2cTxBytes += (int)n; }
+  uint8_t endTransmission() {
+    mockI2cTransactions++;
+    if (mockI2cFailCount > 0) { mockI2cFailCount--; return 2; }
+    // Giao dịch dò thiết bị (không gửi byte lệnh nào) chỉ thành công khi
+    // màn hình thật sự có mặt — không có thì trả lỗi NACK địa chỉ.
+    if (mockI2cTxBytes == 0 && !mockDisplayBeginOk) return 2;
+    return 0;
+  }
 };
 extern TwoWire Wire;
 

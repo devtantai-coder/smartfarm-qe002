@@ -3,6 +3,9 @@
 
 // Mock OTA: ghi nhớ callback do setup() đăng ký để test gọi lại
 // qua mockOta*() và kiểm tra đúng nội dung in ra serial.
+// Số lần ArduinoOTA.handle() được gọi (đo tần số xử lý gói OTA).
+extern int mockOtaHandleCalls;
+
 class ArduinoOTAClass {
 public:
   void (*startFn)() = nullptr;
@@ -16,7 +19,7 @@ public:
   void onProgress(void (*fn)(unsigned int, unsigned int)) { progressFn = fn; }
   void onError(void (*fn)(int)) { errorFn = fn; }
   void begin() {}
-  void handle() {}
+  void handle() { mockOtaHandleCalls++; }
 };
 
 inline ArduinoOTAClass ArduinoOTA;

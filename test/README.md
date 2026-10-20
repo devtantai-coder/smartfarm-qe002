@@ -8,7 +8,7 @@ rồi chạy toàn bộ logic như trên kit — không cần phần cứng, kh�
 
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh (core 3.x, cấu hình kit)
-./test/run_tests.sh --full       # 5 bản build (mặc định khi không truyền tham số)
+./test/run_tests.sh --full       # 6 bản build (mặc định khi không truyền tham số)
 ./test/run_tests.sh --coverage   # đo độ phủ dòng + nhánh bằng gcov (cũng đặt WEB_TOKEN)
 ```
 
@@ -19,7 +19,7 @@ Tùy biến bằng biến môi trường:
 - `FUZZ_ITERS` — số vòng fuzz mỗi seed (mặc định 30000; rút ngắn khi phát triển,
   ví dụ `FUZZ_ITERS=2000 ./test/run_tests.sh --quick`).
 
-5 bản build trong chế độ `--full`:
+6 bản build trong chế độ `--full`:
 
 | Tên | Cờ biên dịch | Mục đích |
 |---|---|---|
@@ -28,13 +28,14 @@ Tùy biến bằng biến môi trường:
 | `passive-lowrelay` | `-DBUZZER_PASSIVE=1 -DBUZZER_TONE_HZ=2000 -DRELAY_ACTIVE_LOW=1` | Còi passive (tone) + relay kích mức thấp |
 | `asan+ubsan` | `-fsanitize=address,undefined -fno-omit-frame-pointer` | Phát hiện tràn bộ nhớ/UB; script tự bỏ `LD_PRELOAD` khi chạy |
 | `webtoken` | `-DWEB_TOKEN='"token-bao-mat-test"'` | Bật `WEB_TOKEN` để chạy D16 (bảo vệ token web) |
+| `tinyjson` | `-DAPI_JSON_BUF_SIZE=64` | Buffer JSON `/api` cố ý nhỏ để chạy D21 (nhánh "JSON bị cắt" → phải trả lỗi 500) |
 
-Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.507 lượt kiểm tra,
+Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.525 lượt kiểm tra,
 0 lỗi** trên 4 bản build thường; bản `webtoken` và bản `--coverage` (cũng đặt
-`WEB_TOKEN`) chạy **772.524 lượt**. Độ phủ dòng lệnh: **100%**
-(đã kiểm bằng `--coverage`; nhánh `default` phòng vệ của `handleDebugCmd()` là
-nhánh compile-time không thể chạm tới nên không tính vào dòng lệnh). Độ phủ
-nhánh (taken at least once): **~80,3%** cho toàn bộ code production — phần
+`WEB_TOKEN`) chạy **772.542 lượt**; bản `tinyjson` chạy 772.302 lượt (bỏ các
+kiểm tra nội dung JSON vì buffer cố ý nhỏ). Độ phủ dòng lệnh: **99,8%**
+(2 dòng chưa phủ là nhánh "JSON bị cắt" — chỉ chạy ở bản build `tinyjson`),
+độ phủ nhánh (taken at least once): **~81%** cho toàn bộ code production — phần
 thiếu chủ yếu là các nhánh phòng vệ một chiều (`errno` của thư viện, `else`
 bất khả thi, nhánh compile-time của ternary). Mỗi test in một dòng
 `[PASS]/[FAIL]` kèm tên và số check của riêng nó để khoanh vùng lỗi nhanh.

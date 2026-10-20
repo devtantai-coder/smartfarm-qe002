@@ -195,15 +195,35 @@ else TOKEN=sessionStorage.getItem('sfToken')||'';
 if(params.get('token'))history.replaceState(null,'',location.pathname);
 let NONCE=0;
 function authHeaders(){return TOKEN?{'X-Auth-Token':TOKEN}:{}}
+// Mọi request có thời gian chờ: nếu thiết bị treo, fetch sẽ treo vô hạn và
+// giao diện đứng hình (mất cả vòng poll). Abort sau 5 s thì giao diện tự
+// phục hồi ở vòng poll kế tiếp.
+async function apiGet(u,ms){
+const c=new AbortController();
+const t=setTimeout(()=>c.abort(),ms||5000);
+try{return await fetch(u,{headers:authHeaders(),signal:c.signal})}
+finally{clearTimeout(t)}
+}
 function api(u){
   let sep=u.indexOf('?')>=0?'&':'?';
   if(NONCE>0)u=u+sep+'nonce='+NONCE;
   return u
 }
-async function call(u){const r=await fetch(api(u),{headers:authHeaders()});if(NONCE>0&&(r.ok||r.status===400))NONCE++;return r}
+async function call(u){
+let r=await apiGet(api(u));
+// 403 = nonce đã cũ (lệnh trước bị mất phản hồi, hoặc thiết bị vừa khởi
+// động lại). Lấy nonce mới rồi thử lại một lần thay vì kẹt 403 mãi mãi.
+if(NONCE>0&&r.status===403){
+  try{const rr=await apiGet('/api');const dd=await rr.json();NONCE=dd.nonce??0}catch(e){}
+  r=await apiGet(api(u));
+}
+if(NONCE>0&&(r.ok||r.status===400))NONCE++;
+return r}
+let polling=false;
 async function fetchData(){
+if(polling)return;polling=true;
 try{
-const r=await fetch('/api',{headers:authHeaders()});
+const r=await apiGet('/api');
 if(r.status===401){document.getElementById('ipBadge').textContent='Can token';return}
 const d=await r.json();
 window.__sf=d;
@@ -230,7 +250,7 @@ document.getElementById('statusBreatheAuto').textContent=d.breatheAuto?'Bật':'
 document.getElementById('statusDemo').textContent=d.demo?('Đang chạy: '+d.demoStep):'Tắt';
 document.getElementById('badgeRgbAuto').textContent=d.rgbAuto?'Tự động: Bật':'Tự động: Tắt';
 document.getElementById('badgeRgbAuto').className='badge '+(d.rgbAuto?'on':'off');
-}catch(e){console.error(e)}
+}catch(e){console.error(e)}finally{polling=false}
 }
 async function toggleDevice(id){await call('/toggle?id='+id);fetchData()}
 async function ledSet(on){await call(on?'/on':'/off');fetchData()}
@@ -365,20 +385,12 @@ void handleRoot() {
 }
 
 // ── API: dữ liệu cảm biến JSON (dùng biến global đã lọc, không đọc cảm biến thô) ──
-void handleApi() {
-  MOD_DEBUG(Webserver, "GET /api");
-
-  // Khi WEB_TOKEN được đặt, dữ liệu cảm biến + nonce chỉ trả cho client đã xác thực.
-  // Ở đây chỉ kiểm tra token (không kèm chống replay) vì client cần /api để LẤY nonce.
-  if (!checkToken()) return;
-
-  // Dùng giá trị global đã lọc — không đọc cảm biến thô ở đây
-  // (DHT11 cần 1 giây giữa hai lần đọc; đọc thêm sẽ trả dữ liệu cũ)
-  // Dựng JSON bằng snprintf vào buffer cố định — không tự nối String trong handler
-  // và không cấp phát heap thêm (send() của thư viện vẫn tạo String nội bộ một lần).
+// Dựng JSON của /api vào buffer cho trước.
+// Trả về số byte CẦN (không tính byte NUL) — giống snprintf. Nếu kết quả >=
+// kích thước buffer thì JSON bị cắt cụt.
+static int buildApiJson(char* buf, size_t cap) {
   const bool demoOn = demoRunning();   // đọc một lần, tránh gọi lặp 2 chỗ trong snprintf
-  char buf[512];
-  snprintf(buf, sizeof(buf),
+  return snprintf(buf, cap,
            "{\"temp\":%.1f,\"hum\":%.1f,\"light\":%d,\"soil\":%d,\"water\":%d,"
            "\"weather\":%d,\"pir\":%s,\"touch\":%s,\"relay\":%s,\"fan\":%s,"
            "\"led\":%s,\"breathe\":%s,\"windmill\":%s,\"feed\":%s,\"demo\":%s,"
@@ -396,6 +408,34 @@ void handleApi() {
            sys.rgbAuto ? "true" : "false", sys.fanAuto ? "true" : "false",
            sys.breatheAuto ? "true" : "false",
            (unsigned)(sys.gLastNonce == 0xFFFFFFFFul ? 1ul : sys.gLastNonce + 1));  // tránh trả nonce 0 (luôn bị từ chối)
+}
+
+#ifdef SMARTFARM_TEST_HOOKS
+// Hook cho bộ test: dựng JSON vào buffer bất kỳ để kiểm tra nhánh "bị cắt".
+int testBuildApiJson(char* buf, size_t cap) { return buildApiJson(buf, cap); }
+#endif
+
+void handleApi() {
+  MOD_DEBUG(Webserver, "GET /api");
+
+  // Khi WEB_TOKEN được đặt, dữ liệu cảm biến + nonce chỉ trả cho client đã xác thực.
+  // Ở đây chỉ kiểm tra token (không kèm chống replay) vì client cần /api để LẤY nonce.
+  if (!checkToken()) return;
+
+  // Dùng giá trị global đã lọc — không đọc cảm biến thô ở đây
+  // (DHT11 cần 1 giây giữa hai lần đọc; đọc thêm sẽ trả dữ liệu cũ)
+  // Dựng JSON bằng snprintf vào buffer cố định — không tự nối String trong handler
+  // và không cấp phát heap thêm (send() của thư viện vẫn tạo String nội bộ một lần).
+  char buf[API_JSON_BUF_SIZE];
+  int n = buildApiJson(buf, sizeof(buf));
+
+  // snprintf trả về số byte SẼ cần (không tính byte NUL). Nếu >= sizeof(buf)
+  // thì JSON bị cắt cụt -> trình duyệt không parse được. Báo lỗi tường minh
+  // thay vì trả về JSON hỏng.
+  if (n < 0 || (size_t)n >= sizeof(buf)) {
+    server.send(500, "application/json", "{\"error\":\"response too large\"}");
+    return;
+  }
 
   // Ghi thẳng buffer qua sendContent: send(code, type, content) của WebServer
   // nhận String nên sẽ copy ~400 byte sang heap mỗi lần /api được gọi (2 giây
