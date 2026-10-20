@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build + run all 5 configurations
+      - name: Build + run all 6 configurations + JS page tests
         run: ./test/run_tests.sh --full
       - name: Coverage (gcov, ngưỡng 80%)
         run: ./test/run_tests.sh --coverage

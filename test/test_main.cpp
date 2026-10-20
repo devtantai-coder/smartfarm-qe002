@@ -1755,6 +1755,62 @@ static void testApiJsonTruncation() {
 #endif
 }
 
+// D22: OLED cập nhật NGAY khi trạng thái hiển thị đổi, không phải chờ 2 giây
+static void testOledDirtyRefresh() {
+  printf("D22 oled: refresh ngay khi trạng thái đổi\n");
+  resetState();
+  mockServerReset();
+  setup();
+
+  updateOLED(25, 60, 500, 400, 800);      // vẽ nền
+  sys.lastOledUpdate = mockMillis();
+  const int t0 = mockI2cTransactions;
+
+  // Không có gì đổi -> không vẽ lại, không tốn byte I2C nào
+  mockAdvance(100);
+  loop();
+  CHECK_EQ(mockI2cTransactions - t0, 0);
+  CHECK(!sys.oledDirty);
+
+  // Bật cối xay -> dòng trạng thái trên màn hình đổi -> vẽ lại ngay
+  setWindmill(true);
+  CHECK(sys.oledDirty);
+  mockAdvance(1);
+  loop();
+  CHECK(mockI2cTransactions - t0 > 0);      // đã vẽ lại
+  CHECK(!sys.oledDirty);                   // cờ đã được xoá sau khi vẽ
+  CHECK(has(mockOledText(), "Coi xay: ON"));
+
+  resetState();
+  mockServerReset();
+  setup();
+}
+
+// D23: ngưỡng đọc từ flash ngoài khoảng hợp lệ phải được chặn lại
+static void testSettingsRangeClamp() {
+  printf("D23 settings: clamp nguong doc tu flash\n");
+  resetState();
+  mockPrefClear();
+  mockPrefPut("soilLow", 99999.0f);        // flash hỏng / ghi tay sai
+  mockPrefPut("soilHigh", -5.0f);
+  mockPrefPut("waterLow", 1e9f);
+  mockPrefPut("lightThr", 88888.0f);
+  mockPrefPut("tempHigh", 500.0f);
+  mockPrefPut("tempLow", -100.0f);
+
+  loadSettings();
+  CHECK_NEAR(sys.soilThresholdLow, 4095.0f, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 0.0f, 0.01);
+  CHECK_NEAR(sys.waterThresholdLow, 4095.0f, 0.01);
+  CHECK_EQ(sys.lightThreshold, 4095);
+  CHECK_NEAR(sys.tempThresholdHigh, 60.0f, 0.01);
+  CHECK_NEAR(sys.tempThresholdLow, 0.0f, 0.01);
+
+  resetState();
+  mockServerReset();
+  setup();
+}
+
 // D8: các ca biên serial + hành vi debug-mode
 static void testSerialEdges() {
   printf("D8  serial: edge cases + debug mode\n");
@@ -2664,6 +2720,8 @@ int main() {
   RUN_TEST(testOledLines);
   RUN_TEST(testOledDelta);
   RUN_TEST(testOledAbsentOrBroken);
+  RUN_TEST(testOledDirtyRefresh);
+  RUN_TEST(testSettingsRangeClamp);
   RUN_TEST(testSerialEdges);
   RUN_TEST(testDemoDiagnostics);
   RUN_TEST(testWifiThrottle);

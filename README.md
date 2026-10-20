@@ -300,6 +300,10 @@ Màn hình OLED hiển thị 8 dòng: tên hệ thống, trạng thái thời ti
 | OTA không vồ đập CPU | `ArduinoOTA.handle()` chỉ chạy mỗi 20 ms (OTA không nhạy cảm độ trễ) thay vì mỗi vòng `loop()` | `SmartFarm.ino: loop()` |
 | Giao diện không treo | Mọi `fetch` có thời gian chờ 5 s; poll chồng nhau bị bỏ qua; nonce cũ tự lấy lại và thử lại | `webserver.cpp: handleRoot()` (JavaScript) |
 | JSON không bị cắt cụt | `/api` kiểm tra độ dài thực tế của JSON và trả lỗi 500 thay vì trả JSON hỏng cho trình duyệt | `webserver.cpp: buildApiJson(), handleApi()` |
+| Poll thích ứng | Trang web hỏi dữ liệu mỗi 2 s khi có thay đổi, giãn ra 5 s khi bảng điều khiển đứng yên → thiết bị nhận ít request hơn mà vẫn cập nhật ngay khi cần | `webserver.cpp: handleRoot()` (JavaScript) |
+| Mở trang nhanh hơn | Trang chủ gửi `Cache-Control: private, max-age=60` → trình duyệt cache lại, không tải lại 16 KB mỗi lần mở | `webserver.cpp: handleRoot()` |
+| Màn hình cập nhật tức thì | Cờ `oledDirty`: khi trạng thái hiển thị đổi (cối xay, cho ăn, bước demo) màn hình vẽ lại ngay ở vòng `loop()` kế tiếp thay vì chờ tới 2 giây | `globals.h`, `SmartFarm.ino: loop()`, `control.cpp`, `demo.cpp` |
+| Ngưỡng đọc từ flash luôn hợp lệ | Giá trị đọc lên từ NVS được ép về khoảng hợp lệ — flash hỏng không thể làm logic so ngưỡng chạy sai | `settings.cpp: loadSettings()` |
 
 ---
 
@@ -397,13 +401,13 @@ LOG_DEBUG("Extra detail only at DEBUG level");    // Chỉ hiển thị nếu c�
 
 ## 15. Kiểm thử tự động trên máy tính (không cần phần cứng)
 
-Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy **772.525 lượt kiểm tra** trên mỗi bản build thường (bản `webtoken` kiểm tra thêm bảo vệ token: 772.542 lượt). Các test gọi thẳng `runAutomation()` — hàm mà `loop()` dùng — nên không có logic nào bị sao chép khỏi firmware.
+Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy **772.537 lượt kiểm tra** trên mỗi bản build thường (bản `webtoken` kiểm tra thêm bảo vệ token: 772.554 lượt). Các test gọi thẳng `runAutomation()` — hàm mà `loop()` dùng — nên không có logic nào bị sao chép khỏi firmware.
 
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh (core 3.x, cấu hình kit)
 ./test/run_tests.sh --full       # 6 bản build: core 3.x, core 2.x + cảm biến đảo,
                                  # còi passive + relay active-LOW, ASan + UBSan, token web,
-                                 # buffer JSON nhỏ (nhánh JSON bị cắt)
+                                 # buffer JSON nhỏ (nhánh JSON bị cắt) + test JS trang web
 ./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh + nhánh bằng gcov (hiện 99,8% dòng, ~81% nhánh)
 ```
 

@@ -8,7 +8,7 @@
 #   ./test/run_tests.sh --quick      một bản build (mặc định core 3.x, cấu hình kit mặc định)
 #   ./test/run_tests.sh --full       sáu bản build: core3, core2+inverts,
 #                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan, web token,
-#                                    buffer JSON nhỏ (nhánh JSON bị cắt)
+#                                    buffer JSON nhỏ (nhánh JSON bị cắt) + bộ test JS trang web
 #   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng + nhánh
 #
 # Biến môi trường:
@@ -73,6 +73,18 @@ run_asan() {
   # Một số phiên desktop đặt biến LD_PRELOAD (ví dụ libgtk-nocsd); runtime
   # sanitizer phải là thư viện được nạp đầu tiên, nên bỏ LD_PRELOAD cho lần chạy này.
   env -u LD_PRELOAD "$bin"
+  echo
+}
+
+# Kiểm thử JavaScript của trang web (Node). Trích đúng đoạn <script> từ
+# src/webserver.cpp nên kiểm thử chính mã đang chạy trên thiết bị.
+run_js() {
+  echo "=== JS: web page script ==="
+  if ! command -v node > /dev/null 2>&1; then
+    echo "SKIP: không có node trong PATH"
+    return 0
+  fi
+  node "$TEST_DIR/js/page_test.mjs"
   echo
 }
 
@@ -216,7 +228,8 @@ case "$MODE" in
     run_asan
     run_token
     run_tinyjson
-    echo "FULL: ALL 6 BUILDS PASSED"
+    run_js
+    echo "FULL: ALL 6 BUILDS + JS TESTS PASSED"
     ;;
   --coverage)
     run_coverage

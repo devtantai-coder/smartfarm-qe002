@@ -56,6 +56,11 @@ struct SystemState {
   uint8_t sensorFailCount = 0;
   bool sensorHealthy = true;
 
+  // Cờ "cần vẽ lại OLED ngay": đặt khi trạng thái hiển thị trên màn hình vừa
+  // đổi (đang quay cối, đang cho ăn, bước demo mới) để màn hình cập nhật
+  // ngay ở vòng loop kế tiếp thay vì chờ tới lần vẽ định kỳ 2 giây.
+  bool oledDirty = false;
+
   // Cấu hình kết nối + mã bảo mật (compile-time, KHÔNG ghi flash dạng plaintext)
   char ssid[32] = "YOUR_WIFI_SSID";
   char password[64] = "YOUR_WIFI_PASSWORD";

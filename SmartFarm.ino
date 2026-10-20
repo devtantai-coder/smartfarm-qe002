@@ -299,9 +299,11 @@ void loop() {
   unsigned long now = millis();
   runAutomation();
 
-  // Cập nhật OLED
-  if (now - sys.lastOledUpdate >= OLED_INTERVAL) {
+  // Cập nhật OLED: định kỳ mỗi OLED_INTERVAL, hoặc ngay khi có thay đổi
+  // trạng thái hiển thị (cờ oledDirty) — màn hình không phải chờ tới 2 giây.
+  if (sys.oledDirty || (now - sys.lastOledUpdate >= OLED_INTERVAL)) {
     updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
     sys.lastOledUpdate = now;
+    sys.oledDirty = false;
   }
 }

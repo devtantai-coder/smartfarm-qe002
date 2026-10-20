@@ -127,6 +127,7 @@ void updateDemo() {
   sStepStart = now;
   demoLogStep();
   demoAction(STEPS[sStep].in);
+  sys.oledDirty = true;      // dòng trạng thái OLED hiện tên bước mới
 }
 
 #ifdef SMARTFARM_TEST_HOOKS

@@ -169,6 +169,7 @@ static unsigned long sWindmillUpdate = 0;
 void setWindmill(bool on) {
   if (sys.windmillOn == on) return;
   sys.windmillOn = on;
+  sys.oledDirty = true;      // dòng trạng thái OLED đổi ("Coi xay: ON")
   if (on) {
     stopFeed();             // servo dùng chung
   } else {
@@ -193,7 +194,8 @@ static bool sFeedActive = false;
 static unsigned long sFeedStart = 0;
 
 void startFeed() {
-  setWindmill(false);       // servo dùng chung
+  setWindmill(false);            // servo dùng chung
+  sys.oledDirty = true;          // dòng trạng thái OLED đổi ("Cho an...")
   sFeedActive = true;
   sFeedStart = millis();
   servo.write(FEED_OPEN_ANGLE);   // cửa mở
@@ -203,6 +205,7 @@ void startFeed() {
 void stopFeed() {
   if (!sFeedActive) return;      // không có cho ăn thì không đụng servo
   sFeedActive = false;
+  sys.oledDirty = true;          // dòng trạng thái OLED về lại
   // Đóng cửa máng ăn: servo dùng chung với cối xay gió nên nếu chỉ ngừng
   // mà không đóng lại, cửa có thể bị kẹt mở khi servo chạy sang mục khác.
   servo.write(FEED_CLOSE_ANGLE);

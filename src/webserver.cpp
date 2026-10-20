@@ -194,6 +194,12 @@ else TOKEN=sessionStorage.getItem('sfToken')||'';
 }catch(e){}
 if(params.get('token'))history.replaceState(null,'',location.pathname);
 let NONCE=0;
+// Poll thích ứng: 2 giây khi dữ liệu còn đổi (hoặc người dùng vừa thao tác),
+// 5 giây khi bảng điều khiển đứng yên và không có gì thay đổi -> thiết bị nhận
+// ít request hơn mà vẫn cập nhật ngay khi có thay đổi.
+let pollMs=2000,pollTimer=null,lastJson='',stable=0;
+function schedulePoll(){clearTimeout(pollTimer);pollTimer=setTimeout(pollTick,pollMs)}
+function wakePoll(){stable=0;pollMs=2000;schedulePoll()}
 function authHeaders(){return TOKEN?{'X-Auth-Token':TOKEN}:{}}
 // Mọi request có thời gian chờ: nếu thiết bị treo, fetch sẽ treo vô hạn và
 // giao diện đứng hình (mất cả vòng poll). Abort sau 5 s thì giao diện tự
@@ -218,13 +224,14 @@ if(NONCE>0&&r.status===403){
   r=await apiGet(api(u));
 }
 if(NONCE>0&&(r.ok||r.status===400))NONCE++;
+if(r.ok)wakePoll();
 return r}
 let polling=false;
 async function fetchData(){
-if(polling)return;polling=true;
+if(polling)return false;polling=true;
 try{
 const r=await apiGet('/api');
-if(r.status===401){document.getElementById('ipBadge').textContent='Can token';return}
+if(r.status===401){document.getElementById('ipBadge').textContent='Can token';return false}
 const d=await r.json();
 window.__sf=d;
 NONCE=d.nonce??0;
@@ -250,7 +257,11 @@ document.getElementById('statusBreatheAuto').textContent=d.breatheAuto?'Bật':'
 document.getElementById('statusDemo').textContent=d.demo?('Đang chạy: '+d.demoStep):'Tắt';
 document.getElementById('badgeRgbAuto').textContent=d.rgbAuto?'Tự động: Bật':'Tự động: Tắt';
 document.getElementById('badgeRgbAuto').className='badge '+(d.rgbAuto?'on':'off');
-}catch(e){console.error(e)}finally{polling=false}
+const j=JSON.stringify(d);
+const changed=(j!==lastJson);
+lastJson=j;
+return changed;
+}catch(e){console.error(e);return false}finally{polling=false}
 }
 async function toggleDevice(id){await call('/toggle?id='+id);fetchData()}
 async function ledSet(on){await call(on?'/on':'/off');fetchData()}
@@ -260,9 +271,12 @@ async function runDemo(){if(!confirm('Chạy trình diễn lần lượt các ho
 async function setAutoMode(id,on){await call('/auto?id='+id+'&on='+on);fetchData()}
 async function setRgb(r,g,b){await call('/rgb?r='+r+'&g='+g+'&b='+b);fetchData()}
 async function setServo(v){document.getElementById('servoLabel').textContent=v;await call('/servo?angle='+v)}
-function pollTick(){if(!document.hidden)fetchData()}
-setInterval(pollTick,2000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)fetchData()});
+async function pollTick(){
+if(!document.hidden){const changed=await fetchData();if(changed){stable=0;pollMs=2000}else{stable++;if(stable>=3)pollMs=5000}}
+schedulePoll();
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){wakePoll();fetchData()}});
+wakePoll();
 fetchData();
 </script>
 </body>
@@ -381,6 +395,10 @@ static bool guardWeb() {
 void handleRoot() {
   MOD_DEBUG(Webserver, "GET /");
   server.sendHeader("X-Frame-Options", "DENY");   // chống nhúng iframe (clickjacking)
+  // Trang tĩnh: mọi dữ liệu động đều lấy qua /api, nên trình duyệt được
+  // cache lại -> mở trang lần sau không phải tải lại 16 KB.
+  // "private" để không lưu vào cache dùng chung (proxy).
+  server.sendHeader("Cache-Control", "private, max-age=60");
   server.send_P(200, "text/html", ROOT_HTML);
 }
 

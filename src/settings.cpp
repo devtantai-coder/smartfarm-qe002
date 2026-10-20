@@ -84,12 +84,15 @@ void saveSettings() {
 
 void loadSettings() {
   preferences.begin("smartfarm", true);
-  sys.soilThresholdLow  = loadFloat("soilLow", 400.0f);
-  sys.soilThresholdHigh = loadFloat("soilHigh", 700.0f);
-  sys.waterThresholdLow = loadFloat("waterLow", 200.0f);
-  sys.lightThreshold    = preferences.getInt("lightThr", 500);
-  sys.tempThresholdHigh = loadFloat("tempHigh", 30.0f);
-  sys.tempThresholdLow  = loadFloat("tempLow", 25.0f);
+  // Khoảng giá trị hợp lệ: ngoài khoảng này (flash bị hỏng, hoặc ghi tay sai)
+  // thì logic so ngưỡng sẽ hành xử sai — ví dụ soilHigh < soilLow thì bơm
+  // không bao giờ chạy. Constrain ngay khi đọc lên.
+  sys.soilThresholdLow  = constrain(loadFloat("soilLow", 400.0f), 0.0f, 4095.0f);
+  sys.soilThresholdHigh = constrain(loadFloat("soilHigh", 700.0f), 0.0f, 4095.0f);
+  sys.waterThresholdLow = constrain(loadFloat("waterLow", 200.0f), 0.0f, 4095.0f);
+  sys.lightThreshold    = constrain(preferences.getInt("lightThr", 500), 0, 4095);
+  sys.tempThresholdHigh = constrain(loadFloat("tempHigh", 30.0f), 0.0f, 60.0f);
+  sys.tempThresholdLow  = constrain(loadFloat("tempLow", 25.0f), 0.0f, 60.0f);
   sys.pumpAuto          = preferences.getBool("pumpAuto", true);
   sys.lightAuto         = preferences.getBool("lightAuto", true);
   sys.rgbAuto           = preferences.getBool("rgbAuto", true);

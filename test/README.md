@@ -30,15 +30,16 @@ Tùy biến bằng biến môi trường:
 | `webtoken` | `-DWEB_TOKEN='"token-bao-mat-test"'` | Bật `WEB_TOKEN` để chạy D16 (bảo vệ token web) |
 | `tinyjson` | `-DAPI_JSON_BUF_SIZE=64` | Buffer JSON `/api` cố ý nhỏ để chạy D21 (nhánh "JSON bị cắt" → phải trả lỗi 500) |
 
-Yêu cầu: `g++` hỗ trợ C++17 và `bash`. Kết quả hiện tại: **772.525 lượt kiểm tra,
-0 lỗi** trên 4 bản build thường; bản `webtoken` và bản `--coverage` (cũng đặt
-`WEB_TOKEN`) chạy **772.542 lượt**; bản `tinyjson` chạy 772.302 lượt (bỏ các
-kiểm tra nội dung JSON vì buffer cố ý nhỏ). Độ phủ dòng lệnh: **99,8%**
-(2 dòng chưa phủ là nhánh "JSON bị cắt" — chỉ chạy ở bản build `tinyjson`),
-độ phủ nhánh (taken at least once): **~81%** cho toàn bộ code production — phần
-thiếu chủ yếu là các nhánh phòng vệ một chiều (`errno` của thư viện, `else`
-bất khả thi, nhánh compile-time của ternary). Mỗi test in một dòng
-`[PASS]/[FAIL]` kèm tên và số check của riêng nó để khoanh vùng lỗi nhanh.
+Yêu cầu: `g++` hỗ trợ C++17 và `bash`; `node` (tuỳ chọn) cho bộ test JS.
+Kết quả hiện tại: **772.537 lượt kiểm tra, 0 lỗi** trên 4 bản build thường; bản
+`webtoken` và bản `--coverage` (cũng đặt `WEB_TOKEN`) chạy **772.554 lượt**; bản
+`tinyjson` chạy 772.314 lượt (bỏ các kiểm tra nội dung JSON vì buffer cố ý
+nhỏ). Độ phủ dòng lệnh: **99,8%** (2 dòng chưa phủ là nhánh "JSON bị cắt" —
+chỉ chạy ở bản build `tinyjson`), độ phủ nhánh (taken at least once): **~80%**
+cho toàn bộ code production — phần thiếu chủ yếu là các nhánh phòng vệ một
+chiều (`errno` của thư viện, `else` bất khả thi, nhánh compile-time của
+ternary). Mỗi test in một dòng `[PASS]/[FAIL]` kèm tên và số check của riêng nó
+để khoanh vùng lỗi nhanh.
 
 ## Cấu trúc
 
@@ -78,5 +79,11 @@ bất khả thi, nhánh compile-time của ternary). Mỗi test in một dòng
   Bộ đệm OLED giả mô phỏng đúng bố cục 6 cột/ký tự của font 6×8 thật, nên phép
   diff theo dải cột của firmware được kiểm chứng đúng (đổi 1 ký tự → 6 byte
   I2C, không phải 128 byte của cả page).
+- `js/page_test.mjs` — kiểm thử JavaScript của trang web bằng Node: **trích đúng
+  đoạn `<script>` từ `src/webserver.cpp`** nên kiểm thử chính mã đang chạy trên
+  thiết bị, không chép lại. Kiểm tra: poll thích ứng (2 s khi có thay đổi → 5 s
+  khi đứng yên), token đọc từ URL → `sessionStorage` → header, tự lấy nonce mới
+  khi gặp 403, mọi request có `AbortSignal` để không treo, không gọi chồng request.
+  Chạy: `node test/js/page_test.mjs` (tự bỏ qua nếu máy không có `node`).
 - `run_tests.sh` — script build + chạy (và chế độ coverage).
 - `build/` — thư mục build tạm (đã `.gitignore`).

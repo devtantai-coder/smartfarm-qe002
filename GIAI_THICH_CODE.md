@@ -2246,7 +2246,6 @@ Nhờ vậy thời gian chặn `loop()` mỗi lần cập nhật màn hình gi�
 `oledForceRedraw()` đặt `sPrevFrameValid = false` — dùng khi code khác vẽ trực tiếp lên màn hình (màn hình test của `debugOled()`) để bộ đệm so sánh delta không tưởng nhầm "không đổi" rồi bỏ qua.
 
 ### 9.4. Khởi tạo và "chế độ suy giảm" — `oledInit()` / `oledNoteFailure()`
-
 Mỗi giao dịch I2C mà không có thiết bị phản hồi sẽ **chặn tới hết thời gian chờ**
 (mặc định của thư viện `Wire` là 50 ms!). Nếu màn hình không cắm, `display.begin()`
 gửi hàng chục lệnh khởi tạo → mỗi lệnh là một lần chờ 50 ms → **khởi động bị treo
@@ -2273,6 +2272,26 @@ bool oledInit() {
 - `oledNoteFailure()` xử lý I2C **hỏng giữa chừng** (màn hình bị rút khi đang chạy): đánh dấu khung so sánh không còn đúng (để lần sau ghi lại toàn bộ thay vì chỉ phần đổi) và sau `OLED_FAIL_LIMIT = 3` lỗi liên tiếp thì **tự tắt màn hình** + ghi mã lỗi **103**.
 - `Wire.setTimeOut()` chỉ có từ core 3.x nên mới được bọc `#if`; core 2.x dùng mặc định 50 ms nhưng vẫn được lợi ích lớn nhất: **không đụng I2C nữa khi không có màn hình**.
 - Test `testOledAbsentOrBroken` (D20b) kiểm tra cả hai tình huống bằng bộ đếm giao dịch I2C của mock: khi không có màn hình thì **0 giao dịch I2C** được gửi đi.
+
+### 9.5. Màn hình cập nhật tức thì — cờ `oledDirty`
+
+Bình thường màn hình được vẽ lại mỗi `OLED_INTERVAL = 2000` ms. Nhưng khi
+trạng thái **hiển thị trên màn hình** vừa đổi (vừa bật cối xay gió, vừa cho ăn,
+vừa sang bước demo mới) thì chờ 2 giây là thấy "chậm". Firmware đặt cờ
+`sys.oledDirty = true` ở đúng những nơi đó, và `loop()` kiểm tra cờ này:
+
+```cpp
+if (sys.oledDirty || (now - sys.lastOledUpdate >= OLED_INTERVAL)) {
+  updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+  sys.lastOledUpdate = now;
+  sys.oledDirty = false;
+}
+```
+
+- Nhờ vẽ theo **dải cột đổi** (mục 9.3), lần vẽ "vội" này chỉ tốn vài chục byte
+  I2C chứ không phải cả màn hình.
+- Test `testOledDirtyRefresh` (D22) đo bằng bộ đếm giao dịch I2C: không có thay
+  đổi thì **0 giao dịch**, có thay đổi thì màn hình được vẽ lại ngay.
 
 ---
 
