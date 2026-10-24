@@ -188,14 +188,18 @@ Vào **Sketch → Include Library → Manage Libraries**, cài đặt:
 
 ### Bước 1: Mở dự án
 Mở Arduino IDE, chọn **File → Open**, mở file `SmartFarm.ino` trong thư mục `duan123`.
-
 ### Bước 2: Cấu hình WiFi
-Mở file `src/config.cpp`, sửa:
+
+Mở file `src/globals.h`, sửa 2 dòng mặc định trong `struct SystemState`:
 
 ```cpp
-const char *ssid = "TEN_WIFI_CUA_BAN";
-const char *password = "MAT_KHAU_WIFI_CUA_BAN";
+char ssid[32] = "TEN_WIFI_CUA_BAN";
+char password[64] = "MAT_KHAU_WIFI_CUA_BAN";
 ```
+
+> Nếu không muốn sửa code, có thể để nguyên mặc định rồi cấu hình WiFi từ xa
+> sau khi nạp: `http://<IP>/wifi?ssid=TEN_WIFI_CUA_BAN&password=MAT_KHAU_WIFI_CUA_BAN`
+> (thiết bị lưu vào flash rồi tự khởi động lại).
 
 ### Bước 3: Hiệu chuẩn phần cứng (tùy chọn — file `src/config.h`)
 
@@ -401,14 +405,14 @@ LOG_DEBUG("Extra detail only at DEBUG level");    // Chỉ hiển thị nếu c�
 
 ## 15. Kiểm thử tự động trên máy tính (không cần phần cứng)
 
-Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy **772.537 lượt kiểm tra** trên mỗi bản build thường (bản `webtoken` kiểm tra thêm bảo vệ token: 772.554 lượt). Các test gọi thẳng `runAutomation()` — hàm mà `loop()` dùng — nên không có logic nào bị sao chép khỏi firmware.
+Repo có sẵn bộ test chuyên sâu trong thư mục `test/`: nó biên dịch **chính firmware thật** (`SmartFarm.ino` + `src/*.cpp`) bằng `g++` trên PC, thay các thư viện ESP32 bằng mock điều khiển được (thời gian, ADC, chân GPIO, WiFi, web server, OLED...), rồi chạy **772.661 lượt kiểm tra** trên mỗi bản build thường (bản `webtoken` kiểm tra thêm bảo vệ token: 772.680 lượt). Các test gọi thẳng `runAutomation()` — hàm mà `loop()` dùng — nên không có logic nào bị sao chép khỏi firmware.
 
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh (core 3.x, cấu hình kit)
 ./test/run_tests.sh --full       # 6 bản build: core 3.x, core 2.x + cảm biến đảo,
                                  # còi passive + relay active-LOW, ASan + UBSan, token web,
                                  # buffer JSON nhỏ (nhánh JSON bị cắt) + test JS trang web
-./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh + nhánh bằng gcov (hiện 99,8% dòng, ~81% nhánh)
+./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh + nhánh bằng gcov (hiện 99,8% dòng, ~83,9% nhánh)
 ```
 
 Bộ test bao phủ: logic bơm/quạt/đèn/chạm/còi, so sánh ngưỡng đúng biên, thời gian chính xác từng ms, 15 route HTTP (kèm `/wifi` cấu hình động và callback OTA), hợp đồng JSON 21 khóa, menu serial, trình diễn 15 bước, bền vững sau khi mất điện, reset về mặc định, bỏ qua ghi flash khi giá trị không đổi, fuzz 90.000 bước với các bất biến an toàn, trường hợp `millis()` tràn số, chặn CSRF và bảo vệ token web tùy chọn (gồm cả `/api`). Chi tiết xem `test/README.md`.

@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "author": "SmartFarm",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht",
+      "top": -80,
+      "left": 220,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pir-motion-sensor",
+      "id": "pir",
+      "top": 80,
+      "left": 220,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "touch",
+      "top": 160,
+      "left": 220,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-relay-module",
+      "id": "relay",
+      "top": 240,
+      "left": 220,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "servo",
+      "top": 320,
+      "left": 220,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "buzzer",
+      "top": -80,
+      "left": 320,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ssd1306",
+      "id": "oled",
+      "top": 80,
+      "left": 320,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-neopixel",
+      "id": "rgb",
+      "top": 160,
+      "left": 320,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-led",
+      "id": "blueled",
+      "top": 240,
+      "left": 320,
+      "attrs": {
+        "color": "blue"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "dht:VCC",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "dht:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "dht:SDA",
+      "esp:D23",
+      "green",
+      []
+    ],
+    [
+      "pir:VCC",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "pir:GND",
+      "esp:GND.2",
+      "black",
+      []
+    ],
+    [
+      "pir:OUT",
+      "esp:D33",
+      "green",
+      []
+    ],
+    [
+      "touch:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "relay:VCC",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "relay:GND",
+      "esp:GND.2",
+      "black",
+      []
+    ],
+    [
+      "relay:IN",
+      "esp:D26",
+      "green",
+      []
+    ],
+    [
+      "servo:V+",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "servo:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "servo:PWM",
+      "esp:D13",
+      "green",
+      []
+    ],
+    [
+      "buzzer:1",
+      "esp:D25",
+      "green",
+      []
+    ],
+    [
+      "buzzer:2",
+      "esp:GND.2",
+      "black",
+      []
+    ],
+    [
+      "oled:3V3",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "oled:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "oled:DATA",
+      "esp:D21",
+      "blue",
+      []
+    ],
+    [
+      "oled:CLK",
+      "esp:D22",
+      "yellow",
+      []
+    ],
+    [
+      "rgb:DIN",
+      "esp:D19",
+      "green",
+      []
+    ],
+    [
+      "rgb:VDD",
+      "esp:3V3",
+      "red",
+      []
+    ],
+    [
+      "rgb:VSS",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "blueled:A",
+      "esp:D27",
+      "green",
+      []
+    ],
+    [
+      "blueled:C",
+      "esp:GND.2",
+      "black",
+      []
+    ],
+    [
+      "touch:1.l",
+      "esp:VN",
+      "green",
+      []
+    ]
+  ]
+}

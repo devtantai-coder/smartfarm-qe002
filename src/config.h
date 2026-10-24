@@ -124,4 +124,11 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 #define ANTI_REPLAY 0
 #endif
 
+
+// ── Tiết kiệm điện (deep sleep) ──
+// Thời gian ngủ sâu mặc định (giây) khi bật powerSave; có thể chỉnh từ web/API.
+#ifndef DEFAULT_SLEEP_SECONDS
+#define DEFAULT_SLEEP_SECONDS 30
+#endif
+
 #endif

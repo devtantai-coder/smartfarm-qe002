@@ -9,6 +9,7 @@
 void setRelay(bool on) {
   if (sys.relayState == on) return;
   sys.relayState = on;
+  sys.oledDirty = true;
   bool level = RELAY_ACTIVE_LOW ? !on : on;
   digitalWrite(RELAY_PIN, level ? HIGH : LOW);
   LOG_INFO(on ? "Pump: ON" : "Pump: OFF");

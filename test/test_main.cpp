@@ -2664,6 +2664,305 @@ static void testBootDegraded() {
   resetState();
 }
 
+// D20: các nhánh biên còn sót mà các test trước chưa chạm tới:
+// CSRF cùng nguồn có cổng/query, id lạ, ngưỡng tự chỉnh, /wifi không đổi
+// SSID, nonce tràn 32 bit, OTA lỗi lạ, log bị chặn dưới ngưỡng, WiFi rớt.
+static void testEdgeBranches() {
+  printf("D22 edge: remaining boundary branches\n");
+  resetState();
+  mockServerReset();
+  mockWifiStatus = WL_CONNECTED;
+  setup();
+
+  const String me = String("http://") + String(mockWifiIp);
+
+  // ── CSRF: cùng nguồn nhưng có cổng hoặc query vẫn được phép ──
+  mockServerSetHeader("Referer", (me + ":8080/trang").c_str());
+  CHECK_EQ(invoke("/windmill", "on", "true"), 200);
+  CHECK(sys.windmillOn);
+
+  mockServerSetHeader("Referer", (me + "?v=2").c_str());
+  CHECK_EQ(invoke("/windmill", "on", "false"), 200);
+  CHECK(!sys.windmillOn);
+
+  // ── id không hợp lệ → 400, trạng thái không đổi ──
+  mockServerSetHeader("Referer", "");
+  bool before = sys.relayState;
+  CHECK_EQ(invoke("/toggle", "id", "khong-co"), 400);
+  CHECK_STR(mockServerLastBody(), "unknown id");
+  CHECK(sys.relayState == before);
+  CHECK_EQ(invoke("/auto", "id", "khong-co"), 400);
+  CHECK_STR(mockServerLastBody(), "unknown id");
+
+  // ── /threshold và /wifi không có tham số → 400 ──
+  CHECK_EQ(invoke("/threshold"), 400);
+  CHECK_STR(mockServerLastBody(), "no params");
+  CHECK_EQ(invoke("/wifi"), 400);
+  CHECK_STR(mockServerLastBody(), "no params");
+
+  // ── ngưỡng bị gửi lộn xộn → tự chỉnh để high > low ──
+  CHECK_EQ(invoke("/threshold", "soilLow", "100", "soilHigh", "50"), 200);
+  CHECK_NEAR(sys.soilThresholdLow, 100.0, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 150.0, 0.01);
+  CHECK_EQ(invoke("/threshold", "tempLow", "40", "tempHigh", "30"), 200);
+  CHECK_NEAR(sys.tempThresholdLow, 40.0, 0.01);
+  CHECK_NEAR(sys.tempThresholdHigh, 41.0, 0.01);
+
+  // ── chỉ đổi mật khẩu WiFi (giữ nguyên SSID) → vẫn phải ghi flash ──
+  CHECK_EQ(invoke("/wifi", "password", "mat-khau-moi"), 200);
+  CHECK_STR(sys.password, "mat-khau-moi");
+  CHECK(sys.gNeedRestart);
+  sys.gNeedRestart = false;
+
+  // ── token dài hơn giá trị thật → 401 (so sánh constant-time phải thấy cả độ dài) ──
+  if (WEB_TOKEN[0] != '\0') {
+    std::string longTok(WEB_TOKEN);
+    longTok += "-bi-sai-do-dai";
+    mockServerSetHeader("X-Auth-Token", longTok.c_str());
+    mockServerSetArg("id", "pump");
+    CHECK(mockServerInvoke("/toggle"));
+    CHECK_EQ(mockServerLastCode(), 401);
+  }
+
+  // ── nonce tràn 32 bit → /api trả nonce hợp lệ, không trả 0 ──
+  uint32_t savedNonce = sys.gLastNonce;
+  sys.gLastNonce = 0xFFFFFFFFul;
+#if API_JSON_IS_TINY
+  CHECK_EQ(invoke("/api"), 500);        // buffer JSON nhỏ -> báo lỗi, không có body JSON
+#else
+  CHECK_EQ(invoke("/api"), 200);
+  CHECK(has(mockServerLastBody(), "\"nonce\":1"));
+#endif
+  sys.gLastNonce = savedNonce;
+
+  // ── OTA: total = 0 (ảnh firmware rỗng) không được chia cho 0 ──
+  mockSerialClear();
+  mockOtaProgress(10, 0);
+  CHECK(has(mockSerialOutput(), "OTA: 0%"));
+
+  // ── OTA: mã lỗi lạ → in mã lỗi, không treo ──
+  mockSerialClear();
+  mockOtaError(99);
+  CHECK(has(mockSerialOutput(), "OTA: error[99]"));
+
+  // ── log lỗi ở mức thấp hơn ngưỡng tối thiểu → không in ──
+  mockSerialClear();
+  gMinLogLevel = LOG_FATAL;
+  LOG_ERROR_CODE(777, "loi bi chan");
+  CHECK(!has(mockSerialOutput(), "loi bi chan"));
+  gMinLogLevel = LOG_INFO;
+
+  // ── debug webserver khi WiFi rớt → in FAIL ──
+  mockWifiStatus = WL_DISCONNECTED;
+  mockSerialClear();
+  debugWebserver();
+  CHECK(has(mockSerialOutput(), "FAIL"));
+  mockWifiStatus = WL_CONNECTED;
+
+  // ── trình tự debug cơ cấu: gọi update khi bước chưa hết hạn → không nhảy bước ──
+  mockSerialClear();
+  debugActuators();
+  updateDebugActuators();
+  CHECK(sys.relayState);                       // bước 0 (bơm) vẫn đang chạy
+  stopDebugActuators();
+  CHECK(!sys.relayState);
+
+  resetState();
+}
+
+// D21: mọi route có bảo vệ đều phải chặn được nguồn lạ; cờ debug in đúng
+// chỗ; nhánh phòng vệ của cơ cấu chấp hành.
+static void testGuardAndDebugFlags() {
+  printf("D23 http: guarded routes + module debug flags\n");
+  resetState();
+  mockServerReset();
+  mockWifiStatus = WL_CONNECTED;
+  setup();
+
+  // ── mọi route có guardWeb() đều phải trả 403 cho yêu cầu từ nguồn lạ ──
+  static const char *guarded[] = {
+    "/toggle", "/auto", "/rgb", "/breathe", "/on", "/off", "/servo",
+    "/windmill", "/feed", "/demo", "/threshold", "/wifi"
+  };
+  for (const char *path : guarded) {
+    mockServerSetHeader("Origin", "http://evil.example");
+    CHECK(mockServerInvoke(path));
+    CHECK_EQ(mockServerLastCode(), 403);
+  }
+  CHECK(!demoRunning());
+  CHECK(!feedRunning());
+  CHECK(!sys.relayState);
+
+  // ── cờ debug bật: MOD_DEBUG phải in ra, không im lặng ──
+  dbgSensors = dbgActuators = dbgControl = dbgWebserver = true;
+  dbgWifi = dbgOled = dbgSettings = dbgLogger = dbgRgb = true;
+  gMinLogLevel = LOG_DEBUG;
+
+  mockSerialClear();
+  CHECK_EQ(invoke("/"), 200);
+  CHECK(has(mockSerialOutput(), "GET /"));
+
+  mockSerialClear();
+  CHECK_EQ(invoke("/api"), API_JSON_IS_TINY ? 500 : 200);
+  CHECK(has(mockSerialOutput(), "GET /api"));
+
+  mockSerialClear();
+  CHECK_EQ(invoke("/on"), 200);
+  CHECK(has(mockSerialOutput(), "GET /on"));
+
+  mockSerialClear();
+  CHECK_EQ(invoke("/off"), 200);
+  CHECK(has(mockSerialOutput(), "GET /off"));
+
+  mockSerialClear();
+  CHECK_EQ(invoke("/demo"), 200);
+  CHECK(has(mockSerialOutput(), "GET /demo"));
+
+  // MOD_DEBUG(Rgb) trong actuators.cpp
+  mockSerialClear();
+  setRgb(1, 2, 3);
+  CHECK(has(mockSerialOutput(), "RGB set"));
+  mockSerialClear();
+  setRgbPlant();
+  CHECK(has(mockSerialOutput(), "RGB plant light"));
+
+  // Các hàm debug in đủ nhãn
+  mockSerialClear();
+  debugSensors();   debugActuators(); debugControl();
+  debugWebserver(); debugWifi();      debugOled();
+  debugSettings();  debugLogger();
+  CHECK(has(mockSerialOutput(), "--- SENSORS ---"));
+  CHECK(has(mockSerialOutput(), "--- ACTUATORS ---"));
+  CHECK(has(mockSerialOutput(), "--- CONTROL ---"));
+  CHECK(has(mockSerialOutput(), "--- WEBSERVER ---"));
+  CHECK(has(mockSerialOutput(), "--- WIFI ---"));
+  CHECK(has(mockSerialOutput(), "--- OLED ---"));
+  CHECK(has(mockSerialOutput(), "--- SETTINGS ---"));
+  CHECK(has(mockSerialOutput(), "--- LOGGER ---"));
+
+  // ── breatheAuto = true → /api báo đúng, không báo "false" ──
+  sys.breatheAuto = true;
+  CHECK_EQ(invoke("/api"), API_JSON_IS_TINY ? 500 : 200);
+#if !API_JSON_IS_TINY
+  CHECK(has(mockServerLastBody(), "\"breatheAuto\":true"));
+#endif
+
+  // ── nhánh phòng vệ: đèn sáng liên tục phải thắng chế độ thở ──
+  sys.blueLedState = true;
+  sys.breatheLedState = true;
+  setBlueLed(true);
+  CHECK(sys.blueLedState);
+  CHECK(!sys.breatheLedState);
+
+  // dọn cờ debug + mức log
+  dbgSensors = dbgActuators = dbgControl = dbgWebserver = false;
+  dbgWifi = dbgOled = dbgSettings = dbgLogger = dbgRgb = false;
+  gMinLogLevel = LOG_INFO;
+
+  resetState();
+}
+
+// D24: các nhánh phòng vệ của logic điều khiển, cảm biến, cài đặt và OLED:
+// clamp ngưỡng khi flash hỏng, RGB bật/tắt từng phần, PIR giữ đèn, DHT trả
+// NaN khi bộ đệm còn trống, và cờ "không chạy" của trình diễn.
+static void testDefensiveBranches() {
+  printf("D24 defensive: clamp + ownership + sensor fallback\n");
+  resetState();
+
+  // ── flash lưu ngưỡng lỗi / ngoài khoảng → phải clamp về khoảng hợp lệ ──
+  mockPrefPut("soilLow", -100.0f);
+  mockPrefPut("soilHigh", 99999.0f);
+  mockPrefPut("waterLow", -50.0f);
+  mockPrefPut("lightThr", -100.0f);
+  mockPrefPut("tempHigh", -10.0f);
+  mockPrefPut("tempLow", 99999.0f);
+  loadSettings();
+  CHECK_NEAR(sys.soilThresholdLow, 0.0, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 4095.0, 0.01);
+  CHECK_NEAR(sys.waterThresholdLow, 0.0, 0.01);
+  CHECK_EQ(sys.lightThreshold, 0);
+  CHECK_NEAR(sys.tempThresholdHigh, 0.0, 0.01);
+  CHECK_NEAR(sys.tempThresholdLow, 60.0, 0.01);
+
+  // Ngưỡng vượt trần cũng phải bị clamp về 4095
+  mockPrefPut("lightThr", 99999.0f);
+  loadSettings();
+  CHECK_EQ(sys.lightThreshold, 4095);
+
+  // Ngưỡng flash hợp lệ → giữ nguyên
+  mockPrefPut("soilLow", 300.0f);
+  mockPrefPut("soilHigh", 800.0f);
+  mockPrefPut("waterLow", 250.0f);
+  mockPrefPut("lightThr", 500);
+  mockPrefPut("tempLow", 20.0f);
+  mockPrefPut("tempHigh", 35.0f);
+  loadSettings();
+  CHECK_NEAR(sys.soilThresholdLow, 300.0, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 800.0, 0.01);
+  CHECK_NEAR(sys.waterThresholdLow, 250.0, 0.01);
+  CHECK_EQ(sys.lightThreshold, 500);
+  CHECK_NEAR(sys.tempThresholdLow, 20.0, 0.01);
+  CHECK_NEAR(sys.tempThresholdHigh, 35.0, 0.01);
+
+  // ── ngưỡng web vượt trần → constrain về 4095 ──
+  resetState();
+  mockServerReset();
+  setup();
+  CHECK_EQ(invoke("/threshold", "soilLow", "4090", "soilHigh", "4090"), 200);
+  CHECK_NEAR(sys.soilThresholdHigh, 4095.0, 0.01);
+
+  // ── RGB: chỉ G hoặc chỉ B khác 0 thì vẫn coi là "đang tắt" ──
+  sys.rgbAuto = true;
+  sys.gLight = 3000;                                  // sáng -> tắt RGB
+  sys.rgbR = 0; sys.rgbG = 7; sys.rgbB = 0;
+  controlRgb();
+  CHECK_EQ(sys.rgbR, 0);
+  CHECK_EQ(sys.rgbG, 0);
+  CHECK_EQ(sys.rgbB, 0);
+
+  sys.rgbR = 0; sys.rgbG = 0; sys.rgbB = 7;
+  controlRgb();
+  CHECK_EQ(sys.rgbB, 0);
+
+  // ── PIR giữ đèn: auto bật nhưng có người thì không tự điều khiển ──
+  sys.lightAuto = true;
+  sys.breatheLedState = false;
+  sys.gPir = true;
+  sys.gLight = 0;                                     // rất tối -> lẽ ra phải bật đèn
+  sys.blueLedState = false;
+  controlLight();
+  CHECK(!sys.blueLedState);                           // nhưng PIR đang giữ -> không bật
+
+  sys.gPir = false;
+  controlLight();
+  CHECK(sys.blueLedState);                            // không còn PIR -> bật đèn theo ánh sáng
+
+  // Đèn thở đang giữ LED -> auto đèn không được tranh giành
+  sys.lightAuto = true;
+  sys.breatheLedState = true;
+  sys.gPir = false;
+  sys.gLight = 0;
+  sys.blueLedState = false;
+  controlLight();
+  CHECK(!sys.blueLedState);
+  sys.breatheLedState = false;
+
+  // ── DHT trả NaN khi bộ đệm còn trống → giá trị thay thế là 0 ──
+  resetState();
+  mockDhtTemp = NAN;
+  mockDhtHum = NAN;
+  readAllSensors();
+  CHECK_NEAR(sys.gTemp, 0.0, 0.01);
+  CHECK_NEAR(sys.gHum, 0.0, 0.01);
+
+  // ── updateDemo() khi không có demo chạy → thoát ngay, không làm gì ──
+  CHECK(!demoRunning());
+  updateDemo();
+  CHECK(!demoRunning());
+
+  resetState();
+}
+
 // ==============================================
 //  Hàm chính
 // ==============================================
@@ -2737,6 +3036,9 @@ int main() {
   RUN_TEST(testDemoClosesFeed);
   RUN_TEST(testBootFirstSample);
   RUN_TEST(testBootDegraded);
+  RUN_TEST(testEdgeBranches);
+  RUN_TEST(testGuardAndDebugFlags);
+  RUN_TEST(testDefensiveBranches);
 
   printf("=== %d checks, %d failures ===\n", gChecks, gFails);
   return gFails ? 1 : 0;

@@ -70,6 +70,12 @@ struct SystemState {
   // Chống replay + cờ khởi động lại
   uint32_t gLastNonce = 0;
   bool gNeedRestart = false;
+
+  // Tiết kiệm điện: khi bật, sau mỗi chu kỳ firmware vào deep sleep theo sleepSeconds
+  // và tự tỉnh dậy bằng timer (và chân cảm ứng/chuyển động nếu nối). Mặc định tắt
+  // để giữ web server phản hồi thời gian thực.
+  bool powerSave = false;
+  uint32_t sleepSeconds = 30;
 };
 
 extern SystemState sys;

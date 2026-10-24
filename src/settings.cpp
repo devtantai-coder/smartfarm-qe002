@@ -15,6 +15,8 @@ struct SettingsSnapshot {
   int lightThr;
   float tempHigh, tempLow;
   bool pumpAuto, lightAuto, rgbAuto, fanAuto, breatheAuto;
+  bool powerSave;
+  uint32_t sleepSeconds;
   char ssid[32], wifiPass[64];
 };
 SettingsSnapshot sLast = {};
@@ -38,6 +40,8 @@ static void captureSnapshot() {
   sLast.pumpAuto = sys.pumpAuto; sLast.lightAuto = sys.lightAuto;
   sLast.rgbAuto = sys.rgbAuto;   sLast.fanAuto = sys.fanAuto;
   sLast.breatheAuto = sys.breatheAuto;
+  sLast.powerSave = sys.powerSave;
+  sLast.sleepSeconds = sys.sleepSeconds;
   strncpy(sLast.ssid, sys.ssid, sizeof(sLast.ssid) - 1);
   sLast.ssid[sizeof(sLast.ssid) - 1] = '\0';
   strncpy(sLast.wifiPass, sys.password, sizeof(sLast.wifiPass) - 1);
@@ -55,6 +59,7 @@ void saveSettings() {
       sLast.pumpAuto != sys.pumpAuto || sLast.lightAuto != sys.lightAuto ||
       sLast.rgbAuto != sys.rgbAuto || sLast.fanAuto != sys.fanAuto ||
       sLast.breatheAuto != sys.breatheAuto ||
+      sLast.powerSave != sys.powerSave || sLast.sleepSeconds != sys.sleepSeconds ||
       !sameCStr(sLast.ssid, sys.ssid) || !sameCStr(sLast.wifiPass, sys.password);
 
   if (!changed) {
@@ -74,6 +79,8 @@ void saveSettings() {
   if (writeAll || sLast.rgbAuto != sys.rgbAuto)            preferences.putBool("rgbAuto", sys.rgbAuto);
   if (writeAll || sLast.fanAuto != sys.fanAuto)            preferences.putBool("fanAuto", sys.fanAuto);
   if (writeAll || sLast.breatheAuto != sys.breatheAuto)    preferences.putBool("breatheAuto", sys.breatheAuto);
+  if (writeAll || sLast.powerSave != sys.powerSave)        preferences.putBool("powerSave", sys.powerSave);
+  if (writeAll || sLast.sleepSeconds != sys.sleepSeconds)  preferences.putInt("sleepSec", (int)sys.sleepSeconds);
   if (writeAll || !sameCStr(sLast.ssid, sys.ssid))         preferences.putString("wifiSsid", sys.ssid);
   if (writeAll || !sameCStr(sLast.wifiPass, sys.password)) preferences.putString("wifiPass", sys.password);
   preferences.end();
@@ -98,6 +105,8 @@ void loadSettings() {
   sys.rgbAuto           = preferences.getBool("rgbAuto", true);
   sys.fanAuto           = preferences.getBool("fanAuto", true);
   sys.breatheAuto       = preferences.getBool("breatheAuto", false);  // chỉ bật khi người dùng chọn (hoạt động 3)
+  sys.powerSave         = preferences.getBool("powerSave", false);
+  sys.sleepSeconds      = constrain(preferences.getInt("sleepSec", DEFAULT_SLEEP_SECONDS), 1, 86400);
 
   // WiFi credentials: ưu tiên giá trị đã lưu, fallback về giá trị compile-time
   String savedSsid = preferences.getString("wifiSsid", "");
@@ -134,6 +143,8 @@ void resetSettings() {
   sys.rgbAuto           = defaults.rgbAuto;
   sys.fanAuto           = defaults.fanAuto;
   sys.breatheAuto       = defaults.breatheAuto;
+  sys.powerSave         = defaults.powerSave;
+  sys.sleepSeconds      = defaults.sleepSeconds;
   strncpy(sys.ssid, defaults.ssid, sizeof(sys.ssid) - 1);
   sys.ssid[sizeof(sys.ssid) - 1] = '\0';
   strncpy(sys.password, defaults.password, sizeof(sys.password) - 1);

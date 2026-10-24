@@ -23,6 +23,9 @@
 #include "src/wifi.h"
 #include "src/webserver.h"
 #include "src/demo.h"
+#ifndef SMARTFARM_TEST_HOOKS
+#include <esp_sleep.h>
+#endif
 
 // ── Trạng thái debug ──
 static char sSerialCmd = 0;
@@ -143,7 +146,7 @@ void setup() {
   // nếu để mặc định, mỗi WiFi.begin() (kể cả vòng thử lại mỗi 10 giây) sẽ
   // ghi thêm một lần vào NVS — hao chu kỳ ghi flash vô ích.
   WiFi.persistent(false);
-  WiFi.setSleep(false);
+  WiFi.setSleep(sys.powerSave);  // modem sleep khi tiết kiệm điện
   WiFi.begin(sys.ssid, sys.password);
   sys.lastWifiCheck = millis();
   LOG_INFO("Connecting WiFi...");
@@ -306,4 +309,18 @@ void loop() {
     sys.lastOledUpdate = now;
     sys.oledDirty = false;
   }
+
+  // Tiết kiệm điện: sau cửa sổ thức (30 s) cho phép truy cập web, vào deep sleep
+  // theo sleepSeconds rồi tự tỉnh dậy bằng timer / chân cảm ứng / PIR.
+#ifndef SMARTFARM_TEST_HOOKS
+  if (sys.powerSave && !demoRunning() && !sDebugMode && millis() >= 30000UL) {
+    esp_sleep_enable_timer_wakeup((uint64_t)sys.sleepSeconds * 1000000ULL);
+    // ext1 bao phủ cả chân chạm (39) và PIR (33); không dùng ext0 cùng lúc
+    // vì hai nguồn external-wakeup xung đột trên ESP32.
+    esp_sleep_enable_ext1_wakeup((1ULL << TOUCH_PIN) | (1ULL << PIR_PIN), ESP_EXT1_WAKEUP_ANY_HIGH);
+    LOG_INFO("Power save: entering deep sleep");
+    Serial.flush();
+    esp_deep_sleep_start();
+  }
+#endif
 }

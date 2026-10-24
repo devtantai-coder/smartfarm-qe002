@@ -31,15 +31,16 @@ Tùy biến bằng biến môi trường:
 | `tinyjson` | `-DAPI_JSON_BUF_SIZE=64` | Buffer JSON `/api` cố ý nhỏ để chạy D21 (nhánh "JSON bị cắt" → phải trả lỗi 500) |
 
 Yêu cầu: `g++` hỗ trợ C++17 và `bash`; `node` (tuỳ chọn) cho bộ test JS.
-Kết quả hiện tại: **772.537 lượt kiểm tra, 0 lỗi** trên 4 bản build thường; bản
-`webtoken` và bản `--coverage` (cũng đặt `WEB_TOKEN`) chạy **772.554 lượt**; bản
-`tinyjson` chạy 772.314 lượt (bỏ các kiểm tra nội dung JSON vì buffer cố ý
+Kết quả hiện tại: **772.661 lượt kiểm tra, 0 lỗi** trên 4 bản build thường; bản
+`webtoken` và bản `--coverage` (cũng đặt `WEB_TOKEN`) chạy **772.680 lượt**; bản
+`tinyjson` chạy 772.436 lượt (bỏ các kiểm tra nội dung JSON vì buffer cố ý
 nhỏ). Độ phủ dòng lệnh: **99,8%** (2 dòng chưa phủ là nhánh "JSON bị cắt" —
-chỉ chạy ở bản build `tinyjson`), độ phủ nhánh (taken at least once): **~80%**
-cho toàn bộ code production — phần thiếu chủ yếu là các nhánh phòng vệ một
-chiều (`errno` của thư viện, `else` bất khả thi, nhánh compile-time của
-ternary). Mỗi test in một dòng `[PASS]/[FAIL]` kèm tên và số check của riêng nó
-để khoanh vùng lỗi nhanh.
+chỉ chạy ở bản build `tinyjson`), độ phủ nhánh (taken at least once): **83,9%**
+cho toàn bộ code production. Phần nhánh chưa phủ còn lại đều là trường hợp
+không tới được trong một bản build đơn lẻ: biến compile-time (`INVERT_*`,
+`WEB_TOKEN` rỗng), `switch` không có `default` tới được, điều kiện dư thừa,
+và các nhánh phòng vệ một chiều (clamp âm, URL rỗng). Mỗi test in một dòng
+`[PASS]/[FAIL]` kèm tên và số check của riêng nó để khoanh vùng lỗi nhanh.
 
 ## Cấu trúc
 
@@ -70,6 +71,14 @@ ternary). Mỗi test in một dòng `[PASS]/[FAIL]` kèm tên và số check c�
     `Sec-Fetch-Site: cross-site` → 403, cùng nguồn được phép), và token web tùy
     chọn (thiếu/sai → 401, đúng qua header `X-Auth-Token` hoặc `?token=` → 200,
     `/api` cũng bị chặn khi thiếu token; bản build không đặt `WEB_TOKEN` tự bỏ qua).
+  - **D22–D24** nhánh biên còn sót: CSRF cùng nguồn có cổng/query, `id` lạ →
+    400, `/threshold` và `/wifi` không có tham số → 400, tự chỉnh ngưỡng khi
+    `high <= low`, đổi riêng mật khẩu WiFi, token dài hơn giá trị thật → 401,
+    nonce tràn 32 bit (vẫn trả nonce hợp lệ), OTA với `total = 0` và mã lỗi lạ,
+    log bị chặn dưới ngưỡng, mọi route có `guardWeb()` phải trả 403 cho nguồn lạ,
+    cờ debug in đúng chỗ, clamp ngưỡng khi flash lưu giá trị hỏng, RGB chỉ
+    khác 0 ở G hoặc B, PIR/đèn thở giữ quyền điều khiển LED, DHT trả NaN khi
+    bộ đệm còn trống.
 - `mocks/` — giả lập Arduino/ESP32: `mock.h` + `mock.cpp` (API điều khiển thời gian
   `mockSetMillis`, ADC, chân, log GPIO, OLED theo dòng, WiFi, web server kèm
   `mockServerSetHeader` giả lập header HTTP, counters)

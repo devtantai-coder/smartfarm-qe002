@@ -2866,7 +2866,7 @@ void handleThreshold() {
 
 ---
 
-## PHẦN 13 — Thư mục test/ (bộ kiểm thử 772.362 lượt)
+## PHẦN 13 — Thư mục test/ (bộ kiểm thử 772.661 lượt)
 
 ### 13.1. Vì sao có bộ test này?
 
@@ -2882,14 +2882,14 @@ biên dịch **code thật** (`SmartFarm.ino` + `src/*.cpp`). Nhờ vậy:
 
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh
-./test/run_tests.sh --full       # 5 bản build (mặc định)
+./test/run_tests.sh --full       # 6 bản build (mặc định)
 ./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh (gcov)
 ```
 
-5 bản build của `--full` chạy CÙNG bộ test với cấu hình khác nhau, để chắc mọi nhánh
+6 bản build của `--full` chạy CÙNG bộ test với cấu hình khác nhau, để chắc mọi nhánh
 `#if` đều đúng. Mọi bản build đều kèm `-DSMARTFARM_TEST_HOOKS` để bộ test reset được cả
 các biến static trong `src/` (xem các hook `testReset*Statics` ở PHẦN 5–8, 11). Bản
-`webtoken` chạy thêm test D16 nên có **772.379** lượt kiểm tra thay vì 772.362:
+`webtoken` chạy thêm test D16 nên có **772.680** lượt kiểm tra thay vì 772.661:
 
 | Bản build | Cấu hình | Kiểm tra điều gì |
 |---|---|---|
@@ -6288,7 +6288,7 @@ void ledcAttach(uint8_t, uint32_t, uint8_t) {}
 - Dòng 74–75: `ledcSetup`, `ledcAttachPin` — no-op (không làm gì), chỉ để đủ hàm cho đường core 2.x.
 - Dòng 76–80: `ledcWrite` — tăng counter, chặn "kênh/chân" ngoài phạm vi (tăng `mockInvalidPwmWrites` rồi thoát, bắt bug tràn mảng), còn lại lưu giá trị vào `mockPwm[ch]` để test đọc độ sáng/stato LED xanh.
 - Dòng 81: `ledcAttach` — no-op cho đường core 3.x.
-- Vì sao đủ cả hai: `SmartFarm.ino:93–98` chọn `ledcAttach(BLUE_LED_PIN, ...)` khi core >= 3, ngược lại `ledcSetup(...) + ledcAttachPin(...)`; `src/actuators.cpp:62–68` tương tự với `ledcWrite` (core 3 truyền **chân**, core 2 truyền **kênh** `LED_PWM_CHANNEL = 15`). Mock phải cung cấp đủ cả hai bộ hàm để cả 4 bản build trong `--full` đều link được; test đọc `mockPwm[BLUE_LED_PIN]` hoặc `mockPwm[LED_PWM_CHANNEL]` tùy phiên bản (`test_main.cpp:83,85`). Mặc định `test/mocks/esp_arduino_version.h` đặt major = 3.
+- Vì sao đủ cả hai: `SmartFarm.ino:93–98` chọn `ledcAttach(BLUE_LED_PIN, ...)` khi core >= 3, ngược lại `ledcSetup(...) + ledcAttachPin(...)`; `src/actuators.cpp:62–68` tương tự với `ledcWrite` (core 3 truyền **chân**, core 2 truyền **kênh** `LED_PWM_CHANNEL = 15`). Mock phải cung cấp đủ cả hai bộ hàm để cả 6 bản build trong `--full` đều link được; test đọc `mockPwm[BLUE_LED_PIN]` hoặc `mockPwm[LED_PWM_CHANNEL]` tùy phiên bản (`test_main.cpp:83,85`). Mặc định `test/mocks/esp_arduino_version.h` đặt major = 3.
 
 **Khối 10 — Buzzer: `tone`/`noTone` (dòng 82–89)**
 
@@ -7221,7 +7221,7 @@ int esp_task_wdt_deinit();
 
 ## PHẦN 16 — test/run_tests.sh (script build & chạy)
 
-`test/run_tests.sh` là điểm vào duy nhất để build và chạy bộ test trên máy tính: nó biên dịch firmware thật (`SmartFarm.ino` + `src/*.cpp`) cùng mock phần cứng, rồi chạy một trong các cấu hình. Chế độ `--quick` chạy 1 bản build, `--full` chạy 4 bản build (core 3 mặc định, core 2 đảo cảm biến, còi thụ động + relay mức thấp, ASan+UBSan), còn `--coverage` build với `gcov` để đo độ phủ theo dòng và chặn nếu dưới ngưỡng `COVERAGE_MIN` (mặc định 80%). Nhờ `set -e`, chỉ cần một bản build/test lỗi là script dừng ngay với mã thoát khác 0 — tiện cho cả người chạy tay lẫn CI.
+`test/run_tests.sh` là điểm vào duy nhất để build và chạy bộ test trên máy tính: nó biên dịch firmware thật (`SmartFarm.ino` + `src/*.cpp`) cùng mock phần cứng, rồi chạy một trong các cấu hình. Chế độ `--quick` chạy 1 bản build, `--full` chạy 6 bản build (core 3 mặc định, core 2 đảo cảm biến, còi thụ động + relay mức thấp, ASan+UBSan, token web, buffer JSON nhỏ) cộng bộ test JS trang web, còn `--coverage` build với `gcov` để đo độ phủ theo dòng và chặn nếu dưới ngưỡng `COVERAGE_MIN` (mặc định 80%). Nhờ `set -e`, chỉ cần một bản build/test lỗi là script dừng ngay với mã thoát khác 0 — tiện cho cả người chạy tay lẫn CI.
 
 ### 16.1. run_tests.sh — giải thích từng dòng (dòng 1–164)
 
@@ -7246,7 +7246,7 @@ int esp_task_wdt_deinit();
 - Dòng 1: shebang — bảo hệ điều hành chạy file này bằng `bash` tìm qua biến môi trường `PATH` (`env bash`).
 - Dòng 2: chú thích mục đích: trình chạy test chuyên sâu phía host cho firmware Smart Farm QE002.
 - Dòng 3–6: giải thích script biên dịch firmware **thật** dựa trên mock phần cứng điều khiển được trong `test/mocks/`.
-- Dòng 7–11: liệt kê ba chế độ chạy: `--quick` (1 bản build, core 3.x mặc định), `--full` (4 bản build: core3, core2 kèm đảo cảm biến, còi thụ động + relay kích mức thấp, ASan+UBSan), `--coverage` (build với gcov, in độ phủ theo dòng).
+- Dòng 7–11: liệt kê ba chế độ chạy: `--quick` (1 bản build, core 3.x mặc định), `--full` (6 bản build: core3, core2 kèm đảo cảm biến, còi thụ động + relay kích mức thấp, ASan+UBSan, token web, buffer JSON nhỏ), `--coverage` (build với gcov, in độ phủ theo dòng).
 - Dòng 12–13: yêu cầu môi trường: `g++` chuẩn C++17 và `bash`; không cần toolchain ESP32.
 
 #### Khối 2 — `set` an toàn và các đường dẫn (dòng 14–20)
@@ -7299,7 +7299,7 @@ MODE="${1:---full}"
 COVERAGE_MIN="${COVERAGE_MIN:-80}"
 ```
 
-- Dòng 38: `MODE="${1:---full}"` — lấy tham số dòng lệnh thứ nhất; nếu người dùng không truyền gì thì mặc định là `--full` (chạy đủ 4 bản build).
+- Dòng 38: `MODE="${1:---full}"` — lấy tham số dòng lệnh thứ nhất; nếu người dùng không truyền gì thì mặc định là `--full` (chạy đủ 6 bản build).
 - Dòng 39: `COVERAGE_MIN="${COVERAGE_MIN:-80}"` — ngưỡng độ phủ tối thiểu, mặc định 80%; có thể ghi đè bằng biến môi trường khi chạy, ví dụ `COVERAGE_MIN=90 ./test/run_tests.sh --coverage`.
 
 #### Khối 5 — Hàm `build_and_run` (dòng 41–48)
@@ -7515,7 +7515,7 @@ esac
 
 - Dòng 144: `case "$MODE"` — rẽ nhánh theo chế độ đã lấy ở dòng 38.
 - Dòng 145–147: `--quick` — chỉ chạy bản core3; nếu xong không lỗi thì in `QUICK: PASSED`. Vì có `set -e`, dòng này chỉ tới được khi test đã qua.
-- Dòng 149–155: `--full` — lần lượt chạy đủ 4 bản build (core3, core2-invert, passive-lowrelay, asan+ubsan) rồi in `FULL: ALL 4 BUILDS PASSED`. Bất kỳ bản nào lỗi sẽ dừng ngay trước khi in dòng này.
+- Dòng 149–155: `--full` — lần lượt chạy đủ 6 bản build (core3, core2-invert, passive-lowrelay, asan+ubsan, webtoken, tinyjson) cộng bộ test JS rồi in `FULL: ALL 6 BUILDS + JS TESTS PASSED`. Bất kỳ bản nào lỗi sẽ dừng ngay trước khi in dòng này.
 - Dòng 157–158: `--coverage` — gọi `run_coverage`.
 - Dòng 160–162: nhánh còn lại (`*`) — in hướng dẫn dùng ra **stderr** (`>&2`) rồi thoát mã 2 (mã quy ước "dùng sai tham số").
 - Dòng 164: `esac` kết thúc `case`.

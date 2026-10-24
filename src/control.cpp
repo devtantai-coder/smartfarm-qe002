@@ -215,6 +215,7 @@ void controlFeed() {
   if (!sFeedActive) return;
   if (millis() - sFeedStart >= FEED_DURATION) {
     sFeedActive = false;
+    sys.oledDirty = true;
     servo.write(FEED_CLOSE_ANGLE);  // cửa đóng
     LOG_INFO("Feed: gate closed");
   }
