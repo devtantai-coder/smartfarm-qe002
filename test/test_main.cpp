@@ -635,7 +635,7 @@ static void testSettingsResetAndSkip() {
   CHECK_NEAR(sys.tempThresholdLow, 25, 0.01);
   CHECK(sys.pumpAuto); CHECK(sys.lightAuto); CHECK(sys.rgbAuto); CHECK(sys.fanAuto);
   CHECK(!sys.breatheAuto);
-  CHECK_STR(sys.ssid, "YOUR_WIFI_SSID");
+  CHECK_STR(sys.ssid, "Tab S10 Lite của Trinh");
   CHECK_STR(sys.webToken, WEB_TOKEN);
   CHECK_STR(sys.otaPassword, OTA_PASSWORD);
   CHECK(!sys.gNeedRestart);
@@ -1096,9 +1096,9 @@ static void testHttpWifiConfig() {
   sys.gNeedRestart = false;
 
   // khôi phục trạng thái nền cho các test sau
-  strncpy(sys.ssid, "YOUR_WIFI_SSID", sizeof(sys.ssid) - 1);
+  strncpy(sys.ssid, "Tab S10 Lite của Trinh", sizeof(sys.ssid) - 1);
   sys.ssid[sizeof(sys.ssid) - 1] = '\0';
-  strncpy(sys.password, "YOUR_WIFI_PASSWORD", sizeof(sys.password) - 1);
+  strncpy(sys.password, "99999999T", sizeof(sys.password) - 1);
   sys.password[sizeof(sys.password) - 1] = '\0';
   resetState();
   mockServerReset();

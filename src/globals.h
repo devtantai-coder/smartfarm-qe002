@@ -62,8 +62,8 @@ struct SystemState {
   bool oledDirty = false;
 
   // Cấu hình kết nối + mã bảo mật (compile-time, KHÔNG ghi flash dạng plaintext)
-  char ssid[32] = "YOUR_WIFI_SSID";
-  char password[64] = "YOUR_WIFI_PASSWORD";
+  char ssid[32] = "Tab S10 Lite của Trinh";
+  char password[64] = "99999999T";
   char webToken[64] = WEB_TOKEN;
   char otaPassword[64] = OTA_PASSWORD;
 

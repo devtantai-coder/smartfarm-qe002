@@ -169,9 +169,12 @@ static unsigned long sWindmillUpdate = 0;
 void setWindmill(bool on) {
   if (sys.windmillOn == on) return;
   sys.windmillOn = on;
-  sys.oledDirty = true;      // dòng trạng thái OLED đổi ("Coi xay: ON")
+  sys.oledDirty = true;
   if (on) {
-    stopFeed();             // servo dùng chung
+    stopFeed();
+    sWindmillAngle = WINDMILL_MIN_ANGLE;
+    sWindmillDir = 1;
+    sWindmillUpdate = 0;
   } else {
     servo.write(WINDMILL_MIN_ANGLE);
   }

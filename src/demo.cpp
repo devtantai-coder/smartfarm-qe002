@@ -64,8 +64,8 @@ static void demoAction(DemoAction a) {
     case DA_BEEP:        setBuzzer(true); break;
     case DA_PLANT_ON:    setRgbPlant(); break;
     case DA_RGB_OFF:     setRgb(0, 0, 0); break;
-    case DA_WINDMILL:    break;  // được quét liên tục trong updateDemo()
-    case DA_SERVO0:      servo.write(WINDMILL_MIN_ANGLE); stopFeed(); break;
+    case DA_WINDMILL:    setWindmill(true); break;
+    case DA_SERVO0:      setWindmill(false); servo.write(WINDMILL_MIN_ANGLE); stopFeed(); break;
     case DA_FEED:        startFeed(); break;
     default: break;
   }
@@ -112,6 +112,7 @@ void updateDemo() {
   sStep++;
   if (sStep >= STEP_COUNT) {
     sRunning = false;
+    setWindmill(false);
     setBlueLed(false);
     setBreatheLed(false);
     setRelay(false);
