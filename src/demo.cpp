@@ -84,6 +84,7 @@ void startDemo() {
   sRunning = true;
   sStep = 0;
   sStepStart = millis();
+  sSweepUpdate = 0;
   LOG_INFO("===== DEMO START =====");
   demoLogStep();
   demoAction(STEPS[sStep].in);

@@ -211,6 +211,8 @@ Các module cảm biến/relay/còi bán kèm kit có thể hoạt động ngư�
 | `INVERT_SOIL` | `0` | Đất khô mà giá trị độ ẩm đất **tăng** |
 | `INVERT_WATER` | `0` | Đổ nước vào mà giá trị mức nước **giảm** |
 | `RELAY_ACTIVE_LOW` | `0` | Module relay kích mức **LOW** (bơm chạy khi chân ở LOW) |
+| `FAN_ACTIVE_LOW` | `0` | Quạt chạy khi chân ở mức **LOW** (module quạt active-low) |
+| `BUZZER_ENABLED` | `0` | Bật/tắt còi cảnh báo: `0` = tắt hoàn toàn (im lặng), `1` = bật |
 | `BUZZER_PASSIVE` | `0` | Còi loại **passive** (không kêu bằng mức điện áp, cần xung `tone()`) |
 
 Góc servo cũng chỉnh được để khớp cơ khí (tránh kẹt bánh răng):
