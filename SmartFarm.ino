@@ -1,4 +1,4 @@
-#include "rtos.h"
+#include "src/rtos.h"
 /*
  * SmartFarm.ino - QE002 ACEBOTT IoT Smart Farm
  * Điểm bắt đầu: setup() + loop()
@@ -135,6 +135,14 @@ static void processBluetoothCommand(const String& raw) {
 }
 #endif
 
+#ifndef SMARTFARM_TEST_HOOKS
+static void sensorTaskFn(void*);
+static void controlTaskFn(void*);
+static void commTaskFn(void*);
+static void displayTaskFn(void*);
+static void powerTaskFn(void*);
+#endif
+
 void setup() {
   Serial.begin(115200);
   rtosInit();
@@ -261,11 +269,22 @@ void setup() {
   server.on("/wifi", handleWifi);
   server.on("/favicon.ico", handleFavicon);
   server.on("/health", handleHealth);
+  server.on("/calibrate", handleCalibrate);
+  server.on("/metrics", handleMetrics);
   // WebServer chỉ giữ các header đã đăng ký (mặc định chỉ vài header trình duyệt);
   // phải khai báo để guardWeb() đọc được Origin/Referer/Sec-Fetch-Site/X-Auth-Token.
   static const char *watchedHeaders[] = {"Origin", "Referer", "Sec-Fetch-Site", "X-Auth-Token"};
   server.collectHeaders(watchedHeaders, 4);
   server.begin();
+
+#ifndef SMARTFARM_TEST_HOOKS
+  rtosInit();
+  xTaskCreate(sensorTaskFn, "Sensor", RTOS_SENSOR_STACK, NULL, RTOS_SENSOR_PRIO, NULL);
+  xTaskCreate(controlTaskFn, "Control", RTOS_CONTROL_STACK, NULL, RTOS_CONTROL_PRIO, NULL);
+  xTaskCreate(commTaskFn, "Comm", RTOS_COMM_STACK, NULL, RTOS_COMM_PRIO, NULL);
+  xTaskCreate(displayTaskFn, "Display", RTOS_DISPLAY_STACK, NULL, RTOS_DISPLAY_PRIO, NULL);
+  xTaskCreate(powerTaskFn, "Power", RTOS_POWER_STACK, NULL, RTOS_POWER_PRIO, NULL);
+#endif
 
 #if defined(BLUETOOTH_ENABLED) && BLUETOOTH_ENABLED
   SerialBT.begin("SmartFarm");
@@ -281,6 +300,7 @@ void setup() {
 // nhất). loop() gọi hàm này sau khi xử lý serial/khởi động lại.
 
 #ifndef SMARTFARM_TEST_HOOKS
+void runAutomation();
 static void sensorTaskFn(void*) {
   for (;;) {
     readAllSensors();
@@ -292,11 +312,7 @@ static void sensorTaskFn(void*) {
 }
 static void controlTaskFn(void*) {
   for (;;) {
-  #ifndef SMARTFARM_TEST_HOOKS
-  // tasks handle automation
-#else
-  runAutomation();
-#endif
+    runAutomation();
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
@@ -304,17 +320,22 @@ static void commTaskFn(void*) {
   for (;;) {
     server.handleClient();
     manageWiFi();
+    mqttLoop();
+    websocketLoop();
+    otaLoop();
+    ArduinoOTA.handle();
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 static void displayTaskFn(void*) {
   for (;;) {
-    if (sys.oledDirty) {
+    unsigned long now = millis();
+    if (sys.oledDirty || (now - sys.lastOledUpdate >= OLED_INTERVAL)) {
       updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
-      sys.lastOledUpdate = millis();
+      sys.lastOledUpdate = now;
       sys.oledDirty = false;
     }
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 static void powerTaskFn(void*) {
@@ -325,48 +346,7 @@ static void powerTaskFn(void*) {
 #endif
 
 
-#ifndef SMARTFARM_TEST_HOOKS
-  xTaskCreate(sensorTaskFn, "Sensor", RTOS_SENSOR_STACK, NULL, RTOS_SENSOR_PRIO, NULL);
-  xTaskCreate(controlTaskFn, "Control", RTOS_CONTROL_STACK, NULL, RTOS_CONTROL_PRIO, NULL);
-  xTaskCreate(commTaskFn, "Comm", RTOS_COMM_STACK, NULL, RTOS_COMM_PRIO, NULL);
-  xTaskCreate(displayTaskFn, "Display", RTOS_DISPLAY_STACK, NULL, RTOS_DISPLAY_PRIO, NULL);
-  xTaskCreate(powerTaskFn, "Power", RTOS_POWER_STACK, NULL, RTOS_POWER_PRIO, NULL);
-#endif
-
-void runAutomation() {
-  unsigned long now = gLoopNow ? gLoopNow : millis();
-
-  // Đầu vào số nhanh: touch/PIR phải phản hồi nhanh hơn chu kỳ đọc cảm biến 1 giây
-  sys.gTouch = readTouch();
-  sys.gPir = readPIR();
-
-  // Đọc cảm biến định kỳ (DHT11 cần >= 1 giây giữa hai lần đọc)
-  if (now - sys.lastSensorRead >= SENSOR_INTERVAL) {
-    readAllSensors();
-    logSensors();   // mỗi giây một dòng ở mức DEBUG (activity 7)
-    sys.lastSensorRead = now;
-  }
-
-  // An toàn: bơm tuyệt đối không được chạy khô, ở MỌI chế độ (thủ công hay demo)
-  if (sys.gWater < (int)sys.waterThresholdLow && sys.relayState) setRelay(false);
-
-  // Logic tự động (tạm dừng khi demo của bài học đang chạy)
-  if (demoRunning()) {
-    updateDemo();
-    controlBreathe();   // giữ bước thở HD3 chạy liên tục trong lúc demo
-  } else {
-    controlPump();
-    controlFan();
-    controlLight();
-    controlRgb();
-    controlBreathe();
-    controlTouch();
-    controlAlerts();
-    controlWindmill();
-    controlFeed();
-  }
-
-  // Hook các module mới (no-op an toàn, không đổi hành vi điều khiển)
+static void runExtras() {
   rtosLock();
   rtosUnlock();
   (void)rtosLockTimeout(1);
@@ -409,11 +389,53 @@ void runAutomation() {
   handleHealth();
 }
 
+void runAutomation() {
+  unsigned long now = gLoopNow ? gLoopNow : millis();
+  rtosLock();
+
+  // Đầu vào số nhanh: touch/PIR phải phản hồi nhanh hơn chu kỳ đọc cảm biến 1 giây
+  sys.gTouch = readTouch();
+  sys.gPir = readPIR();
+
+  // Đọc cảm biến định kỳ (DHT11 cần >= 1 giây giữa hai lần đọc)
+  if (now - sys.lastSensorRead >= SENSOR_INTERVAL) {
+    readAllSensors();
+    logSensors();   // mỗi giây một dòng ở mức DEBUG (activity 7)
+    sys.lastSensorRead = now;
+  }
+
+  // An toàn: bơm tuyệt đối không được chạy khô, ở MỌI chế độ (thủ công hay demo)
+  if (sys.gWater < (int)sys.waterThresholdLow && sys.relayState) setRelay(false);
+
+  // Logic tự động (tạm dừng khi demo của bài học đang chạy)
+  if (demoRunning()) {
+    updateDemo();
+    controlBreathe();   // giữ bước thở HD3 chạy liên tục trong lúc demo
+  } else {
+    controlPump();
+    controlFan();
+    controlLight();
+    controlRgb();
+    controlBreathe();
+    controlTouch();
+    controlAlerts();
+    controlWindmill();
+    controlFeed();
+  }
+
+  runExtras();
+
+  rtosUnlock();
+}
+
 void loop() {
   esp_task_wdt_reset();
   gLoopNow = millis();
+#ifdef SMARTFARM_TEST_HOOKS
   server.handleClient();
+#endif
 
+#ifdef SMARTFARM_TEST_HOOKS
   // ArduinoOTA.handle() đọc một gói UDP mỗi lần gọi. OTA không nhạy cảm với
   // độ trễ (bắt tay OTA mất hàng trăm ms) nên gọi mỗi OTA_HANDLE_INTERVAL là
   // quá đủ — tiết kiệm ~50 lần recvfrom mỗi giây, không ảnh hưởng gì.
@@ -422,8 +444,11 @@ void loop() {
     sLastOtaHandle = gLoopNow;
     ArduinoOTA.handle();
   }
+#endif
 
+#ifdef SMARTFARM_TEST_HOOKS
   manageWiFi();
+#endif
 
 #if defined(BLUETOOTH_ENABLED) && BLUETOOTH_ENABLED
   // Bluetooth serial command handling — không chặn: đọc từng byte có sẵn,
@@ -493,15 +518,15 @@ void loop() {
     return;
   }
 
+#ifdef SMARTFARM_TEST_HOOKS
   runAutomation();
 
-  // Cập nhật OLED: định kỳ mỗi OLED_INTERVAL, hoặc ngay khi có thay đổi
-  // trạng thái hiển thị (cờ oledDirty) — màn hình không phải chờ tới 2 giây.
   if (sys.oledDirty || (gLoopNow - sys.lastOledUpdate >= OLED_INTERVAL)) {
     updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
     sys.lastOledUpdate = gLoopNow;
     sys.oledDirty = false;
   }
+#endif
 
   // Tiết kiệm điện: sau cửa sổ thức (30 s) cho phép truy cập web, vào deep sleep
   // theo sleepSeconds rồi tự tỉnh dậy bằng timer / chân cảm ứng / PIR.

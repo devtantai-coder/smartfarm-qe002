@@ -1,9 +1,9 @@
-#include "globals.h"
-#include "logger.h"
-#include "sensors.h"
-#include "control.h"
-#include "demo.h"
-#include "oled.h"
+#include "../globals.h"
+#include "../logger.h"
+#include "../sensors.h"
+#include "../control.h"
+#include "../demo.h"
+#include "../oled.h"
 
 // Nhãn chỉ dùng ASCII: font mặc định SSD1306 không có dấu tiếng Việt
 static const char* weatherText() {
@@ -191,7 +191,7 @@ void updateOLED(float t, float h, int light, int soil, int water) {
       sIpStr[sizeof(sIpStr) - 1] = '\0';
     }
     display.print(F("IP:"));
-    display.print((const char*)sIpStr);
+    display.print(reinterpret_cast<const char*>(sIpStr));
   } else {
     display.print(F("WiFi: ---"));
   }

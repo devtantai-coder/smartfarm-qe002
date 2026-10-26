@@ -1,4 +1,4 @@
-#include "globals.h"
+#include "../globals.h"
 
 // ── Trạng thái toàn cục ──
 // Giá trị mặc định nằm ngay trong định nghĩa SystemState (globals.h);

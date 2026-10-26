@@ -4,4 +4,5 @@
 bool healthCheck();
 const char* healthStatus();
 void handleHealth();
+void handleCalibrate();
 #endif

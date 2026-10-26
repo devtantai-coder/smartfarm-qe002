@@ -222,7 +222,7 @@ static void primeSensors(int water) {
 // không còn con số 15 lặp lại rải rác trong các test.
 static const char *ALL_ROUTES[] = {
   "/", "/api", "/toggle", "/auto", "/rgb", "/servo", "/breathe", "/on", "/off",
-  "/windmill", "/feed", "/demo", "/threshold", "/wifi", "/favicon.ico", "/health"
+  "/windmill", "/feed", "/demo", "/threshold", "/wifi", "/favicon.ico", "/health", "/calibrate", "/metrics"
 };
 static const int ALL_ROUTE_COUNT = (int)(sizeof(ALL_ROUTES) / sizeof(ALL_ROUTES[0]));
 

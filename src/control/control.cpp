@@ -1,10 +1,16 @@
-#include "globals.h"
-#include "logger.h"
-#include "config.h"
-#include "actuators.h"
-#include "settings.h"
-#include "control.h"
-#include "hal.h"
+#include "../globals.h"
+#include "../logger.h"
+#include "../config.h"
+#include "../actuators.h"
+#include "../settings.h"
+#include "../control.h"
+#include "../hal.h"
+
+// ── Hằng số điều khiển (đặt tên rõ ràng thay vì "số ma thuật") ──
+static constexpr int LIGHT_HYSTERESIS = 50;   // biên dead-band quanh ngưỡng ánh sáng
+static constexpr int BREATHE_STEP    = 5;     // bước đổi độ sáng mỗi nhịp thở
+static constexpr int BREATHE_MAX     = 255;   // độ sáng tối đa (8 bit PWM)
+static constexpr int WINDMILL_STEP   = 6;     // bước quét servo mỗi nhịp (độ)
 
 // ── Trạng thái cảnh báo (log edge-triggered, không spam serial) ──
 static bool sWaterAlarm = false;
@@ -25,6 +31,7 @@ void controlPump() {
     return;
   }
 
+  if (!sys.sensorHealthy) return;
   if (!sys.pumpAuto) return;
 
   const float soilLow = sys.soilThresholdLow;
@@ -56,6 +63,8 @@ void controlFan() {
     return;
   }
 
+  if (!sys.sensorHealthy) return;
+
   const float tempHigh = sys.tempThresholdHigh;
   const float tempLow = sys.tempThresholdLow;
   // Chống ngưỡng bị đảo (sẽ làm relay đóng ngắt liên tục)
@@ -72,11 +81,12 @@ void controlFan() {
 // Blue LED dùng chung với hiệu ứng thở, PIR và điều khiển thủ công:
 // bỏ qua điều khiển tự động khi một trong số đó đang giữ LED, để tránh tranh nhau.
 void controlLight() {
+  if (!sys.sensorHealthy) return;
   if (!sys.lightAuto || sys.breatheLedState || sys.gPir) return;
   const int thr = sys.lightThreshold;
-  if (sys.gLight < (thr - 50) && !sys.blueLedState) {
-    setBlueLed(true);
-  } else if (sys.gLight > (thr + 50) && sys.blueLedState) {
+if (sys.gLight < (thr - LIGHT_HYSTERESIS) && !sys.blueLedState) {
+     setBlueLed(true);
+   } else if (sys.gLight > (thr + LIGHT_HYSTERESIS) && sys.blueLedState) {
     setBlueLed(false);
   }
 }
@@ -89,10 +99,11 @@ void controlLight() {
 // (255,0,255) thì màu đó trùng giá trị RGB của hoa văn — suy đoán kiểu cũ sẽ
 // tưởng hoa văn đang bật và không bật đèn tăng trưởng khi trời tối.
 void controlRgb() {
+  if (!sys.sensorHealthy) return;
   if (!sys.rgbAuto) return;
   const int thr = sys.lightThreshold;
-  bool isDark = sys.gLight < (thr - 50);
-  bool isBright = sys.gLight > (thr + 50);
+  bool isDark = sys.gLight < (thr - LIGHT_HYSTERESIS);
+  bool isBright = sys.gLight > (thr + LIGHT_HYSTERESIS);
   bool plantOn = rgbPlantPatternActive();
   bool rgbOff = (sys.rgbR == 0 && sys.rgbG == 0 && sys.rgbB == 0);
   if (isDark && !plantOn) {
@@ -116,9 +127,9 @@ void controlBreathe() {
   if (now - sys.lastBreatheUpdate < BREATHE_INTERVAL) return;
   sys.lastBreatheUpdate = now;
 
-  int16_t next = (int16_t)sys.breatheBrightness + (int16_t)sys.breatheDirection * 5;
-  if (next >= 255) {
-    next = 255;
+  int16_t next = (int16_t)sys.breatheBrightness + (int16_t)sys.breatheDirection * BREATHE_STEP;
+  if (next >= BREATHE_MAX) {
+    next = BREATHE_MAX;
     sys.breatheDirection = -1;
   } else if (next <= 0) {
     next = 0;
@@ -205,7 +216,7 @@ void controlWindmill() {
   unsigned long now = millis();
   if (now - sWindmillUpdate < WINDMILL_INTERVAL) return;
   sWindmillUpdate = now;
-  sWindmillAngle += sWindmillDir * 6;
+  sWindmillAngle += sWindmillDir * WINDMILL_STEP;
   if (sWindmillAngle >= WINDMILL_MAX_ANGLE) { sWindmillAngle = WINDMILL_MAX_ANGLE; sWindmillDir = -1; }
   if (sWindmillAngle <= WINDMILL_MIN_ANGLE) { sWindmillAngle = WINDMILL_MIN_ANGLE; sWindmillDir = 1;  }
   halServoWrite(sWindmillAngle);

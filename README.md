@@ -78,17 +78,18 @@ duan123/
 ├── SmartFarm.ino          # File chính (setup và loop - điểm bắt đầu)
 ├── README.md              # File hướng dẫn này
 ├── src/
-│   ├── config.h / config.cpp        # Hằng số cấu hình: chân GPIO, thời gian, cờ phần cứng
-│   ├── globals.h / globals.cpp      # SystemState (một struct chứa toàn bộ state) + đối tượng phần cứng
-│   ├── sensors.h / sensors.cpp      # Hàm đọc cảm biến
-│   ├── actuators.h / actuators.cpp  # Hàm điều khiển thiết bị (relay, đèn, RGB, servo)
-│   ├── settings.h / settings.cpp    # Lưu/tải cài đặt vào bộ nhớ flash ESP32
-│   ├── oled.h / oled.cpp            # Hiển thị màn hình OLED
-│   ├── webserver.h / webserver.cpp  # Web server và giao diện điều khiển từ điện thoại
-│   ├── wifi.h / wifi.cpp            # Quản lý kết nối và kết nối lại WiFi
-│   ├── logger.h / logger.cpp        # Hệ thống log có mốc thời gian, mã lỗi, debug menu
-│   ├── demo.h / demo.cpp            # Chế độ trình diễn lần lượt các hoạt động (HĐ2–HĐ12)
-│   └── control.h / control.cpp      # Logic tự động (bơm, đèn, RGB, chạm, báo động, servo)
+│   ├── *.h                          # Header công khai (config, globals, logger, ...)
+│   ├── core/                        # config.cpp, globals.cpp, logger.cpp, settings.cpp, rtos.cpp
+│   ├── hal/                         # hal.cpp
+│   ├── sensors/                     # sensors.cpp
+│   ├── actuators/                   # actuators.cpp
+│   ├── control/                     # control.cpp, demo.cpp, pid.cpp, softstart.cpp, calibration.cpp, anomaly.cpp
+│   ├── connectivity/                # wifi.cpp, webserver.cpp, mqtt.cpp, websocket.cpp, tls.cpp, ota.cpp
+│   ├── ui/                          # oled.cpp
+│   └── observability/               # metrics.cpp, health.cpp
+├── test/                            # Bộ test host (mock + fuzz)
+├── docs/                            # Tài liệu kiến trúc
+├── .github/workflows/tests.yml      # CI
 ├── Danh mục tổ chức hoạt động trải nghiệm STEM_STEAM.pdf
 └── Tài liệu.pdf
 ```

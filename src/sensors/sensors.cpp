@@ -1,7 +1,9 @@
-#include "globals.h"
-#include "logger.h"
-#include "sensors.h"
-#include "hal.h"
+#include "../globals.h"
+#include "../logger.h"
+#include "../sensors.h"
+#include "../hal.h"
+#include "../rtos.h"
+#include "../calibration.h"
 
 // ── Bộ đệm trung bình động ──
 static float sTempBuf[SENSOR_FILTER_SIZE] = {0};
@@ -16,8 +18,8 @@ static bool sBufFilled = false;
 static float sTempSum = 0.0f, sHumSum = 0.0f;
 static long  sLightSum = 0, sSoilSum = 0, sWaterSum = 0;
 
-float readTemperature() { return dht.readTemperature(); }
-float readHumidity()    { return dht.readHumidity(); }
+float readTemperature() { return calibrationApplyTemp(dht.readTemperature()); }
+float readHumidity()    { return calibrationApplyHum(dht.readHumidity()); }
 
 // Áp dụng các cờ INVERT_* từ config.h để hướng đã tài liệu hóa luôn
 // đúng: LDR sáng = cao, đất khô = thấp, nước đầy = cao.
@@ -25,13 +27,14 @@ static int normalizeAdc(int value, bool invert) {
   return invert ? (4095 - value) : value;
 }
 
-int   readLight()       { return normalizeAdc(halAnalogRead(LDR_PIN), INVERT_LIGHT); }
-int   readSoil()        { return normalizeAdc(halAnalogRead(SOIL_PIN), INVERT_SOIL); }
-int   readWater()       { return normalizeAdc(halAnalogRead(WATER_PIN), INVERT_WATER); }
+int   readLight()       { return (int)calibrationApplyLight(normalizeAdc(halAnalogRead(LDR_PIN), INVERT_LIGHT)); }
+int   readSoil()        { return (int)calibrationApplySoil(normalizeAdc(halAnalogRead(SOIL_PIN), INVERT_SOIL)); }
+int   readWater()       { return (int)calibrationApplyWater(normalizeAdc(halAnalogRead(WATER_PIN), INVERT_WATER)); }
 bool  readTouch()       { return halDigitalRead(TOUCH_PIN) == HIGH; }
 bool  readPIR()         { return halDigitalRead(PIR_PIN) == HIGH; }
 
 void readAllSensors() {
+  rtosLock();
   float t = readTemperature();
   float h = readHumidity();
 
@@ -94,6 +97,7 @@ void readAllSensors() {
   sys.gWater = (int)(sWaterSum / n);
   sys.gPir   = readPIR();
   sys.gTouch = readTouch();
+  rtosUnlock();
 }
 
 // ── Đoán thời tiết đơn giản từ ánh sáng + độ ẩm (bài 11) ──

@@ -5,4 +5,5 @@ void metricsInit();
 void metricsCollect();
 const char* metricsToJson();
 unsigned long metricsUptime();
+void handleMetrics();
 #endif

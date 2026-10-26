@@ -1,12 +1,12 @@
-#include "globals.h"
-#include "logger.h"
-#include "config.h"
-#include "settings.h"
-#include "actuators.h"
-#include "sensors.h"
-#include "control.h"
-#include "demo.h"
-#include "webserver.h"
+#include "../globals.h"
+#include "../logger.h"
+#include "../config.h"
+#include "../settings.h"
+#include "../actuators.h"
+#include "../sensors.h"
+#include "../control.h"
+#include "../demo.h"
+#include "../webserver.h"
 
 // ── Trang chủ (lưu trong flash, không copy heap mỗi request) ──
 static const char ROOT_HTML[] PROGMEM = R"rawliteral(

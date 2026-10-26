@@ -1,4 +1,4 @@
-#include "config.h"
+#include "../config.h"
 
 // Các giá trị cấu hình có thể thay đổi lúc chạy (WiFi, ngưỡng, mã bảo mật)
 // nằm trong SystemState — xem src/globals.h / globals.cpp.

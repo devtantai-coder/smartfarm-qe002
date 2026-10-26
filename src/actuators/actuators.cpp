@@ -1,7 +1,7 @@
-#include "globals.h"
-#include "logger.h"
-#include "actuators.h"
-#include "hal.h"
+#include "../globals.h"
+#include "../logger.h"
+#include "../actuators.h"
+#include "../hal.h"
 
 // Mọi hàm setter đều idempotent: không ghi lại / không spam log khi trạng thái
 // không đổi. Nhờ vậy controlAlerts()/controlLight() vẫn rẻ dù

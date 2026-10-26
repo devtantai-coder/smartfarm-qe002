@@ -147,3 +147,14 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 #ifndef BLUETOOTH_ENABLED
 #define BLUETOOTH_ENABLED 0
 #endif
+
+// ── Kết nối chuyên gia (mặc định tắt để tương thích kit) ──
+#ifndef TLS_ENABLED
+#define TLS_ENABLED 0
+#endif
+#ifndef MQTT_ENABLED
+#define MQTT_ENABLED 0
+#endif
+#ifndef WEBSOCKET_ENABLED
+#define WEBSOCKET_ENABLED 0
+#endif

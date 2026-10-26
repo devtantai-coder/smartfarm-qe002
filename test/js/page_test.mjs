@@ -1,6 +1,6 @@
 // Kiểm thử JavaScript của trang web (chạy bằng Node).
 //
-// Trang web nằm inline trong src/webserver.cpp (ROOT_HTML) — file này TRÍCH
+// Trang web nằm inline trong src/connectivity/webserver.cpp (ROOT_HTML) — file này TRÍCH
 // đúng đoạn <script> đó ra để kiểm thử, không chép lại mã: một nguồn sự thật
 // duy nhất, đúng như bộ test C++ với firmware.
 //
@@ -13,9 +13,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
 
 // ── Trích JavaScript từ trang web thật ──
-const src = fs.readFileSync(path.join(root, 'src', 'webserver.cpp'), 'utf8');
+const src = fs.readFileSync(path.join(root, 'src', 'connectivity', 'webserver.cpp'), 'utf8');
 const htmlStart = src.indexOf('static const char ROOT_HTML[]');
-if (htmlStart < 0) throw new Error('không tìm thấy ROOT_HTML trong src/webserver.cpp');
+if (htmlStart < 0) throw new Error('không tìm thấy ROOT_HTML trong src/connectivity/webserver.cpp');
 const htmlEnd = src.indexOf(')rawliteral', htmlStart);
 const html = src.slice(htmlStart, htmlEnd);
 const s1 = html.indexOf('<script>');

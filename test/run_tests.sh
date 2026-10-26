@@ -26,31 +26,31 @@ BUILD="$TEST_DIR/build"
 mkdir -p "$BUILD"
 
 SRC=(
-  "$ROOT/src/actuators.cpp"
-  "$ROOT/src/config.cpp"
-  "$ROOT/src/control.cpp"
-  "$ROOT/src/demo.cpp"
-  "$ROOT/src/globals.cpp"
-  "$ROOT/src/hal.cpp"
-  "$ROOT/src/rtos.cpp"
-  "$ROOT/src/calibration.cpp"
-  "$ROOT/src/anomaly.cpp"
-  "$ROOT/src/pid.cpp"
-  "$ROOT/src/softstart.cpp"
-  "$ROOT/src/mqtt.cpp"
-  "$ROOT/src/websocket.cpp"
-  "$ROOT/src/tls.cpp"
-  "$ROOT/src/ota.cpp"
-  "$ROOT/src/metrics.cpp"
-  "$ROOT/src/health.cpp"
-  "$ROOT/src/logger.cpp"
-  "$ROOT/src/oled.cpp"
-  "$ROOT/src/sensors.cpp"
-  "$ROOT/src/settings.cpp"
-  "$ROOT/src/webserver.cpp"
-  "$ROOT/src/wifi.cpp"
+  "$ROOT/src/actuators/actuators.cpp"
+  "$ROOT/src/core/config.cpp"
+  "$ROOT/src/control/control.cpp"
+  "$ROOT/src/control/demo.cpp"
+  "$ROOT/src/core/globals.cpp"
+  "$ROOT/src/hal/hal.cpp"
+  "$ROOT/src/core/rtos.cpp"
+  "$ROOT/src/control/calibration.cpp"
+  "$ROOT/src/control/anomaly.cpp"
+  "$ROOT/src/control/pid.cpp"
+  "$ROOT/src/control/softstart.cpp"
+  "$ROOT/src/connectivity/mqtt.cpp"
+  "$ROOT/src/connectivity/websocket.cpp"
+  "$ROOT/src/connectivity/tls.cpp"
+  "$ROOT/src/connectivity/ota.cpp"
+  "$ROOT/src/observability/metrics.cpp"
+  "$ROOT/src/observability/health.cpp"
+  "$ROOT/src/core/logger.cpp"
+  "$ROOT/src/ui/oled.cpp"
+  "$ROOT/src/sensors/sensors.cpp"
+  "$ROOT/src/core/settings.cpp"
+  "$ROOT/src/connectivity/webserver.cpp"
+  "$ROOT/src/connectivity/wifi.cpp"
 )
-FLAGS=(-std=gnu++17 -Wall -Wextra -Wshadow -Wundef -DSMARTFARM_TEST_HOOKS -I"$MOCKS" -I"$ROOT/src")
+FLAGS=(-std=gnu++17 -Wall -Wextra -Wshadow -Wundef -DSMARTFARM_TEST_HOOKS -I"$MOCKS" -I"$ROOT/src" -I"$ROOT/src/core" -I"$ROOT/src/hal" -I"$ROOT/src/sensors" -I"$ROOT/src/actuators" -I"$ROOT/src/control" -I"$ROOT/src/connectivity" -I"$ROOT/src/ui" -I"$ROOT/src/observability")
 FILES=("$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}" -x c++ "$ROOT/SmartFarm.ino")
 
 MODE="${1:---full}"
@@ -138,7 +138,7 @@ run_coverage() {
 
   echo "=== Coverage (production code: src/*.cpp + SmartFarm.ino) ==="
   ( cd "$cov"
-    for f in "$ROOT/src/"*.cpp "$ROOT/SmartFarm.ino"; do
+    for f in $(find "$ROOT/src" -name "*.cpp") "$ROOT/SmartFarm.ino"; do
       gcov -b -o "$cov" "$f" > /dev/null 2>&1 || true
     done )
 

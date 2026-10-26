@@ -4,4 +4,5 @@
 void websocketInit();
 void websocketLoop();
 void websocketBroadcast(const char* msg);
+unsigned long websocketBroadcastCount();
 #endif

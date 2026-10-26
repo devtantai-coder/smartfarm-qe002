@@ -4,7 +4,7 @@
 
 class BluetoothSerial {
 public:
-    bool begin(const char* name = nullptr) { return true; }
+    bool begin(const char* name = nullptr) { (void)name; return true; }
     bool begin(String, bool, bool) { return true; }
     bool begin(unsigned long) { return true; }
     void end() {}

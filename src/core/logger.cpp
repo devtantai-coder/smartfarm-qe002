@@ -1,8 +1,8 @@
-#include "logger.h"
-#include "globals.h"
-#include "sensors.h"
-#include "actuators.h"
-#include "oled.h"
+#include "../logger.h"
+#include "../globals.h"
+#include "../sensors.h"
+#include "../actuators.h"
+#include "../oled.h"
 
 // ── Các cờ debug theo module ──
 bool dbgSensors = false, dbgActuators = false, dbgControl = false;

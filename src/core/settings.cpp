@@ -1,7 +1,7 @@
-#include "globals.h"
-#include "logger.h"
-#include "config.h"
-#include "settings.h"
+#include "../globals.h"
+#include "../logger.h"
+#include "../config.h"
+#include "../settings.h"
 
 // ── Bản chụp giá trị đã ghi flash ──
 // NVS chỉ chịu được số lần ghi hữu hạn; UI có thể bấm nút liên tục nên

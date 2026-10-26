@@ -1,5 +1,5 @@
-#include "hal.h"
-#include "globals.h"
+#include "../hal.h"
+#include "../globals.h"
 
 void halPinModeOutput(uint8_t pin) { pinMode(pin, OUTPUT); }
 void halDigitalWrite(uint8_t pin, bool high) { digitalWrite(pin, high ? HIGH : LOW); }

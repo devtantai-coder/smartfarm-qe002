@@ -1,6 +1,6 @@
-#include "softstart.h"
-#include "globals.h"
-#include "actuators.h"
+#include "../softstart.h"
+#include "../globals.h"
+#include "../actuators.h"
 
 static bool sActive = false;
 static unsigned long sStart = 0;

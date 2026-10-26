@@ -81,6 +81,7 @@ void mockSerialPrintOther();
 
 struct SerialStub {
   void begin(unsigned long) {}
+  void flush() {}
   int available();
   int read();
   void print(char c) { char b[2] = {c, 0}; mockSerialWriteStr(b); }
@@ -140,5 +141,6 @@ extern TwoWire Wire;
 class ESPClass {
 public:
   static void restart() {}
+  unsigned long getFreeHeap() { return 0; }
 };
 extern ESPClass ESP;

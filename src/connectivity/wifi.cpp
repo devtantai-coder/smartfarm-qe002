@@ -1,7 +1,7 @@
-#include "globals.h"
-#include "logger.h"
-#include "config.h"
-#include "wifi.h"
+#include "../globals.h"
+#include "../logger.h"
+#include "../config.h"
+#include "../wifi.h"
 
 // Kết nối lại cho MỌI trạng thái mất kết nối (disconnected, idle, scan, failed, không có SSID...)
 // và chỉ ghi log một lần mỗi lần mất kết nối để tránh spam serial.
@@ -74,3 +74,8 @@ void testResetWifiStatics() {
   sStatusValid = false;      // ép hỏi lại trạng thái ở lần gọi kế tiếp
 }
 #endif
+
+bool wifiConnected() {
+  // Use cached status to avoid hammering WiFi.status() driver.
+  return wifiStatusCached(millis()) == WL_CONNECTED;
+}

@@ -523,9 +523,12 @@ extern "C" UBaseType_t uxQueueMessagesWaiting(QueueHandle_t xQueue) {
 }
 
 extern "C" SemaphoreHandle_t xSemaphoreCreateMutex(void) { return (SemaphoreHandle_t)new int(1); }
+extern "C" SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) { return (SemaphoreHandle_t)new int(1); }
 extern "C" SemaphoreHandle_t xSemaphoreCreateBinary(void) { return (SemaphoreHandle_t)new int(0); }
 extern "C" BaseType_t xSemaphoreTake(SemaphoreHandle_t, TickType_t) { return pdTRUE; }
+extern "C" BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t, TickType_t) { return pdTRUE; }
 extern "C" BaseType_t xSemaphoreGive(SemaphoreHandle_t) { return pdTRUE; }
+extern "C" BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t) { return pdTRUE; }
 
 extern "C" EventGroupHandle_t xEventGroupCreate(void) { return (EventGroupHandle_t)new MockEventGroup{0}; }
 extern "C" EventBits_t xEventGroupSetBits(EventGroupHandle_t xEventGroup, const EventBits_t uxBitsToSet) {
