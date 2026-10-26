@@ -178,11 +178,20 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   display.print(F(" P:"));
   display.print(sys.relayState ? F("ON") : F("OFF"));
 
-  // Dòng 6: IP WiFi
+  // Dòng 6: IP WiFi — cache chuỗi IP để không cấp phát String mỗi lần vẽ.
   display.setCursor(0, 48);
   if (WiFi.status() == WL_CONNECTED) {
+    static IPAddress sCachedIp;
+    static char sIpStr[16] = {0};
+    IPAddress ip = WiFi.localIP();
+    if (sIpStr[0] == '\0' || ip != sCachedIp) {
+      sCachedIp = ip;
+      String ts = ip.toString();
+      strncpy(sIpStr, ts.c_str(), sizeof(sIpStr) - 1);
+      sIpStr[sizeof(sIpStr) - 1] = '\0';
+    }
     display.print(F("IP:"));
-    display.print(WiFi.localIP());
+    display.print((const char*)sIpStr);
   } else {
     display.print(F("WiFi: ---"));
   }
@@ -218,6 +227,10 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   for (uint8_t p = 0; p < pages; p++) {
     const uint8_t* cur  = frame + (size_t)p * SCREEN_WIDTH;
     const uint8_t* prev = sPrevFrame + (size_t)p * SCREEN_WIDTH;
+
+    // So sánh nguyên page bằng memcmp trước: page không đổi thì bỏ qua ngay,
+    // tránh quét 128 cột cho mỗi page không thay đổi.
+    if (memcmp(cur, prev, SCREEN_WIDTH) == 0) continue;
 
     uint8_t c0 = 0xFF, c1 = 0;
     for (uint8_t c = 0; c < SCREEN_WIDTH; c++) {

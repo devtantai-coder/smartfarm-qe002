@@ -31,6 +31,18 @@ SRC=(
   "$ROOT/src/control.cpp"
   "$ROOT/src/demo.cpp"
   "$ROOT/src/globals.cpp"
+  "$ROOT/src/hal.cpp"
+  "$ROOT/src/rtos.cpp"
+  "$ROOT/src/calibration.cpp"
+  "$ROOT/src/anomaly.cpp"
+  "$ROOT/src/pid.cpp"
+  "$ROOT/src/softstart.cpp"
+  "$ROOT/src/mqtt.cpp"
+  "$ROOT/src/websocket.cpp"
+  "$ROOT/src/tls.cpp"
+  "$ROOT/src/ota.cpp"
+  "$ROOT/src/metrics.cpp"
+  "$ROOT/src/health.cpp"
   "$ROOT/src/logger.cpp"
   "$ROOT/src/oled.cpp"
   "$ROOT/src/sensors.cpp"
@@ -137,8 +149,9 @@ run_coverage() {
     [ -e "$gc" ] || continue
     base="$(basename "$gc" .gcov)"
     case "$base" in
-      actuators.cpp|config.cpp|control.cpp|demo.cpp|globals.cpp|logger.cpp|\
-      oled.cpp|sensors.cpp|settings.cpp|webserver.cpp|wifi.cpp|SmartFarm.ino) ;;
+      actuators.cpp|anomaly.cpp|calibration.cpp|config.cpp|control.cpp|demo.cpp|globals.cpp|health.cpp|\
+      hal.cpp|logger.cpp|metrics.cpp|mqtt.cpp|oled.cpp|ota.cpp|pid.cpp|rtos.cpp|sensors.cpp|\
+      settings.cpp|softstart.cpp|tls.cpp|webserver.cpp|websocket.cpp|wifi.cpp|SmartFarm.ino) ;;
       *) continue ;;
     esac
     case "$base" in

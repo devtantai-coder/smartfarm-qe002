@@ -61,6 +61,20 @@ struct SystemState {
   uint8_t sensorFailCount = 0;
   bool sensorHealthy = true;
 
+  // Calibration coefficients
+  float calTempOffset = 0.0f, calTempGain = 1.0f;
+  float calHumGain = 1.0f;
+  int calLightOffset = 0, calSoilOffset = 0, calWaterOffset = 0;
+
+  // PID state for fan
+  float pidKp = 1.0f, pidKi = 0.0f, pidKd = 0.0f;
+  float pidIntegral = 0.0f, pidPrevError = 0.0f;
+  unsigned long pidLastTime = 0;
+
+  // Anomaly scores
+  float anomalyTemp = 0.0f, anomalyHum = 0.0f;
+  bool sensorHealthyTemp = true, sensorHealthyHum = true;
+
   // Cờ "cần vẽ lại OLED ngay": đặt khi trạng thái hiển thị trên màn hình vừa
   // đổi (đang quay cối, đang cho ăn, bước demo mới) để màn hình cập nhật
   // ngay ở vòng loop kế tiếp thay vì chờ tới lần vẽ định kỳ 2 giây.

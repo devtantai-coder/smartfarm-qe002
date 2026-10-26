@@ -4,6 +4,7 @@
 #include "actuators.h"
 #include "settings.h"
 #include "control.h"
+#include "hal.h"
 
 // ── Trạng thái cảnh báo (log edge-triggered, không spam serial) ──
 static bool sWaterAlarm = false;
@@ -15,7 +16,8 @@ static bool sPrevTouch = false;   // trạng thái chạm lần trước (chốn
 void controlPump() {
   // An toàn là trên hết, kể cả chế độ thủ công (bài 8): chạy bơm khô
   // sẽ làm hỏng bơm, nên nước thấp luôn buộc tắt bơm.
-  if (sys.gWater < (int)sys.waterThresholdLow) {
+  const int waterLow = (int)sys.waterThresholdLow;
+  if (sys.gWater < waterLow) {
     if (sys.relayState) {
       setRelay(false);
       LOG_ERROR_CODE(201, "Low water, pump OFF");
@@ -25,14 +27,16 @@ void controlPump() {
 
   if (!sys.pumpAuto) return;
 
+  const float soilLow = sys.soilThresholdLow;
+  const float soilHigh = sys.soilThresholdHigh;
   // Chống ngưỡng bị đảo (sẽ làm relay đóng ngắt liên tục)
-  if (sys.soilThresholdHigh <= sys.soilThresholdLow) return;
+  if (soilHigh <= soilLow) return;
 
   // Hysteresis: bật khi dưới ngưỡng thấp, tắt khi trên ngưỡng cao
-  if (sys.gSoil < (int)sys.soilThresholdLow && !sys.relayState) {
+  if (sys.gSoil < (int)soilLow && !sys.relayState) {
     setRelay(true);
     LOG_INFO("Soil dry, pump ON [202]");
-  } else if (sys.gSoil > (int)sys.soilThresholdHigh && sys.relayState) {
+  } else if (sys.gSoil > (int)soilHigh && sys.relayState) {
     setRelay(false);
     LOG_INFO("Soil wet, pump OFF [203]");
   }
@@ -42,8 +46,9 @@ void controlPump() {
 void controlFan() {
   if (!sys.fanAuto) return;
 
+  const int waterLow = (int)sys.waterThresholdLow;
   // An toàn nước: nếu nước cạn, tắt quạt (nếu quạt liên quan đến nước)
-  if (sys.gWater < (int)sys.waterThresholdLow) {
+  if (sys.gWater < waterLow) {
     if (sys.fanState) {
       setFan(false);
       LOG_WARN("Low water, fan OFF");
@@ -51,12 +56,14 @@ void controlFan() {
     return;
   }
 
+  const float tempHigh = sys.tempThresholdHigh;
+  const float tempLow = sys.tempThresholdLow;
   // Chống ngưỡng bị đảo (sẽ làm relay đóng ngắt liên tục)
-  if (sys.tempThresholdHigh <= sys.tempThresholdLow) return;
+  if (tempHigh <= tempLow) return;
 
-  if (sys.gTemp > sys.tempThresholdHigh && !sys.fanState) {
+  if (sys.gTemp > tempHigh && !sys.fanState) {
     setFan(true);
-  } else if (sys.gTemp < sys.tempThresholdLow && sys.fanState) {
+  } else if (sys.gTemp < tempLow && sys.fanState) {
     setFan(false);
   }
 }
@@ -66,9 +73,10 @@ void controlFan() {
 // bỏ qua điều khiển tự động khi một trong số đó đang giữ LED, để tránh tranh nhau.
 void controlLight() {
   if (!sys.lightAuto || sys.breatheLedState || sys.gPir) return;
-  if (sys.gLight < (sys.lightThreshold - 50) && !sys.blueLedState) {
+  const int thr = sys.lightThreshold;
+  if (sys.gLight < (thr - 50) && !sys.blueLedState) {
     setBlueLed(true);
-  } else if (sys.gLight > (sys.lightThreshold + 50) && sys.blueLedState) {
+  } else if (sys.gLight > (thr + 50) && sys.blueLedState) {
     setBlueLed(false);
   }
 }
@@ -82,8 +90,9 @@ void controlLight() {
 // tưởng hoa văn đang bật và không bật đèn tăng trưởng khi trời tối.
 void controlRgb() {
   if (!sys.rgbAuto) return;
-  bool isDark = sys.gLight < (sys.lightThreshold - 50);
-  bool isBright = sys.gLight > (sys.lightThreshold + 50);
+  const int thr = sys.lightThreshold;
+  bool isDark = sys.gLight < (thr - 50);
+  bool isBright = sys.gLight > (thr + 50);
   bool plantOn = rgbPlantPatternActive();
   bool rgbOff = (sys.rgbR == 0 && sys.rgbG == 0 && sys.rgbB == 0);
   if (isDark && !plantOn) {
@@ -138,7 +147,8 @@ void controlTouch() {
 
 // ── Cảnh báo: buzzer liên tục khi nước thấp (ưu tiên) + đèn đêm PIR ──
 void controlAlerts() {
-  if (sys.gWater < (int)sys.waterThresholdLow) {
+  const int waterLow = (int)sys.waterThresholdLow;
+  if (sys.gWater < waterLow) {
     setBuzzer(true);
     if (!sWaterAlarm) {
       sWaterAlarm = true;
@@ -185,7 +195,7 @@ void setWindmill(bool on) {
     sWindmillDir = 1;
     sWindmillUpdate = 0;
   } else {
-    servo.write(WINDMILL_MIN_ANGLE);
+    halServoWrite(WINDMILL_MIN_ANGLE);
   }
   LOG_INFO(on ? "Windmill: ON" : "Windmill: OFF");
 }
@@ -198,7 +208,7 @@ void controlWindmill() {
   sWindmillAngle += sWindmillDir * 6;
   if (sWindmillAngle >= WINDMILL_MAX_ANGLE) { sWindmillAngle = WINDMILL_MAX_ANGLE; sWindmillDir = -1; }
   if (sWindmillAngle <= WINDMILL_MIN_ANGLE) { sWindmillAngle = WINDMILL_MIN_ANGLE; sWindmillDir = 1;  }
-  servo.write(sWindmillAngle);
+  halServoWrite(sWindmillAngle);
 }
 
 // ── Cửa cho ăn (bài 10): servo mở bát trong FEED_DURATION rồi đóng lại ──
@@ -210,7 +220,7 @@ void startFeed() {
   sys.oledDirty = true;          // dòng trạng thái OLED đổi ("Cho an...")
   sFeedActive = true;
   sFeedStart = millis();
-  servo.write(FEED_OPEN_ANGLE);   // cửa mở
+  halServoWrite(FEED_OPEN_ANGLE);   // cửa mở
   LOG_INFO("Feed: gate open");
 }
 
@@ -220,7 +230,7 @@ void stopFeed() {
   sys.oledDirty = true;          // dòng trạng thái OLED về lại
   // Đóng cửa máng ăn: servo dùng chung với cối xay gió nên nếu chỉ ngừng
   // mà không đóng lại, cửa có thể bị kẹt mở khi servo chạy sang mục khác.
-  servo.write(FEED_CLOSE_ANGLE);
+  halServoWrite(FEED_CLOSE_ANGLE);
 }
 
 void controlFeed() {
@@ -228,7 +238,7 @@ void controlFeed() {
   if (millis() - sFeedStart >= FEED_DURATION) {
     sFeedActive = false;
     sys.oledDirty = true;
-    servo.write(FEED_CLOSE_ANGLE);  // cửa đóng
+    halServoWrite(FEED_CLOSE_ANGLE);  // cửa đóng
     LOG_INFO("Feed: gate closed");
   }
 }

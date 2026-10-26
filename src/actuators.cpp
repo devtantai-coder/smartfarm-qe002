@@ -1,6 +1,7 @@
 #include "globals.h"
 #include "logger.h"
 #include "actuators.h"
+#include "hal.h"
 
 // Mọi hàm setter đều idempotent: không ghi lại / không spam log khi trạng thái
 // không đổi. Nhờ vậy controlAlerts()/controlLight() vẫn rẻ dù
@@ -11,7 +12,7 @@ void setRelay(bool on) {
   sys.relayState = on;
   sys.oledDirty = true;
   bool level = RELAY_ACTIVE_LOW ? !on : on;
-  digitalWrite(RELAY_PIN, level ? HIGH : LOW);
+  halDigitalWrite(RELAY_PIN, level);
   LOG_INFO(on ? "Pump: ON" : "Pump: OFF");
 }
 
@@ -27,7 +28,7 @@ void setBuzzer(bool on) {
   if (on) tone(BUZZER_PIN, BUZZER_TONE_HZ);
   else    noTone(BUZZER_PIN);
 #else
-  digitalWrite(BUZZER_PIN, on ? HIGH : LOW);
+  halDigitalWrite(BUZZER_PIN, on);
 #endif
   if (on) LOG_INFO("Buzzer: ON");
 }
@@ -36,7 +37,7 @@ void setFan(bool on) {
   if (sys.fanState == on) return;
   sys.fanState = on;
   bool level = FAN_ACTIVE_LOW ? !on : on;
-  digitalWrite(FAN_PIN, level ? HIGH : LOW);
+  halDigitalWrite(FAN_PIN, level);
   LOG_INFO(on ? "Fan: ON" : "Fan: OFF");
 }
 

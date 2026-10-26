@@ -3,6 +3,7 @@
 #include "actuators.h"
 #include "control.h"
 #include "demo.h"
+#include "hal.h"
 
 // Trình diễn không chặn các bài của kit (2-12). Khi demo chạy,
 // loop() chính tạm dừng tự động hóa thường để không tranh chấp chân.
@@ -65,7 +66,7 @@ static void demoAction(DemoAction a) {
     case DA_PLANT_ON:    setRgbPlant(); break;
     case DA_RGB_OFF:     setRgb(0, 0, 0); break;
     case DA_WINDMILL:    setWindmill(true); break;
-    case DA_SERVO0:      setWindmill(false); servo.write(WINDMILL_MIN_ANGLE); stopFeed(); break;
+    case DA_SERVO0:      setWindmill(false); halServoWrite(WINDMILL_MIN_ANGLE); stopFeed(); break;
     case DA_FEED:        startFeed(); break;
     default: break;
   }
@@ -80,7 +81,7 @@ void startDemo() {
   if (sRunning) return;
   setWindmill(false);
   stopFeed();
-  servo.write(FEED_CLOSE_ANGLE);   // cho ăn dở phải đóng cửa trước khi demo tiếp quản servo
+  halServoWrite(FEED_CLOSE_ANGLE);   // cho ăn dở phải đóng cửa trước khi demo tiếp quản servo
   sRunning = true;
   sStep = 0;
   sStepStart = millis();
@@ -102,7 +103,7 @@ void updateDemo() {
     int phase = (int)(elapsed % 2000);
     int angle = WINDMILL_MIN_ANGLE + ((phase < 1000) ? (phase * span) / 1000
                                                      : ((2000 - phase) * span) / 1000);
-    servo.write(angle);
+    halServoWrite(angle);
   }
 
   if (elapsed < STEPS[sStep].ms) return;
@@ -119,7 +120,7 @@ void updateDemo() {
     setRelay(false);
     setBuzzer(false);
     setRgb(0, 0, 0);
-    servo.write(WINDMILL_MIN_ANGLE);
+    halServoWrite(WINDMILL_MIN_ANGLE);
     stopFeed();
     if (sys.breatheAuto) setBreatheLed(true);   // khôi phục chế độ thở đã bật trước đó (bài 3)
     LOG_INFO("===== DEMO DONE =====");

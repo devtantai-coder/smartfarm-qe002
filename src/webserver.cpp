@@ -14,7 +14,7 @@ static const char ROOT_HTML[] PROGMEM = R"rawliteral(
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">\n<meta name="theme-color" content="#2e7d32">
 <meta name="referrer" content="no-referrer">
 <title>Smart Farm IoT</title>
 <!-- Font Awesome tải KHÔNG chặn hiển thị: thiết bị thường chỉ có mạng nội
@@ -68,6 +68,14 @@ header h1 span{color:var(--primary);font-weight:800}
 .status-item{flex:1;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
 .refresh{font-size:11px;color:var(--muted);text-align:center;margin-top:10px}
 @media(max-width:600px){body{padding:16px}header{flex-direction:column;align-items:flex-start;gap:8px}.ip-badge{margin-left:0;margin-top:6px}}
+/* --- responsive & motion polish --- */
+@media (max-width:640px){body{padding:12px} .grid{grid-template-columns:1fr;gap:12px} .controls{grid-template-columns:1fr;gap:12px} .btn{min-height:44px;font-size:14px} header h1{font-size:20px}}
+.btn{transition:transform .12s ease,box-shadow .12s ease,background .12s ease}
+.btn:active{transform:scale(.97)}
+.card{transition:box-shadow .2s ease,transform .2s ease}
+@media (hover:hover){.card:hover{box-shadow:0 10px 24px -6px rgba(0,0,0,.12)}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.ip-badge{backdrop-filter:blur(6px)}
 </style>
 </head>
 <body>
@@ -291,9 +299,9 @@ fetchData();
 //    token qua header X-Auth-Token; ?token= vẫn chấp nhận cho client tự viết.
 //    Trang chủ cũng đọc ?token= một lần rồi tự gửi bằng header, không để
 //    token dính vào URL các lệnh phía sau.
-static bool sameOriginCStr(const char* url, const char* origin) {
+static bool sameOriginCStr(const char* url, const char* origin, size_t olen) {
   if (url == nullptr || url[0] == '\0') return true;
-  size_t olen = strlen(origin);
+  if (olen == 0) return true;
   if (strncmp(url, origin, olen) != 0) return false;
   char c = url[olen];
   return c == '\0' || c == '/' || c == ':' || c == '?';
@@ -309,13 +317,14 @@ static bool secretMatches(const char* a, const char* b) {
 
 // Tiền tố nguồn của thiết bị ("http://<ip>") chỉ đổi khi IP đổi; nhớ lại để
 // mỗi request của trang web không phải cấp phát String + snprintf.
+static size_t sMeLen = 0;
 static const char* localOriginCached() {
   static IPAddress sCachedIp;
   static char sMe[64] = {0};
   IPAddress ip = WiFi.localIP();
   if (sMe[0] == '\0' || ip != sCachedIp) {
     sCachedIp = ip;
-    snprintf(sMe, sizeof(sMe), "http://%s", ip.toString().c_str());
+    sMeLen = (size_t)snprintf(sMe, sizeof(sMe), "http://%s", ip.toString().c_str());
   }
   return sMe;
 }
@@ -333,12 +342,13 @@ static bool checkSameOrigin() {
   }
 
   const char* me = localOriginCached();
+  const size_t meLen = sMeLen ? sMeLen : strlen(me);
 
-  if (origin.length() > 0 && !sameOriginCStr(origin.c_str(), me)) {
+  if (origin.length() > 0 && !sameOriginCStr(origin.c_str(), me, meLen)) {
     server.send(403, "text/plain", "forbidden");
     return false;
   }
-  if (referer.length() > 0 && !sameOriginCStr(referer.c_str(), me)) {
+  if (referer.length() > 0 && !sameOriginCStr(referer.c_str(), me, meLen)) {
     server.send(403, "text/plain", "forbidden");
     return false;
   }
@@ -351,19 +361,13 @@ static bool checkSameOrigin() {
 
 static bool checkToken() {
   if (sys.webToken[0] == '\0') return true;
-  char token[64] = {0};
-  // Đọc mỗi nguồn token ĐÚNG MỘT lần: WebServer cấp phát một String mới cho
-  // mỗi lần đọc (và cả cho tham số const String&), nên gọi hasHeader() rồi
-  // header() sẽ cấp phát 3 lần cho cùng một giá trị.
+  // Đọc mỗi nguồn token ĐÚNG MỘT lần; so sánh trực tiếp con trỏ, tránh
+  // copy vào buffer trung gian (tiết kiệm cấp phát + strncpy).
   const String hdr = server.header("X-Auth-Token");
-  if (hdr.length() > 0) {
-    strncpy(token, hdr.c_str(), sizeof(token) - 1);
-  } else {
-    const String q = server.arg("token");
-    if (q.length() > 0) strncpy(token, q.c_str(), sizeof(token) - 1);
-  }
-  token[sizeof(token) - 1] = '\0';
-  if (!secretMatches(token, sys.webToken)) {
+  const String q = (hdr.length() > 0) ? String() : server.arg("token");
+  const char* provided = (hdr.length() > 0) ? hdr.c_str()
+                      : (q.length() > 0) ? q.c_str() : "";
+  if (!secretMatches(provided, sys.webToken)) {
     server.send(401, "text/plain", "unauthorized");
     return false;
   }
@@ -459,7 +463,8 @@ void handleApi() {
   // nhận String nên sẽ copy ~400 byte sang heap mỗi lần /api được gọi (2 giây
   // một lần khi mở trang). setContentLength + sendContent giữ nguyên header
   // Content-Length mà không cấp phát thêm.
-  size_t len = strlen(buf);
+  // snprintf đã trả số byte cần (n); dùng lại thay vì strlen() quét lại buffer.
+  size_t len = (size_t)n;
   server.setContentLength(len);
   server.send(200, "application/json", "");
   server.sendContent(buf, len);
@@ -489,9 +494,8 @@ static bool floatArg(const char* name, float* out) {
 // ── Bật/tắt thiết bị (thao tác thủ công sẽ tắt chế độ tự động tương ứng) ──
 void handleToggle() {
   if (!guardWeb()) return;
-  char idBuf[16] = {0};
-  strncpy(idBuf, server.arg("id").c_str(), sizeof(idBuf) - 1);
-  const char* id = idBuf;
+  const String idArg = server.arg("id");
+  const char* id = idArg.c_str();
   if (strcmp(id, "pump") == 0) {
     setPumpAuto(false);
     setRelay(!sys.relayState);
@@ -516,9 +520,8 @@ void handleToggle() {
 // ── Chế độ tự động ──
 void handleAuto() {
   if (!guardWeb()) return;
-  char idBuf[16] = {0};
-  strncpy(idBuf, server.arg("id").c_str(), sizeof(idBuf) - 1);
-  const char* id = idBuf;
+  const String idArg = server.arg("id");
+  const char* id = idArg.c_str();
   bool on = server.arg("on") == "true";
   if (strcmp(id, "pump") == 0) setPumpAuto(on);
   else if (strcmp(id, "light") == 0) setLightAuto(on);

@@ -46,6 +46,7 @@ void logMessage(LogLevel level, const char* func, int line, const char* msg) {
   ensureInit();
   char buf[192];
   size_t n = formatPrefix(buf, sizeof(buf), level, func, line);
+  // Một lần snprintf thay vì hai: prefix + thông điệp trong cùng buffer.
   snprintf(buf + n, sizeof(buf) - n, " -> %s\n", msg);
   Serial.print(buf);
 }

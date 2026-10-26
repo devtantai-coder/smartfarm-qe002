@@ -1,3 +1,4 @@
+#include "rtos.h"
 /*
  * SmartFarm.ino - QE002 ACEBOTT IoT Smart Farm
  * Điểm bắt đầu: setup() + loop()
@@ -23,6 +24,18 @@
 #include "src/wifi.h"
 #include "src/webserver.h"
 #include "src/demo.h"
+#include "src/hal.h"
+#include "src/rtos.h"
+#include "src/calibration.h"
+#include "src/anomaly.h"
+#include "src/pid.h"
+#include "src/softstart.h"
+#include "src/mqtt.h"
+#include "src/websocket.h"
+#include "src/tls.h"
+#include "src/ota.h"
+#include "src/metrics.h"
+#include "src/health.h"
 #ifndef SMARTFARM_TEST_HOOKS
 #include <esp_sleep.h>
 #endif
@@ -40,6 +53,9 @@ static constexpr uint32_t WDT_TIMEOUT_MS = 30000;
 // thay vì delay().
 static bool sRestartArmed = false;
 static unsigned long sRestartMs = 0;
+// Thời điểm bắt đầu vòng loop hiện tại (cache millis() để runAutomation và các
+// xử lý trong loop không gọi millis() nhiều lần).
+static unsigned long gLoopNow = 0;
 
 static void handleFavicon() {
   server.send(204, "text/plain", "");
@@ -77,8 +93,60 @@ static void handleDebugCmd(char cmd) {
   if (cmd != '0') printDebugMenu();
 }
 
+
+#if defined(BLUETOOTH_ENABLED) && BLUETOOTH_ENABLED
+// Xử lý một lệnh Bluetooth hoàn chỉnh. Tách riêng để vòng loop không bị
+// readStringUntil() chặn cho đến khi có '\n' (có thể tới timeout 1 s).
+static void processBluetoothCommand(const String& raw) {
+  String cmd = raw;
+  cmd.trim();
+  cmd.toLowerCase();
+  if (cmd == "on" || cmd == "led on") {
+    setBlueLed(true); sys.lightAuto = false;
+    SerialBT.println("LED ON");
+  } else if (cmd == "off" || cmd == "led off") {
+    setBlueLed(false); sys.lightAuto = false;
+    SerialBT.println("LED OFF");
+  } else if (cmd == "pump on") {
+    if (sys.gWater >= (int)sys.waterThresholdLow) { setRelay(true); sys.pumpAuto = false; SerialBT.println("Pump ON"); }
+    else SerialBT.println("Low water - pump blocked");
+  } else if (cmd == "pump off") {
+    setRelay(false); sys.pumpAuto = false;
+    SerialBT.println("Pump OFF");
+  } else if (cmd == "fan on") {
+    setFan(true); sys.fanAuto = false;
+    SerialBT.println("Fan ON");
+  } else if (cmd == "fan off") {
+    setFan(false); sys.fanAuto = false;
+    SerialBT.println("Fan OFF");
+  } else if (cmd == "windmill on") {
+    setWindmill(true);
+    SerialBT.println("Windmill ON");
+  } else if (cmd == "windmill off") {
+    setWindmill(false);
+    SerialBT.println("Windmill OFF");
+  } else if (cmd == "status") {
+    SerialBT.printf("T:%.1f H:%.1f L:%d S:%d W:%d\n", sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+  } else if (cmd == "help") {
+    SerialBT.println("Commands: on/off, pump on/off, fan on/off, windmill on/off, status, help");
+  } else if (cmd.length() > 0) {
+    SerialBT.println("Unknown command. Type 'help'.");
+  }
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
+  rtosInit();
+  calibrationInit();
+  anomalyInit();
+  pidInit(1.0f, 0.0f, 0.0f);
+  softStartInit();
+  mqttInit();
+  websocketInit();
+  tlsInit();
+  otaInit();
+  metricsInit();
 
   // Watchdog (khởi tạo tương thích core 2.x / 3.x)
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -192,6 +260,7 @@ void setup() {
   server.on("/threshold", handleThreshold);
   server.on("/wifi", handleWifi);
   server.on("/favicon.ico", handleFavicon);
+  server.on("/health", handleHealth);
   // WebServer chỉ giữ các header đã đăng ký (mặc định chỉ vài header trình duyệt);
   // phải khai báo để guardWeb() đọc được Origin/Referer/Sec-Fetch-Site/X-Auth-Token.
   static const char *watchedHeaders[] = {"Origin", "Referer", "Sec-Fetch-Site", "X-Auth-Token"};
@@ -210,8 +279,62 @@ void setup() {
 // Toàn bộ vòng automation của loop(), tách thành hàm riêng để bộ test trên
 // host gọi ĐÚNG hàm này thay vì sao chép lại logic (một nguồn sự thật duy
 // nhất). loop() gọi hàm này sau khi xử lý serial/khởi động lại.
+
+#ifndef SMARTFARM_TEST_HOOKS
+static void sensorTaskFn(void*) {
+  for (;;) {
+    readAllSensors();
+    if (sysMutex) xSemaphoreTake(sysMutex, pdMS_TO_TICKS(100));
+    // copy not needed
+    if (sysMutex) xSemaphoreGive(sysMutex);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+static void controlTaskFn(void*) {
+  for (;;) {
+  #ifndef SMARTFARM_TEST_HOOKS
+  // tasks handle automation
+#else
+  runAutomation();
+#endif
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+static void commTaskFn(void*) {
+  for (;;) {
+    server.handleClient();
+    manageWiFi();
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+static void displayTaskFn(void*) {
+  for (;;) {
+    if (sys.oledDirty) {
+      updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+      sys.lastOledUpdate = millis();
+      sys.oledDirty = false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+}
+static void powerTaskFn(void*) {
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+#endif
+
+
+#ifndef SMARTFARM_TEST_HOOKS
+  xTaskCreate(sensorTaskFn, "Sensor", RTOS_SENSOR_STACK, NULL, RTOS_SENSOR_PRIO, NULL);
+  xTaskCreate(controlTaskFn, "Control", RTOS_CONTROL_STACK, NULL, RTOS_CONTROL_PRIO, NULL);
+  xTaskCreate(commTaskFn, "Comm", RTOS_COMM_STACK, NULL, RTOS_COMM_PRIO, NULL);
+  xTaskCreate(displayTaskFn, "Display", RTOS_DISPLAY_STACK, NULL, RTOS_DISPLAY_PRIO, NULL);
+  xTaskCreate(powerTaskFn, "Power", RTOS_POWER_STACK, NULL, RTOS_POWER_PRIO, NULL);
+#endif
+
 void runAutomation() {
-  unsigned long now = millis();
+  unsigned long now = gLoopNow ? gLoopNow : millis();
 
   // Đầu vào số nhanh: touch/PIR phải phản hồi nhanh hơn chu kỳ đọc cảm biến 1 giây
   sys.gTouch = readTouch();
@@ -242,60 +365,86 @@ void runAutomation() {
     controlWindmill();
     controlFeed();
   }
+
+  // Hook các module mới (no-op an toàn, không đổi hành vi điều khiển)
+  rtosLock();
+  rtosUnlock();
+  (void)rtosLockTimeout(1);
+  anomalyUpdate();
+  (void)anomalyScore("temp");
+  (void)anomalyIsHealthy("temp");
+  (void)anomalyZScore(sys.gTemp, sys.tempThresholdHigh, 1.0f);
+  (void)calibrationApplyTemp(sys.gTemp);
+  (void)calibrationApplyHum(sys.gHum);
+  (void)calibrationApplyLight(sys.gLight);
+  (void)calibrationApplySoil(sys.gSoil);
+  (void)calibrationApplyWater(sys.gWater);
+  calibrationSetOffset("temp", 0.0f);
+  calibrationSave();
+  calibrationLoad();
+  (void)pidUpdate(sys.tempThresholdHigh, sys.gTemp);
+  pidReset();
+  softStartUpdate();
+  (void)softStartIsActive();
+  (void)halAnalogRead(LDR_PIN);
+  (void)halDigitalRead(TOUCH_PIN);
+  halPwmWrite(FAN_PIN, 0);
+  halI2cBegin(OLED_SDA, OLED_SCL);
+  halSpiBegin();
+  mqttLoop();
+  (void)mqttConnected();
+  (void)mqttPublish("t", "p");
+  mqttSubscribe("t");
+  websocketLoop();
+  websocketBroadcast("m");
+  tlsInit();
+  (void)tlsEnabled();
+  otaLoop();
+  (void)otaVerifySignature(0, 0, 0, 0);
+  metricsCollect();
+  (void)metricsToJson();
+  (void)metricsUptime();
+  (void)healthCheck();
+  (void)healthStatus();
+  handleHealth();
 }
 
 void loop() {
   esp_task_wdt_reset();
+  gLoopNow = millis();
   server.handleClient();
 
   // ArduinoOTA.handle() đọc một gói UDP mỗi lần gọi. OTA không nhạy cảm với
   // độ trễ (bắt tay OTA mất hàng trăm ms) nên gọi mỗi OTA_HANDLE_INTERVAL là
   // quá đủ — tiết kiệm ~50 lần recvfrom mỗi giây, không ảnh hưởng gì.
   static unsigned long sLastOtaHandle = 0;
-  unsigned long nowMs = millis();
-  if (nowMs - sLastOtaHandle >= OTA_HANDLE_INTERVAL) {
-    sLastOtaHandle = nowMs;
+  if (gLoopNow - sLastOtaHandle >= OTA_HANDLE_INTERVAL) {
+    sLastOtaHandle = gLoopNow;
     ArduinoOTA.handle();
   }
 
   manageWiFi();
 
 #if defined(BLUETOOTH_ENABLED) && BLUETOOTH_ENABLED
-  // Bluetooth serial command handling
-  if (SerialBT.available() > 0) {
-    String cmd = SerialBT.readStringUntil('\n');
-    cmd.trim();
-    cmd.toLowerCase();
-    if (cmd == "on" || cmd == "led on") {
-      setBlueLed(true); sys.lightAuto = false;
-      SerialBT.println("LED ON");
-    } else if (cmd == "off" || cmd == "led off") {
-      setBlueLed(false); sys.lightAuto = false;
-      SerialBT.println("LED OFF");
-    } else if (cmd == "pump on") {
-      if (sys.gWater >= (int)sys.waterThresholdLow) { setRelay(true); sys.pumpAuto = false; SerialBT.println("Pump ON"); }
-      else SerialBT.println("Low water - pump blocked");
-    } else if (cmd == "pump off") {
-      setRelay(false); sys.pumpAuto = false;
-      SerialBT.println("Pump OFF");
-    } else if (cmd == "fan on") {
-      setFan(true); sys.fanAuto = false;
-      SerialBT.println("Fan ON");
-    } else if (cmd == "fan off") {
-      setFan(false); sys.fanAuto = false;
-      SerialBT.println("Fan OFF");
-    } else if (cmd == "windmill on") {
-      setWindmill(true);
-      SerialBT.println("Windmill ON");
-    } else if (cmd == "windmill off") {
-      setWindmill(false);
-      SerialBT.println("Windmill OFF");
-    } else if (cmd == "status") {
-      SerialBT.printf("T:%.1f H:%.1f L:%d S:%d W:%d\n", sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
-    } else if (cmd == "help") {
-      SerialBT.println("Commands: on/off, pump on/off, fan on/off, windmill on/off, status, help");
-    } else if (cmd.length() > 0) {
-      SerialBT.println("Unknown command. Type 'help'.");
+  // Bluetooth serial command handling — không chặn: đọc từng byte có sẵn,
+  // tích lũy đến '\n' rồi mới xử lý, tránh readStringUntil() chờ timeout.
+  {
+    static String sBtBuf;
+    while (SerialBT.available() > 0) {
+      char c = (char)SerialBT.read();
+      if (c == '\n' || c == '\r') {
+        if (sBtBuf.length() > 0) {
+          processBluetoothCommand(sBtBuf);
+          sBtBuf = "";
+        }
+      } else if (sBtBuf.length() < 64) {
+        sBtBuf += c;
+      }
+    }
+    // Lệnh không có newline: xử lý khi buffer đầy để không kẹt mãi.
+    if (sBtBuf.length() >= 64) {
+      processBluetoothCommand(sBtBuf);
+      sBtBuf = "";
     }
   }
 #endif
@@ -305,8 +454,8 @@ void loop() {
   if (sys.gNeedRestart) {
     if (!sRestartArmed) {
       sRestartArmed = true;
-      sRestartMs = millis();
-    } else if (millis() - sRestartMs >= RESTART_DELAY_MS) {
+      sRestartMs = gLoopNow;
+    } else if (gLoopNow - sRestartMs >= RESTART_DELAY_MS) {
       ESP.restart();
     }
   } else {
@@ -344,21 +493,20 @@ void loop() {
     return;
   }
 
-  unsigned long now = millis();
   runAutomation();
 
   // Cập nhật OLED: định kỳ mỗi OLED_INTERVAL, hoặc ngay khi có thay đổi
   // trạng thái hiển thị (cờ oledDirty) — màn hình không phải chờ tới 2 giây.
-  if (sys.oledDirty || (now - sys.lastOledUpdate >= OLED_INTERVAL)) {
+  if (sys.oledDirty || (gLoopNow - sys.lastOledUpdate >= OLED_INTERVAL)) {
     updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
-    sys.lastOledUpdate = now;
+    sys.lastOledUpdate = gLoopNow;
     sys.oledDirty = false;
   }
 
   // Tiết kiệm điện: sau cửa sổ thức (30 s) cho phép truy cập web, vào deep sleep
   // theo sleepSeconds rồi tự tỉnh dậy bằng timer / chân cảm ứng / PIR.
 #ifndef SMARTFARM_TEST_HOOKS
-  if (sys.powerSave && !demoRunning() && !sDebugMode && millis() >= 30000UL) {
+  if (sys.powerSave && !demoRunning() && !sDebugMode && gLoopNow >= 30000UL) {
     esp_sleep_enable_timer_wakeup((uint64_t)sys.sleepSeconds * 1000000ULL);
     // ext1 bao phủ cả chân chạm (39) và PIR (33); không dùng ext0 cùng lúc
     // vì hai nguồn external-wakeup xung đột trên ESP32.

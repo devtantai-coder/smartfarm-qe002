@@ -222,7 +222,7 @@ static void primeSensors(int water) {
 // không còn con số 15 lặp lại rải rác trong các test.
 static const char *ALL_ROUTES[] = {
   "/", "/api", "/toggle", "/auto", "/rgb", "/servo", "/breathe", "/on", "/off",
-  "/windmill", "/feed", "/demo", "/threshold", "/wifi", "/favicon.ico"
+  "/windmill", "/feed", "/demo", "/threshold", "/wifi", "/favicon.ico", "/health"
 };
 static const int ALL_ROUTE_COUNT = (int)(sizeof(ALL_ROUTES) / sizeof(ALL_ROUTES[0]));
 
@@ -1185,7 +1185,8 @@ static void testSerialMenu() {
   };
   for (auto &c : cases) {
     mockSerialClear();
-    mockSerialPush(&c.cmd);
+    char __cmd[2] = { c.cmd, '\0' };
+    mockSerialPush(__cmd);
     loop();
     CHECK(has(mockSerialOutput(), c.marker));
     CHECK(has(mockSerialOutput(), "Chon: "));       // in lại menu

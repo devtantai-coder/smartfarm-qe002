@@ -9,6 +9,11 @@
 #include "WiFi.h"
 #include "BluetoothSerial.h"
 #include "esp_task_wdt.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "semphr.h"
+#include "event_groups.h"
 
 #include <cstdarg>
 #include <string>
@@ -467,3 +472,80 @@ void mockReset() {
 
 // ── BluetoothSerial ──
 BluetoothSerial SerialBT;
+
+// ── Mock FreeRTOS ──
+#include <vector>
+#include <cstring>
+
+struct MockQueue {
+  size_t len, itemSize, head, tail, count;
+  std::vector<unsigned char> buf;
+};
+struct MockEventGroup { uint32_t bits; };
+
+extern "C" BaseType_t xTaskCreate(TaskFunction_t, const char*, uint32_t, void*, UBaseType_t, TaskHandle_t*) { return pdPASS; }
+extern "C" void vTaskDelay(TickType_t) {}
+extern "C" TickType_t xTaskGetTickCount(void) { return (TickType_t)millis(); }
+extern "C" void vTaskDelete(TaskHandle_t) {}
+
+extern "C" QueueHandle_t xQueueCreate(uint32_t uxQueueLength, uint32_t uxItemSize) {
+  MockQueue *q = new MockQueue();
+  q->len = uxQueueLength ? uxQueueLength : 1;
+  q->itemSize = uxItemSize ? uxItemSize : 1;
+  q->head = q->tail = q->count = 0;
+  q->buf.assign(q->len * q->itemSize, 0);
+  return (QueueHandle_t)q;
+}
+extern "C" BaseType_t xQueueSend(QueueHandle_t xQueue, const void *pvItemToQueue, TickType_t) {
+  MockQueue *q = (MockQueue*)xQueue;
+  if (!q) return pdFAIL;
+  if (q->count >= q->len) {
+    // drop oldest
+    q->head = (q->head + 1) % q->len;
+    q->count--;
+  }
+  memcpy(q->buf.data() + q->tail * q->itemSize, pvItemToQueue, q->itemSize);
+  q->tail = (q->tail + 1) % q->len;
+  q->count++;
+  return pdPASS;
+}
+extern "C" BaseType_t xQueueReceive(QueueHandle_t xQueue, void *pvBuffer, TickType_t) {
+  MockQueue *q = (MockQueue*)xQueue;
+  if (!q || q->count == 0) return pdFALSE;
+  memcpy(pvBuffer, q->buf.data() + q->head * q->itemSize, q->itemSize);
+  q->head = (q->head + 1) % q->len;
+  q->count--;
+  return pdTRUE;
+}
+extern "C" UBaseType_t uxQueueMessagesWaiting(QueueHandle_t xQueue) {
+  MockQueue *q = (MockQueue*)xQueue;
+  return q ? (UBaseType_t)q->count : 0;
+}
+
+extern "C" SemaphoreHandle_t xSemaphoreCreateMutex(void) { return (SemaphoreHandle_t)new int(1); }
+extern "C" SemaphoreHandle_t xSemaphoreCreateBinary(void) { return (SemaphoreHandle_t)new int(0); }
+extern "C" BaseType_t xSemaphoreTake(SemaphoreHandle_t, TickType_t) { return pdTRUE; }
+extern "C" BaseType_t xSemaphoreGive(SemaphoreHandle_t) { return pdTRUE; }
+
+extern "C" EventGroupHandle_t xEventGroupCreate(void) { return (EventGroupHandle_t)new MockEventGroup{0}; }
+extern "C" EventBits_t xEventGroupSetBits(EventGroupHandle_t xEventGroup, const EventBits_t uxBitsToSet) {
+  MockEventGroup *eg = (MockEventGroup*)xEventGroup;
+  if (!eg) return 0;
+  eg->bits |= uxBitsToSet;
+  return eg->bits;
+}
+extern "C" EventBits_t xEventGroupClearBits(EventGroupHandle_t xEventGroup, const EventBits_t uxBitsToClear) {
+  MockEventGroup *eg = (MockEventGroup*)xEventGroup;
+  if (!eg) return 0;
+  eg->bits &= ~uxBitsToClear;
+  return eg->bits;
+}
+extern "C" EventBits_t xEventGroupWaitBits(EventGroupHandle_t xEventGroup, const EventBits_t uxBitsToWaitFor,
+                                          BaseType_t, BaseType_t, TickType_t) {
+  MockEventGroup *eg = (MockEventGroup*)xEventGroup;
+  return eg ? eg->bits & uxBitsToWaitFor : 0;
+}
+extern "C" EventBits_t xEventGroupGetBits(EventGroupHandle_t xEventGroup) {
+  MockEventGroup *eg = (MockEventGroup*)xEventGroup;
+  return eg ? eg->bits : 0;
+}

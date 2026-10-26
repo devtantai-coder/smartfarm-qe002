@@ -1,6 +1,7 @@
 #include "globals.h"
 #include "logger.h"
 #include "sensors.h"
+#include "hal.h"
 
 // ── Bộ đệm trung bình động ──
 static float sTempBuf[SENSOR_FILTER_SIZE] = {0};
@@ -11,17 +12,9 @@ static int   sWaterBuf[SENSOR_FILTER_SIZE] = {0};
 static uint8_t sBufIdx = 0;
 static bool sBufFilled = false;
 
-static float avg(float* buf, uint8_t n) {
-  float sum = 0;
-  for (uint8_t i = 0; i < n; i++) sum += buf[i];
-  return sum / n;
-}
-
-static int avgInt(int* buf, uint8_t n) {
-  long sum = 0;
-  for (uint8_t i = 0; i < n; i++) sum += buf[i];
-  return (int)(sum / n);
-}
+// Tổng chạy (running sum) để trung bình O(1) thay vì quét lại cửa sổ mỗi lần đọc.
+static float sTempSum = 0.0f, sHumSum = 0.0f;
+static long  sLightSum = 0, sSoilSum = 0, sWaterSum = 0;
 
 float readTemperature() { return dht.readTemperature(); }
 float readHumidity()    { return dht.readHumidity(); }
@@ -32,11 +25,11 @@ static int normalizeAdc(int value, bool invert) {
   return invert ? (4095 - value) : value;
 }
 
-int   readLight()       { return normalizeAdc(analogRead(LDR_PIN), INVERT_LIGHT); }
-int   readSoil()        { return normalizeAdc(analogRead(SOIL_PIN), INVERT_SOIL); }
-int   readWater()       { return normalizeAdc(analogRead(WATER_PIN), INVERT_WATER); }
-bool  readTouch()       { return digitalRead(TOUCH_PIN) == HIGH; }
-bool  readPIR()         { return digitalRead(PIR_PIN) == HIGH; }
+int   readLight()       { return normalizeAdc(halAnalogRead(LDR_PIN), INVERT_LIGHT); }
+int   readSoil()        { return normalizeAdc(halAnalogRead(SOIL_PIN), INVERT_SOIL); }
+int   readWater()       { return normalizeAdc(halAnalogRead(WATER_PIN), INVERT_WATER); }
+bool  readTouch()       { return halDigitalRead(TOUCH_PIN) == HIGH; }
+bool  readPIR()         { return halDigitalRead(PIR_PIN) == HIGH; }
 
 void readAllSensors() {
   float t = readTemperature();
@@ -68,23 +61,37 @@ void readAllSensors() {
   int s = readSoil();
   int w = readWater();
 
-  // Đẩy vào bộ đệm vòng
-  sTempBuf[sBufIdx] = t;
-  sHumBuf[sBufIdx]  = h;
+  // Đẩy vào bộ đệm vòng, cập nhật tổng chạy: trừ giá trị cũ ở slot đang ghi
+  // (0 nếu chưa đầy) rồi cộng giá trị mới — trung bình O(1).
+  sTempSum  -= sTempBuf[sBufIdx];
+  sHumSum   -= sHumBuf[sBufIdx];
+  sLightSum -= sLightBuf[sBufIdx];
+  sSoilSum  -= sSoilBuf[sBufIdx];
+  sWaterSum -= sWaterBuf[sBufIdx];
+
+  sTempBuf[sBufIdx]  = t;
+  sHumBuf[sBufIdx]   = h;
   sLightBuf[sBufIdx] = l;
   sSoilBuf[sBufIdx]  = s;
   sWaterBuf[sBufIdx] = w;
+
+  sTempSum  += t;
+  sHumSum   += h;
+  sLightSum += l;
+  sSoilSum  += s;
+  sWaterSum += w;
+
   sBufIdx = (sBufIdx + 1) % SENSOR_FILTER_SIZE;
   if (sBufIdx == 0) sBufFilled = true;
 
   uint8_t n = sBufFilled ? SENSOR_FILTER_SIZE : sBufIdx;
   if (n == 0) n = 1;
 
-  sys.gTemp  = avg(sTempBuf, n);
-  sys.gHum   = avg(sHumBuf, n);
-  sys.gLight = avgInt(sLightBuf, n);
-  sys.gSoil  = avgInt(sSoilBuf, n);
-  sys.gWater = avgInt(sWaterBuf, n);
+  sys.gTemp  = sTempSum / n;
+  sys.gHum   = sHumSum / n;
+  sys.gLight = (int)(sLightSum / n);
+  sys.gSoil  = (int)(sSoilSum / n);
+  sys.gWater = (int)(sWaterSum / n);
   sys.gPir   = readPIR();
   sys.gTouch = readTouch();
 }
@@ -108,5 +115,7 @@ void testResetSensorStatics() {
   }
   sBufIdx = 0;
   sBufFilled = false;
+  sTempSum = sHumSum = 0.0f;
+  sLightSum = sSoilSum = sWaterSum = 0;
 }
 #endif
