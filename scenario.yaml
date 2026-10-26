@@ -1,0 +1,7 @@
+version: 1
+name: test-demo
+steps:
+  - wait-serial: "Chon:"
+  - delay: 300ms
+  - write-serial: "9"
+  - delay: 45000ms

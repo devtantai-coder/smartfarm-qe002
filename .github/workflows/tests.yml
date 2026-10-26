@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    name: Host test suite (mock hardware)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build + run all 6 configurations + JS page tests
+        run: ./test/run_tests.sh --full
+      - name: Coverage (gcov, ngưỡng 80%)
+        run: ./test/run_tests.sh --coverage
+
+  firmware-build:
+    name: ESP32 firmware build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v1
+      - name: Install ESP32 core + libraries
+        env:
+          ESP32_INDEX: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+        run: |
+          arduino-cli core update-index --additional-urls "$ESP32_INDEX"
+          arduino-cli core install esp32:esp32@3.3.12 --additional-urls "$ESP32_INDEX"
+          arduino-cli lib install "DHT sensor library" "Adafruit Unified Sensor" \
+            "Adafruit SSD1306" "Adafruit GFX Library" "Adafruit NeoPixel" "ESP32Servo"
+      - name: Compile firmware
+        run: |
+          mkdir -p build/SmartFarm
+          cp SmartFarm.ino build/SmartFarm/
+          cp -r src build/SmartFarm/
+          arduino-cli compile --fqbn esp32:esp32:esp32 build/SmartFarm
