@@ -12,3 +12,7 @@ Adafruit_NeoPixel strip(RGB_COUNT, RGB_PIN, NEO_GRB + NEO_KHZ800);
 Servo servo;
 WebServer server(80);
 Preferences preferences;
+
+#if defined(BLUETOOTH_ENABLED) && BLUETOOTH_ENABLED && !defined(SMARTFARM_TEST_HOOKS)
+BluetoothSerial SerialBT;
+#endif

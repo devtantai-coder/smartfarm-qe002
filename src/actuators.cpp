@@ -20,6 +20,7 @@ void setRelay(bool on) {
 static bool sBuzzerOn = false;
 
 void setBuzzer(bool on) {
+  if (!BUZZER_ENABLED) return;  // còi đã tắt — im lặng
   if (sBuzzerOn == on) return;
   sBuzzerOn = on;
 #if BUZZER_PASSIVE
@@ -34,7 +35,8 @@ void setBuzzer(bool on) {
 void setFan(bool on) {
   if (sys.fanState == on) return;
   sys.fanState = on;
-  digitalWrite(FAN_PIN, on ? HIGH : LOW);
+  bool level = FAN_ACTIVE_LOW ? !on : on;
+  digitalWrite(FAN_PIN, level ? HIGH : LOW);
   LOG_INFO(on ? "Fan: ON" : "Fan: OFF");
 }
 

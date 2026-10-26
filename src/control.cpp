@@ -42,6 +42,15 @@ void controlPump() {
 void controlFan() {
   if (!sys.fanAuto) return;
 
+  // An toàn nước: nếu nước cạn, tắt quạt (nếu quạt liên quan đến nước)
+  if (sys.gWater < (int)sys.waterThresholdLow) {
+    if (sys.fanState) {
+      setFan(false);
+      LOG_WARN("Low water, fan OFF");
+    }
+    return;
+  }
+
   // Chống ngưỡng bị đảo (sẽ làm relay đóng ngắt liên tục)
   if (sys.tempThresholdHigh <= sys.tempThresholdLow) return;
 

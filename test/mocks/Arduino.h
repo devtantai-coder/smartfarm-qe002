@@ -29,6 +29,11 @@ public:
   String(double v, int digits = 2) { char b[32]; snprintf(b, sizeof(b), "%.*f", digits, v); s_ = b; }
   void reserve(unsigned n) { s_.reserve(n); }
   int toInt() const { return atoi(s_.c_str()); }
+  void trim() {
+    while (!s_.empty() && (s_.front() == '\n' || s_.front() == '\r' || s_.front() == ' ' || s_.front() == '\t')) s_.erase(0, 1);
+    while (!s_.empty() && (s_.back() == '\n' || s_.back() == '\r' || s_.back() == ' ' || s_.back() == '\t')) s_.pop_back();
+  }
+  void toLowerCase() { for (char &c : s_) c = (char)tolower((unsigned char)c); }
   float toFloat() const { return (float)atof(s_.c_str()); }
   const char *c_str() const { return s_.c_str(); }
   unsigned length() const { return (unsigned)s_.size(); }

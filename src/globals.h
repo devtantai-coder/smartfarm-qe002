@@ -10,6 +10,12 @@
 #include <ESP32Servo.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include "config.h"
+
+#if defined(BLUETOOTH_ENABLED) && BLUETOOTH_ENABLED
+#include <BluetoothSerial.h>
+extern BluetoothSerial SerialBT;
+#endif
 
 // ── Tương thích phiên bản core ESP32 (2.x và 3.x) ──
 #if __has_include(<esp_arduino_version.h>)
@@ -19,7 +25,6 @@
 #define ESP_ARDUINO_VERSION_MAJOR 2
 #endif
 
-#include "config.h"
 #include "logger.h"
 
 // ── Trạng thái toàn cục ──
