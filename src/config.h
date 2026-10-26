@@ -86,7 +86,7 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 
 // Bật/tắt còi cảnh báo: 0 = tắt còi hoàn toàn (im lặng), 1 = bật (mặc định)
 #ifndef BUZZER_ENABLED
-#define BUZZER_ENABLED 0
+#define BUZZER_ENABLED 1
 #endif
 
 // Loại buzzer: 1 = buzzer thụ động (cần tone()), 0 = buzzer chủ động
@@ -141,4 +141,9 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 #define DEFAULT_SLEEP_SECONDS 30
 #endif
 
+#endif
+
+// Bluetooth: 1 = bật Bluetooth serial (điều khiển từ xa qua điện thoại), 0 = tắt
+#ifndef BLUETOOTH_ENABLED
+#define BLUETOOTH_ENABLED 0
 #endif

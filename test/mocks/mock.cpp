@@ -7,6 +7,7 @@
 #include "WebServer.h"
 #include "Wire.h"
 #include "WiFi.h"
+#include "BluetoothSerial.h"
 #include "esp_task_wdt.h"
 
 #include <cstdarg>
@@ -463,3 +464,6 @@ void mockReset() {
   sIoLog.clear();
   mockServerReset();
 }
+
+// ── BluetoothSerial ──
+BluetoothSerial SerialBT;

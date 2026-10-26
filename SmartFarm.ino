@@ -198,6 +198,11 @@ void setup() {
   server.collectHeaders(watchedHeaders, 4);
   server.begin();
 
+#if defined(BLUETOOTH_ENABLED) && BLUETOOTH_ENABLED
+  SerialBT.begin("SmartFarm");
+  LOG_INFO("Bluetooth: SmartFarm");
+#endif
+
   LOG_INFO("System ready");
   printDebugMenu();
 }
@@ -254,6 +259,46 @@ void loop() {
   }
 
   manageWiFi();
+
+#if defined(BLUETOOTH_ENABLED) && BLUETOOTH_ENABLED
+  // Bluetooth serial command handling
+  if (SerialBT.available() > 0) {
+    String cmd = SerialBT.readStringUntil('\n');
+    cmd.trim();
+    cmd.toLowerCase();
+    if (cmd == "on" || cmd == "led on") {
+      setBlueLed(true); sys.lightAuto = false;
+      SerialBT.println("LED ON");
+    } else if (cmd == "off" || cmd == "led off") {
+      setBlueLed(false); sys.lightAuto = false;
+      SerialBT.println("LED OFF");
+    } else if (cmd == "pump on") {
+      if (sys.gWater >= (int)sys.waterThresholdLow) { setRelay(true); sys.pumpAuto = false; SerialBT.println("Pump ON"); }
+      else SerialBT.println("Low water - pump blocked");
+    } else if (cmd == "pump off") {
+      setRelay(false); sys.pumpAuto = false;
+      SerialBT.println("Pump OFF");
+    } else if (cmd == "fan on") {
+      setFan(true); sys.fanAuto = false;
+      SerialBT.println("Fan ON");
+    } else if (cmd == "fan off") {
+      setFan(false); sys.fanAuto = false;
+      SerialBT.println("Fan OFF");
+    } else if (cmd == "windmill on") {
+      setWindmill(true);
+      SerialBT.println("Windmill ON");
+    } else if (cmd == "windmill off") {
+      setWindmill(false);
+      SerialBT.println("Windmill OFF");
+    } else if (cmd == "status") {
+      SerialBT.printf("T:%.1f H:%.1f L:%d S:%d W:%d\n", sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
+    } else if (cmd == "help") {
+      SerialBT.println("Commands: on/off, pump on/off, fan on/off, windmill on/off, status, help");
+    } else if (cmd.length() > 0) {
+      SerialBT.println("Unknown command. Type 'help'.");
+    }
+  }
+#endif
 
   // Khởi động lại sau khi lưu cài đặt WiFi/mật khẩu (chờ phản hồi HTTP xong).
   // Không dùng delay(): đếm đủ RESTART_DELAY_MS trong loop rồi mới restart.

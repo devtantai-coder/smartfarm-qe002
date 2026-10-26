@@ -52,7 +52,7 @@ Dựa trên tài liệu "Bước 19: Sơ đồ đấu dây" và "Bước 20: Hư
 
 | Thành phần | Chức năng chính |
 |------------|-----------------|
-| ESP32 (Bộ điều khiển trung tâm) | Vi não hệ thống, nhận dữ liệu cảm biến, điều khiển thiết bị, kết nối WiFi/Bluetooth |
+| ESP32 (Bộ điều khiển trung tâm) | Vi não hệ thống, nhận dữ liệu cảm biến, điều khiển thiết bị, kết nối WiFi (Bluetooth tùy chọn, bật qua `BLUETOOTH_ENABLED`) |
 | DHT11 | Đo nhiệt độ (0-50°C, sai số ±2°C), độ ẩm không khí (20-80%, sai số ±5%) |
 | Module Relay 5V | Công tắc điện tử điều khiển thiết bị công suất lớn (máy bơm, quạt, đèn) |
 | Cảm biến ánh sáng (LDR) | Đo cường độ ánh sáng, khi thiếu → hệ thống bật đèn LED cho cây |
@@ -212,7 +212,8 @@ Các module cảm biến/relay/còi bán kèm kit có thể hoạt động ngư�
 | `INVERT_WATER` | `0` | Đổ nước vào mà giá trị mức nước **giảm** |
 | `RELAY_ACTIVE_LOW` | `0` | Module relay kích mức **LOW** (bơm chạy khi chân ở LOW) |
 | `FAN_ACTIVE_LOW` | `0` | Quạt chạy khi chân ở mức **LOW** (module quạt active-low) |
-| `BUZZER_ENABLED` | `0` | Bật/tắt còi cảnh báo: `0` = tắt hoàn toàn (im lặng), `1` = bật |
+| `BUZZER_ENABLED` | `1` | Bật/tắt còi cảnh báo: `0` = tắt hoàn toàn (im lặng), `1` = bật (mặc định) |
+| `BLUETOOTH_ENABLED` | `0` | Bật Bluetooth serial (điều khiển từ xa qua điện thoại): `0` = tắt (mặc định, tiết kiệm flash), `1` = bật (cần partition scheme huge_app) |
 | `BUZZER_PASSIVE` | `0` | Còi loại **passive** (không kêu bằng mức điện áp, cần xung `tone()`) |
 
 Góc servo cũng chỉnh được để khớp cơ khí (tránh kẹt bánh răng):

@@ -126,14 +126,7 @@ static void checkRelayPin(bool on) {
 }
 
 static void checkBuzzer(bool on) {
-#if !BUZZER_ENABLED
-  // Còi đã tắt — luôn im lặng
-  #if BUZZER_PASSIVE
-  CHECK_EQ(mockBuzzerToneHz, 0);
-  #else
-  CHECK_EQ(mockPinLevel[BUZZER_PIN], LOW);
-  #endif
-#elif BUZZER_PASSIVE
+#if BUZZER_PASSIVE
   if (on) CHECK(mockBuzzerToneHz > 0);
   else    CHECK_EQ(mockBuzzerToneHz, 0);
 #else
@@ -827,7 +820,6 @@ static void testIdempotency() {
   CHECK_EQ(mockDigitalWriteCount, d1 + 2);
   CHECK_EQ(mockPinLevel[FAN_PIN], LOW);
 
-#if BUZZER_ENABLED
 #if BUZZER_PASSIVE
   int t0 = mockToneCalls, n0 = mockNoToneCalls;
   setBuzzer(true);
@@ -846,7 +838,6 @@ static void testIdempotency() {
   setBuzzer(false);
   CHECK_EQ(mockDigitalWriteCount, d2 + 2);
   checkBuzzer(false);
-#endif
 #endif
 
   setBlueLed(true);
@@ -2172,19 +2163,10 @@ static void checkFuzzInvariants(bool demoAtLoopStart) {
   // Bỏ qua loop mà demo đang chạy vừa kết thúc: automation (và
   // còi báo) chỉ hoạt động lại ở loop kế tiếp.
   if (!demoRunning() && !demoAtLoopStart && sys.gWater < (int)sys.waterThresholdLow) {
-#if BUZZER_ENABLED
-  #if BUZZER_PASSIVE
+#if BUZZER_PASSIVE
     CHECK(mockBuzzerToneHz > 0);
-  #else
-    CHECK_EQ(mockPinLevel[BUZZER_PIN], HIGH);
-  #endif
 #else
-  // Còi đã tắt — không kêu
-  #if BUZZER_PASSIVE
-    CHECK_EQ(mockBuzzerToneHz, 0);
-  #else
-    CHECK_EQ(mockPinLevel[BUZZER_PIN], LOW);
-  #endif
+    CHECK_EQ(mockPinLevel[BUZZER_PIN], HIGH);
 #endif
   }
 }
