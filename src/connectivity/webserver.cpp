@@ -151,7 +151,12 @@ header h1 span{color:var(--primary);font-weight:800}
 <div class="badge off" id="badgeBreathe"><i class="fa-solid fa-circle"></i> Tắt</div>
 </div>
 <div class="control-group">
-<h3><i class="fa-solid fa-circle-arrow-right"></i> Servo (cửa)</h3>
+<h3><i class="fa-solid fa-bell"></i> Báo động</h3>
+<div class="btn-row">
+<button class="btn danger" onclick="toggleDevice('alarm')"><i class="fa-solid fa-bell"></i> Bật/Tắt còi</button>
+</div>
+<div class="badge off" id="badgeAlarm"><i class="fa-solid fa-circle"></i> Tắt</div>
+</div>
 <div class="slider-group">
 <label><span id="servoLabel">0</span> độ</label>
 <input type="range" id="servoSlider" min="0" max="180" value="0" onchange="setServo(this.value)">
@@ -512,6 +517,8 @@ void handleToggle() {
     bool want = !sys.breatheLedState;
     setBreatheAuto(false);
     setBreatheLed(want);
+  } else if (strcmp(id, "alarm") == 0 || strcmp(id, "buzzer") == 0) {
+    setManualAlarm(!manualAlarm());
   } else {
     server.send(400, "text/plain", "unknown id");
     return;

@@ -15,6 +15,7 @@ static constexpr int WINDMILL_STEP   = 6;     // bước quét servo mỗi nhị
 // ── Trạng thái cảnh báo (log edge-triggered, không spam serial) ──
 static bool sWaterAlarm = false;
 static bool sMotionAlarm = false;
+static bool sManualAlarm = false;
 static bool sPirLitLed = false;   // true = cảnh báo PIR là thứ đã bật LED
 static bool sPrevTouch = false;   // trạng thái chạm lần trước (chống dội)
 
@@ -158,6 +159,7 @@ void controlTouch() {
 
 // ── Cảnh báo: buzzer liên tục khi nước thấp (ưu tiên) + đèn đêm PIR ──
 void controlAlerts() {
+  if (sManualAlarm) { setBuzzer(true); return; }
   const int waterLow = (int)sys.waterThresholdLow;
   if (sys.gWater < waterLow) {
     setBuzzer(true);
@@ -252,12 +254,20 @@ void controlFeed() {
 
 bool feedRunning() { return sFeedActive; }
 
+void setManualAlarm(bool on) {
+  sManualAlarm = on;
+  setBuzzer(on);
+}
+
+bool manualAlarm() { return sManualAlarm; }
+
 #ifdef SMARTFARM_TEST_HOOKS
 // Chỉ dùng cho bộ test: đưa các biến static về trạng thái vừa cấp điện
 // để mỗi test độc lập với thứ tự chạy.
 void testResetControlStatics() {
   sWaterAlarm = false;
   sMotionAlarm = false;
+  sManualAlarm = false;
   sPirLitLed = false;
   sPrevTouch = false;
   sWindmillAngle = 0;
