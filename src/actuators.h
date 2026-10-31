@@ -3,7 +3,13 @@
 
 void setRelay(bool on);
 void setFan(bool on);
-void setBuzzer(bool on);
+void setFanPwm(uint8_t duty);   // duty là công suất LOGIC: 0 = tắt, 255 = hết tốc
+void setBuzzer(bool on);        // ghi trực tiếp, dùng cho trình tự test cơ cấu
+// Còi có hai chủ riêng biệt: "alarm" là cảnh báo thật (nước cạn, còi người dùng
+// bật) còn "beep" chỉ là hiệu ứng âm thanh của trình diễn. Alarm luôn thắng, nên
+// một bước demo không thể tắt cảnh báo đang sống.
+void setBuzzerAlarm(bool on);
+void setBuzzerBeep(bool on);
 void setBlueLed(bool on);
 void setBreatheLed(bool on);
 void setLedPwm(uint8_t value);

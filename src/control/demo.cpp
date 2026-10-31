@@ -93,11 +93,19 @@ void startDemo() {
 
 void updateDemo() {
   if (!sRunning) return;
+  // Còi báo nước cạn / còi thủ công không được im lặng trong demo.
+  controlSafetyAlerts();
+  // Cửa máng ăn tự đóng theo FEED_DURATION ngay cả khi đang demo: trước đây
+  // bước DA_FEED không được canh giờ nên cửa mở suốt 3 s của bước (thay vì 2 s).
+  controlFeed();
   unsigned long now = millis();
   unsigned long elapsed = now - sStepStart;
 
-  // HD6: quét servo như cánh cối xay gió đang quay
-  if (STEPS[sStep].in == DA_WINDMILL && now - sSweepUpdate >= WINDMILL_INTERVAL) {
+  // HD6: quét servo như cánh cối xay gió đang quay. Chỉ quét khi cối xay gió
+  // còn sở hữu servo: lệnh thủ công (/servo, /feed) đã setWindmill(false),
+  // nếu vẫn quét thì servo giật về quỹ đạo demo và đè lên lệnh của người dùng.
+  if (STEPS[sStep].in == DA_WINDMILL && sys.windmillOn &&
+      now - sSweepUpdate >= WINDMILL_INTERVAL) {
     sSweepUpdate = now;
     int span = WINDMILL_MAX_ANGLE - WINDMILL_MIN_ANGLE;
     int phase = (int)(elapsed % 2000);
@@ -109,7 +117,9 @@ void updateDemo() {
   if (elapsed < STEPS[sStep].ms) return;
 
   demoAction(STEPS[sStep].out);
-  if (STEPS[sStep].in == DA_BEEP) setBuzzer(false);
+  // Chỉ tắt còi "hét thử" của HD8; nước cạn hoặc còi thủ công đang kêu thì
+  // giữ nguyên — cảnh báo an toàn thắng trình diễn.
+  if (STEPS[sStep].in == DA_BEEP && !safetyAlarmActive()) setBuzzer(false);
 
   sStep++;
   if (sStep >= STEP_COUNT) {
@@ -118,7 +128,7 @@ void updateDemo() {
     setBlueLed(false);
     setBreatheLed(false);
     setRelay(false);
-    setBuzzer(false);
+    if (!safetyAlarmActive()) setBuzzer(false);
     setRgb(0, 0, 0);
     halServoWrite(WINDMILL_MIN_ANGLE);
     stopFeed();

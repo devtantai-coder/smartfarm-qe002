@@ -55,7 +55,7 @@ struct SystemState {
 
   // Mốc thời gian (millis)
   unsigned long lastWifiCheck = 0, lastSensorRead = 0, lastOledUpdate = 0;
-  unsigned long lastBuzzer = 0, lastTouch = 0, lastBreatheUpdate = 0;
+  unsigned long lastTouch = 0, lastBreatheUpdate = 0;
 
   // Sức khỏe cảm biến
   uint8_t sensorFailCount = 0;
@@ -68,7 +68,7 @@ struct SystemState {
 
   // PID state for fan
   float pidKp = 1.0f, pidKi = 0.0f, pidKd = 0.0f;
-  float pidIntegral = 0.0f, pidPrevError = 0.0f;
+  float pidIntegral = 0.0f, pidPrevError = 0.0f, pidLastOut = 0.0f;
   unsigned long pidLastTime = 0;
 
   // Anomaly scores
@@ -81,7 +81,8 @@ struct SystemState {
   bool oledDirty = false;
 
   // Cấu hình kết nối + mã bảo mật (compile-time, KHÔNG ghi flash dạng plaintext)
-  char ssid[32] = WIFI_SSID;
+  // SSID 802.11 tối đa 32 octet nên cần 33 chỗ cho NUL; [32] làm fail cả build.
+  char ssid[33] = WIFI_SSID;
   char password[64] = WIFI_PASSWORD;
   char webToken[64] = WEB_TOKEN;
   char otaPassword[64] = OTA_PASSWORD;
@@ -94,7 +95,8 @@ struct SystemState {
   // và tự tỉnh dậy bằng timer (và chân cảm ứng/chuyển động nếu nối). Mặc định tắt
   // để giữ web server phản hồi thời gian thực.
   bool powerSave = false;
-  uint32_t sleepSeconds = 30;
+  // Mặc định theo DEFAULT_SLEEP_SECONDS để loadSettings/resetSettings chung một nguồn.
+  uint32_t sleepSeconds = DEFAULT_SLEEP_SECONDS;
 };
 
 extern SystemState sys;

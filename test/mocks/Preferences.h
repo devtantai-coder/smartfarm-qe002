@@ -8,6 +8,8 @@ void  mockPrefPut(const char *key, float value);
 const char *mockPrefGetStr(const char *key, const char *dflt);
 void  mockPrefPutStr(const char *key, const char *value);
 void  mockPrefClear();
+// Số lần put* (= số lần commit flash NVS) kể từ lần mockReset() gần nhất.
+int   mockPrefWrites();
 
 class Preferences {
 public:

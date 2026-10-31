@@ -58,7 +58,7 @@ SerialStub Serial;
 
 // ── Lõi Arduino ──
 unsigned long millis() { return sMillis; }
-void delay(unsigned long ms) { sMillis += ms; }
+unsigned long micros() { return sMillis * 1000UL; }
 unsigned long mockMillis() { return sMillis; }
 void mockAdvance(unsigned long ms) { sMillis += ms; }
 void mockSetMillis(unsigned long ms) { sMillis = ms; }
@@ -76,7 +76,13 @@ static void ioLogAppend(char kind, uint8_t pin, int value) {
 const char *mockIoLog() { return sIoLog.c_str(); }
 void mockIoLogClear() { sIoLog.clear(); }
 
-void pinMode(uint8_t pin, uint8_t) { ioLogAppend('M', pin, 0); }
+static uint8_t mockPinModeAt[40] = {0};
+void pinMode(uint8_t pin, uint8_t mode) {
+  if (pin < 40) mockPinModeAt[pin] = mode;
+  ioLogAppend('M', pin, 0);
+}
+// Chế độ đã cấu hình cho một chân (để test khẳng định INPUT_PULLDOWN...).
+int mockGetPinMode(uint8_t pin) { return pin < 40 ? mockPinModeAt[pin] : -1; }
 void digitalWrite(uint8_t pin, uint8_t value) {
   if (pin < 40) mockPinLevel[pin] = value;
   mockDigitalWriteCount++;
@@ -161,9 +167,15 @@ int mockSerialPending() { return (int)sSerialIn.size(); }
 void mockSerialClear() { sSerialOut.clear(); sSerialIn.clear(); }
 
 // ── mock WebServer ──
-struct Route { std::string path; void (*fn)(); };
-static Route sRoutes[24];
+// method được ghi lại để test kiểm tra được BẢNG route: đăng ký thiếu method
+// trong core thật là HTTP_ANY (nhận cả POST → body đọc trên loopTask).
+struct Route { std::string path; void (*fn)(); int method; };
+// Trước đây mảng chỉ có 24 chỗ trong khi firmware đăng ký đúng 24 route: thêm
+// một route là bị âm thầm bỏ qua và test vẫn xanh.Để dư + có cờ tràn.
+static const int MOCK_MAX_ROUTES = 40;
+static Route sRoutes[MOCK_MAX_ROUTES];
 static int sRouteCount = 0;
+static bool sRouteOverflow = false;
 
 struct Arg { std::string name; std::string value; };
 static Arg sArgs[16];
@@ -181,16 +193,36 @@ static int sCollectedCount = 0;
 
 static std::string sLastType, sLastBody;
 static int sLastCode = 0;
+// Content-Length handler khai báo qua setContentLength(); test so với độ dài
+// body thật để bắt lỗi khai báo sai (trình duyệt sẽ cắt/treo response).
+static size_t sContentLength = 0;
+// Số lần sendContent() của handler (xem WebServer::sendContent).
+static int sContentWrites = 0;
+// Header "Host" của request giả; rỗng = dùng mockWifiIp (mở bằng IP).
+static std::string sHost;
 
-void WebServer::on(const char *path, void (*handler)()) {
+static void registerRoute(const char *path, int method, void (*handler)()) {
+  const std::string p = path ? path : "";
   for (int i = 0; i < sRouteCount; i++) {
-    if (sRoutes[i].path == path) { sRoutes[i].fn = handler; return; }
+    if (sRoutes[i].path == p) { sRoutes[i].fn = handler; sRoutes[i].method = method; return; }
   }
-  if (sRouteCount < 24) {
-    sRoutes[sRouteCount].path = path;
+  if (sRouteCount < MOCK_MAX_ROUTES) {
+    sRoutes[sRouteCount].path = p;
     sRoutes[sRouteCount].fn = handler;
+    sRoutes[sRouteCount].method = method;
     sRouteCount++;
+  } else {
+    sRouteOverflow = true;   // test sẽ báo nếu firmware đăng ký vượt sức chứa mock
   }
+}
+
+// Quá tải: core ánh xạ overload này thành HTTP_ANY, KHÔNG phải HTTP_GET.
+void WebServer::on(const char *path, void (*handler)()) {
+  registerRoute(path, HTTP_ANY, handler);
+}
+
+void WebServer::on(const char *path, HTTPMethod method, void (*handler)()) {
+  registerRoute(path, method, handler);
 }
 
 void WebServer::collectHeaders(const char *keys[], size_t count) {
@@ -217,8 +249,12 @@ void WebServer::send(int code, const char *type, const String &body) {
 void WebServer::send(int code) { sLastCode = code; sLastType.clear(); sLastBody.clear(); }
 // Ghi body thô kiểu send(code,type,"") + setContentLength + sendContent:
 // send() xoá body cũ, sendContent() nối phần thân vào sau.
-void WebServer::setContentLength(size_t length) { (void)length; }
+void WebServer::setContentLength(size_t length) { sContentLength = length; }
 void WebServer::sendContent(const char *content, size_t length) {
+  // Mỗi sendContent() là MỘT NetworkClient::write() trên firmware thật, và mỗi
+  // write có thể chặn tới 10 s. Đếm số lần ghi để test bắt được handler stream
+  // body thành hàng chục khúc (đó là cách loopTask bị giữ quá mức 30 s của WDT).
+  sContentWrites++;
   if (content && length) sLastBody.append(content, length);
 }
 void WebServer::send_P(int code, const char *type, const char *body) { send(code, type, body); }
@@ -252,11 +288,22 @@ bool WebServer::hasHeader(const char *name) {
   return false;
 }
 
+// Host client đã dùng để gọi tới. Mô phỏng đúng cả hai kiểu truy cập:
+// bằng IP (mặc định) và bằng tên mDNS (mockServerSetHost("smartfarm.local")).
+String WebServer::hostHeader() {
+  return String(sHost.empty() ? mockWifiIp : sHost.c_str());
+}
+void mockServerSetHost(const char *host) { sHost = host ? host : ""; }
+
 void mockServerReset() {
   sRouteCount = 0;
+  sRouteOverflow = false;
   sArgCount = 0;
   sHeaderCount = 0;
   sCollectedCount = 0;   // "khởi động lại" → setup() sẽ collectHeaders lại
+  sContentLength = 0;
+  sContentWrites = 0;
+  sHost.clear();
   sLastCode = 0; sLastType.clear(); sLastBody.clear();
 }
 int mockServerRouteCount() { return sRouteCount; }
@@ -286,21 +333,43 @@ void mockServerSetHeader(const char *name, const char *value) {
     sHeaderCount++;
   }
 }
-bool mockServerInvoke(const char *path) {
+bool mockServerInvokeMethod(const char *path, int method) {
+  const std::string p = path ? path : "";
+  bool pathExists = false;
   for (int i = 0; i < sRouteCount; i++) {
-    if (sRoutes[i].path == (path ? path : "")) {
-      sLastCode = 0; sLastType.clear(); sLastBody.clear();
-      sRoutes[i].fn();
-      sArgCount = 0;
-      sHeaderCount = 0;   // header chỉ có giá trị cho đúng một lần gọi
-      return true;
-    }
+    if (sRoutes[i].path != p) continue;
+    pathExists = true;
+    // canHandle của core: _method != HTTP_ANY && _method != requestMethod -> skip
+    if (sRoutes[i].method != HTTP_ANY && sRoutes[i].method != method) continue;
+    sLastCode = 0; sLastType.clear(); sLastBody.clear(); sContentLength = 0;
+    sContentWrites = 0;
+    sRoutes[i].fn();
+    sArgCount = 0;
+    sHeaderCount = 0;   // header chỉ có giá trị cho đúng một lần gọi
+    return true;
   }
+  if (pathExists) sLastCode = 404;   // không handler nào khớp method -> core trả 404
   return false;
 }
+
+bool mockServerInvoke(const char *path) {
+  return mockServerInvokeMethod(path, HTTP_GET);
+}
+
+int mockServerRouteMethod(int index) {
+  if (index < 0 || index >= sRouteCount) return -1;
+  return sRoutes[index].method;
+}
+const char *mockServerRoutePath(int index) {
+  if (index < 0 || index >= sRouteCount) return "";
+  return sRoutes[index].path.c_str();
+}
+bool mockServerRouteOverflow() { return sRouteOverflow; }
 int mockServerLastCode() { return sLastCode; }
 const char *mockServerLastType() { return sLastType.c_str(); }
 const char *mockServerLastBody() { return sLastBody.c_str(); }
+size_t mockServerContentLength() { return sContentLength; }
+int mockServerContentWrites() { return sContentWrites; }
 
 // ── mock OLED: một luồng + theo từng dòng text (setCursor y/8) ──
 static std::string sOledText;
@@ -365,6 +434,10 @@ struct PrefEntry {
   bool used;
 };
 static PrefEntry sPrefs[24];
+// Mỗi lần put* là một lần nvs_commit() — tức một lượt mòn flash. Test dùng số
+// này để bắt các hàm "lưu" ghi lại y nguyên giá trị cũ.
+static int sPrefWrites = 0;
+int mockPrefWrites() { return sPrefWrites; }
 
 float mockPrefGet(const char *key, float dflt) {
   for (int i = 0; i < 24; i++) {
@@ -374,6 +447,7 @@ float mockPrefGet(const char *key, float dflt) {
 }
 
 void mockPrefPut(const char *key, float value) {
+  sPrefWrites++;
   for (int i = 0; i < 24; i++) {
     if (sPrefs[i].used && strcmp(sPrefs[i].key, key) == 0) { sPrefs[i].value = value; return; }
   }
@@ -404,6 +478,7 @@ const char *mockPrefGetStr(const char *key, const char *dflt) {
 }
 
 void mockPrefPutStr(const char *key, const char *value) {
+  sPrefWrites++;
   for (int i = 0; i < 16; i++) {
     if (sStrPrefs[i].used && strcmp(sStrPrefs[i].key, key) == 0) {
       strncpy(sStrPrefs[i].value, value, sizeof(sStrPrefs[i].value) - 1);
@@ -435,9 +510,11 @@ void mockReset() {
   memset(mockAdc, 0, sizeof(mockAdc));
   memset(mockDigital, 0, sizeof(mockDigital));
   memset(mockPinLevel, 0, sizeof(mockPinLevel));
+  memset(mockPinModeAt, 0, sizeof(mockPinModeAt));
   memset(mockPwm, 0, sizeof(mockPwm));
   memset(mockPixel, 0, sizeof(mockPixel));
   memset(sPrefs, 0, sizeof(sPrefs));
+  sPrefWrites = 0;
   mockServoAngle = 0;
   mockBuzzerToneHz = 0;
   mockWifiStatus = WL_CONNECTED;
@@ -485,7 +562,7 @@ struct MockQueue {
 struct MockEventGroup { uint32_t bits; };
 
 extern "C" BaseType_t xTaskCreate(TaskFunction_t, const char*, uint32_t, void*, UBaseType_t, TaskHandle_t*) { return pdPASS; }
-extern "C" void vTaskDelay(TickType_t) {}
+extern "C" void vTaskDelay(TickType_t ticksToDelay) { sMillis += (unsigned long)ticksToDelay; }
 extern "C" TickType_t xTaskGetTickCount(void) { return (TickType_t)millis(); }
 extern "C" void vTaskDelete(TaskHandle_t) {}
 

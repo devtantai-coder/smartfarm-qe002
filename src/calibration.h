@@ -10,4 +10,9 @@ float calibrationApplyWater(int raw);
 bool calibrationSetOffset(const char* sensor, float offset);
 void calibrationSave();
 void calibrationLoad();
+
+#ifdef SMARTFARM_TEST_HOOKS
+// Quên bản chụp đã ghi flash (mock xóa NVS giữa các test).
+void testResetCalibStatics();
+#endif
 #endif

@@ -6,9 +6,12 @@
 #
 # Cách dùng:
 #   ./test/run_tests.sh --quick      một bản build (mặc định core 3.x, cấu hình kit mặc định)
-#   ./test/run_tests.sh --full       sáu bản build: core3, core2+inverts,
+#   ./test/run_tests.sh --full       tám bản build: core3, core2+inverts,
 #                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan, web token,
-#                                    buffer JSON nhỏ (nhánh JSON bị cắt) + bộ test JS trang web
+#                                    buffer JSON nhỏ (nhánh JSON bị cắt), PID/PWM + TLS + MQTT,
+#                                    ANTI_REPLAY=1 (nhánh chống replay)
+#                                    + bộ test JS trang web
+#   ./test/run_tests.sh --extras     chỉ bản PID/PWM + TLS + MQTT (dùng khi phát triển)
 #   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng + nhánh
 #
 # Biến môi trường:
@@ -37,8 +40,10 @@ SRC=(
   "$ROOT/src/control/pid.cpp"
   "$ROOT/src/control/softstart.cpp"
   "$ROOT/src/connectivity/mqtt.cpp"
-  "$ROOT/src/connectivity/websocket.cpp"
-  "$ROOT/src/connectivity/tls.cpp"
+  "$ROOT/src/connectivity/history.cpp"
+  "$ROOT/src/connectivity/weather.cpp"
+  "$ROOT/src/connectivity/notify.cpp"
+  "$ROOT/src/connectivity/networker.cpp"
   "$ROOT/src/connectivity/ota.cpp"
   "$ROOT/src/observability/metrics.cpp"
   "$ROOT/src/observability/health.cpp"
@@ -76,6 +81,13 @@ run_token()    { build_and_run webtoken -DESP_ARDUINO_VERSION_MAJOR=3 \
 # phải trả lỗi 500 thay vì trả JSON hỏng cho trình duyệt.
 run_tinyjson() { build_and_run tinyjson -DESP_ARDUINO_VERSION_MAJOR=3 \
                     -DAPI_JSON_BUF_SIZE=64; }
+run_extras()   { build_and_run extras -DESP_ARDUINO_VERSION_MAJOR=3 \
+                    -DFAN_PWM_ENABLED=1 -DMQTT_USE_TLS=1 -DMQTT_ENABLED=1; }
+# ANTI_REPLAY mặc định = 0, nghĩa là toàn bộ nhánh nonce trong guardWeb() không
+# được biên dịch ở bất kỳ cấu hình nào khác -> một lỗi ở đó có thể lọt qua mọi
+# build còn lại. Build này bật nó để test D34 thật sự chạy.
+run_replay()   { build_and_run replay -DESP_ARDUINO_VERSION_MAJOR=3 \
+                    -DANTI_REPLAY=1; }
 run_asan() {
   local bin="$BUILD/asan.bin"
   echo "=== Build: asan+ubsan ==="
@@ -106,16 +118,18 @@ run_coverage() {
   echo "=== Build: coverage (gcov) ==="
   local objs=()
   local f o
-  # Bản coverage chạy kèm token để phủ cả nhánh kiểm tra token (D16);
-  # nhánh không-token đã được phủ ở các bản build khác.
+  # Bản coverage bật các cờ compile-time để phủ những nhánh chỉ tồn tại khi
+  # bật cờ: token web (D16) và PWM quạt (D30). Nhánh tương ứng với cờ tắt đã
+  # được phủ ở các bản build khác.
+  local covflags=(-DWEB_TOKEN='"token-bao-mat-test"' -DFAN_PWM_ENABLED=1)
   # gcov tạo file ghi chú bằng cách thay phần mở rộng của file object bằng
   # .gcno, nên đặt tên object như "control.o" (không phải "control.cpp.o").
   for f in "$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}"; do
     o="$cov/$(basename "${f%.cpp}").o"
-    g++ "${FLAGS[@]}" -DWEB_TOKEN='"token-bao-mat-test"' --coverage -c "$f" -o "$o"
+    g++ "${FLAGS[@]}" "${covflags[@]}" --coverage -c "$f" -o "$o"
     objs+=("$o")
   done
-  g++ "${FLAGS[@]}" -DWEB_TOKEN='"token-bao-mat-test"' --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.o"
+  g++ "${FLAGS[@]}" "${covflags[@]}" --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.o"
   objs+=("$cov/SmartFarm.o")
   g++ --coverage -o "$cov/test.bin" "${objs[@]}"
   # Xóa .gcda cũ nếu còn (tránh cộng dồn số liệu của lần chạy trước).
@@ -149,8 +163,8 @@ run_coverage() {
     base="$(basename "$gc" .gcov)"
     case "$base" in
       actuators.cpp|anomaly.cpp|calibration.cpp|config.cpp|control.cpp|demo.cpp|globals.cpp|health.cpp|\
-      hal.cpp|logger.cpp|metrics.cpp|mqtt.cpp|oled.cpp|ota.cpp|pid.cpp|sensors.cpp|\
-      settings.cpp|softstart.cpp|tls.cpp|webserver.cpp|websocket.cpp|wifi.cpp|SmartFarm.ino) ;;
+      hal.cpp|history.cpp|logger.cpp|metrics.cpp|mqtt.cpp|networker.cpp|notify.cpp|oled.cpp|ota.cpp|pid.cpp|sensors.cpp|\
+      settings.cpp|softstart.cpp|weather.cpp|webserver.cpp|wifi.cpp|SmartFarm.ino) ;;
       *) continue ;;
     esac
     case "$base" in
@@ -233,21 +247,27 @@ case "$MODE" in
     run_default
     echo "QUICK: PASSED"
     ;;
-    --full)
+  --full)
     run_default
     run_core2
     run_buzzer
     run_asan
     run_token
     run_tinyjson
+    run_extras
+    run_replay
     run_js
-    echo "FULL: ALL 6 BUILDS + JS TESTS PASSED"
+    echo "FULL: ALL 8 BUILDS + JS TESTS PASSED"
+    ;;
+  --extras)
+    run_extras
+    echo "EXTRAS: PASSED"
     ;;
   --coverage)
     run_coverage
     ;;
   *)
-    echo "Usage: $0 [--quick|--full|--coverage]" >&2
+    echo "Usage: $0 [--quick|--full|--extras|--coverage]" >&2
     exit 2
     ;;
 esac

@@ -4,11 +4,6 @@
 #include "../actuators.h"
 #include "../oled.h"
 
-// ── Các cờ debug theo module ──
-bool dbgSensors = false, dbgActuators = false, dbgControl = false;
-bool dbgWebserver = false, dbgWifi = false, dbgOled = false;
-bool dbgSettings = false, dbgLogger = false, dbgRgb = false;
-
 // Mức tối thiểu được in (LOG_DEBUG hiển thị mọi thứ)
 LogLevel gMinLogLevel = LOG_INFO;
 
@@ -46,6 +41,10 @@ void logMessage(LogLevel level, const char* func, int line, const char* msg) {
   ensureInit();
   char buf[192];
   size_t n = formatPrefix(buf, sizeof(buf), level, func, line);
+  // snprintf trả về số byte LẼ RA CẦN (không tính NUL). Nếu tên hàm dài làm
+  // tiền tố bị cắt cụt thì n >= sizeof(buf) và "sizeof(buf) - n" tràn thành số
+  // khổng lồ → snprintf ghi vượt buffer 192 byte trên stack. Kẹp lại trước.
+  if (n >= sizeof(buf)) n = sizeof(buf) - 1;
   // Một lần snprintf thay vì hai: prefix + thông điệp trong cùng buffer.
   snprintf(buf + n, sizeof(buf) - n, " -> %s\n", msg);
   Serial.print(buf);
@@ -56,6 +55,7 @@ void logError(LogLevel level, const char* func, int line, int code, const char* 
   ensureInit();
   char buf[192];
   size_t n = formatPrefix(buf, sizeof(buf), level, func, line);
+  if (n >= sizeof(buf)) n = sizeof(buf) - 1;   // xem logMessage(): tránh underflow
   snprintf(buf + n, sizeof(buf) - n, " [MA LOI: %d] -> %s\n", code, msg);
   Serial.print(buf);
 }

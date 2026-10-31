@@ -2,6 +2,7 @@
 // API mock phần cứng điều khiển được cho bộ test chạy trên host.
 // Các test link firmware THẬT (SmartFarm.ino + src/*.cpp) với các
 // mock này, nên mọi kiểm tra đều chạy trên code production. Xem test/README.md.
+#include <cstddef>
 #include <cstdint>
 
 // ── Trạng thái phần cứng giả lập ──
@@ -46,6 +47,8 @@ void mockSerialClear();
 // Log thứ tự gọi IO cho test regression lỗi glitch lúc khởi động:
 // mỗi mục có dạng "W:26=1;" (digitalWrite) và "M:26;" (pinMode).
 const char *mockIoLog();
+// Chế độ pinMode() cuối cùng của một chân (so sánh với INPUT/INPUT_PULLDOWN/...).
+int mockGetPinMode(uint8_t pin);
 void mockIoLogClear();
 
 // WebServer
@@ -54,10 +57,27 @@ int  mockServerRouteCount();
 bool mockServerHasRoute(const char *path);
 void mockServerSetArg(const char *name, const char *value);
 void mockServerSetHeader(const char *name, const char *value);
+// Header "Host" của request giả (mặc định = mockWifiIp, giống khi mở bằng IP).
+void mockServerSetHost(const char *host);
 bool mockServerInvoke(const char *path);
+// Gọi route với method cụ thể (HTTP_GET/HTTP_POST/... trong mocks/WebServer.h).
+// Trả false nếu không có route nào nhận method đó; khi đường dẫn có tồn tại
+// nhưng method không khớp, mã trả về là 404 — đúng như core thật.
+bool mockServerInvokeMethod(const char *path, int method);
+// Bảng route đã đăng ký (để test Assert mọi route state-changing là GET tường minh).
+int mockServerRouteMethod(int index);
+const char *mockServerRoutePath(int index);
+// true nếu firmware đăng ký nhiều route hơn sức chứa mock (trước đây bị âm thầm bỏ qua).
+bool mockServerRouteOverflow();
 int  mockServerLastCode();
 const char *mockServerLastType();
 const char *mockServerLastBody();
+// Số byte mà handler khai báo qua setContentLength() (0 = không khai báo).
+size_t mockServerContentLength();
+// Số lần handler gọi sendContent() cho response vừa rồi. Mỗi lần là một
+// NetworkClient::write() chặn được tới 10 s trên firmware thật, nên response
+// state-changing nào cũng phải ghi đúng MỘT lần.
+int mockServerContentWrites();
 
 // OLED
 const char *mockOledText();
@@ -69,3 +89,5 @@ void mockServoWrite(int angle);
 void mockNeoPixelSet(int index, uint32_t color);
 float mockPrefGet(const char *key, float dflt);
 void mockPrefPut(const char *key, float value);
+// Số lần put* (= số lần commit flash NVS) kể từ mockReset() gần nhất.
+int mockPrefWrites();

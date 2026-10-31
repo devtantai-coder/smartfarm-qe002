@@ -4,5 +4,6 @@
 void softStartInit();
 void softStartUpdate();
 void softStartPump(bool on);
+void softStartCancel();
 bool softStartIsActive();
 #endif

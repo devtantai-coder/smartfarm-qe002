@@ -12,6 +12,13 @@
 #define LOW 0
 #define INPUT 0
 #define OUTPUT 1
+// Giá trị lấy đúng từ cores/esp32/esp32-hal-gpio.h để firmware dùng được cả
+// hai kiểu kéo nội; mock ghi lại mode (mockGetPinMode) nên test kiểm chứng được
+// "chân vào có kéo xuống hay không" thay vì chỉ thấy pinMode được gọi.
+#define PULLUP 4
+#define INPUT_PULLUP 5
+#define PULLDOWN 8
+#define INPUT_PULLDOWN 9
 #define PROGMEM
 #define F(x) x
 #define constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
@@ -61,7 +68,7 @@ inline String operator+(const String &a, const String &b) { return String(a.std_
 inline String operator+(const String &a, int b) { return String(a.std_str() + String(b).std_str()); }
 
 unsigned long millis();
-void delay(unsigned long);
+unsigned long micros();
 void pinMode(uint8_t, uint8_t);
 void digitalWrite(uint8_t, uint8_t);
 int digitalRead(uint8_t);
@@ -143,5 +150,6 @@ class ESPClass {
 public:
   static void restart() {}
   unsigned long getFreeHeap() { return 0; }
+  unsigned long getMinFreeHeap() { return 0; }
 };
 extern ESPClass ESP;

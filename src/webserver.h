@@ -17,9 +17,23 @@ void handleWindmill();
 void handleFeed();
 void handleDemo();
 void handleThreshold();
+void handleWifi();
+void handleReset();
+void handleAppConfig();
+void handleAppAll();
+void handleAppDoor();
+void handleAppLed();
+void handleHistory();
+void handleWeather();
 
 // Guard dùng chung cho các handler ở module khác (health/metrics).
 bool webTokenGuard();
 bool webGuard();
+
+// Đọc tham số float bắt buộc là số hữu hạn (khác toFloat() trả 0 cho "abc").
+bool webFloatArg(const char* name, float* out);
+
+// true khi app ACEBOTT vừa điều khiển; automation tạm dừng vài giây.
+bool appControlActive();
 
 #endif

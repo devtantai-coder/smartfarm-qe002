@@ -6,4 +6,6 @@ void metricsCollect();
 const char* metricsToJson();
 unsigned long metricsUptime();
 void handleMetrics();
+// Ghi nhận thời gian một vòng loop() (µs) để /metrics báo trung bình/lớn nhất.
+void metricsNoteLoop(uint32_t us);
 #endif

@@ -12,13 +12,21 @@ Tài liệu này dành cho **người chưa từng học lập trình** cũng đ
 > `sys.soilThresholdLow`... Khi đối chiếu với code hiện tại hãy thêm tiền tố `sys.`
 > cho các biến toàn cục.
 >
-> Firmware hiện chạy **single-loop**, không còn SensorTask/ControlTask/CommTask/
-> DisplayTask/PowerTask, queue hay `sysMutex`; phần mô tả FreeRTOS trong tài liệu
-> là lịch sử. `runExtras()` cũng đã bị bỏ: calibration chỉ được ghi khi có lệnh
-> `/calibrate` hợp lệ, anomaly không ghi đè `sys.sensorHealthy` của DHT.
-> `webToken`/`otaPassword` không được ghi vào flash; WiFi/OTA lấy từ
-> `src/secrets.h`. Số dòng của `SmartFarm.ino` và `test/test_main.cpp` đã thay đổi
-> đáng kể, nên hãy dùng tên hàm làm mốc thay vì số dòng.
+> Firmware hiện chạy **single-loop** cho toàn bộ điều khiển (không còn SensorTask/
+> ControlTask/CommTask/DisplayTask/PowerTask hay `sysMutex`); phần mô tả FreeRTOS
+> trong tài liệu là lịch sử. Ngoại lệ duy nhất là **một task mạng nền** trong
+> `networker.cpp` (queue 4 job + task riêng, dùng `IrqLock` ở `irqlock.h`) để
+> Telegram/thời tiết không chặn loop. `runExtras()` cũng đã bị bỏ: calibration
+> chỉ được ghi khi có lệnh `/calibrate` hợp lệ, anomaly không ghi đè
+> `sys.sensorHealthy` của DHT. `webToken`/`otaPassword` không được ghi vào flash;
+> WiFi/OTA lấy từ `src/secrets.h`. Số dòng của `SmartFarm.ino` và
+> `test/test_main.cpp` đã thay đổi đáng kể, nên hãy dùng tên hàm làm mốc thay vì số dòng.
+>
+> **Bổ sung sau tài liệu gốc:** lịch sử + biểu đồ (`history.cpp`), thời tiết thực
+> Open-Meteo (`weather.cpp`), Telegram (`notify.cpp`), MQTT/TLS (`mqtt.cpp`),
+> khởi động mềm bơm (`softstart.cpp`), PID/PWM quạt, động cơ cối xay
+> gió GPIO16, Bluetooth Serial và các endpoint tương thích app ACEBOTT. Các phần
+> này được tóm tắt ở **PHẦN 18**; số route hiện tại là **25**, `/api` có **23 khóa**.
 
 ---
 
@@ -44,19 +52,22 @@ không bao giờ dùng `delay()` dài trong vòng lặp chính; nó chỉ *xem �
 smartfarm-qe002/
 ├── SmartFarm.ino        ← "bộ não": hàm setup() chạy 1 lần khi bật, loop() chạy mãi mãi
 ├── src/
-│   ├── config.h/.cpp    ← Bản đồ chân GPIO + thông số thời gian + ngưỡng mặc định
-│   ├── globals.h/.cpp   ← Các biến "toàn cục" (ai cũng đọc/ghi được) + đối tượng phần cứng
-│   ├── logger.h/.cpp    ← Ghi log ra Serial + 8 hàm debug cho menu serial
-│   ├── sensors.h/.cpp   ← Đọc 6 cảm biến + lọc nhiễu (trung bình động)
-│   ├── actuators.h/.cpp ← Bật/tắt bơm, quạt, còi, đèn, RGB, servo
-│   ├── control.h/.cpp   ← "Luật chơi" tự động: khi nào bật/tắt cái gì
-│   ├── demo.h/.cpp      ← Trình diễn 15 bước HOẠT ĐỘNG 2→12
-│   ├── oled.h/.cpp      ← Vẽ 8 dòng thông tin lên màn hình OLED
-│   ├── settings.h/.cpp  ← Lưu/đọc cài đặt vào bộ nhớ flash (không mất khi tắt điện)
-│   ├── wifi.h/.cpp      ← Giữ WiFi luôn kết nối, tự thử lại mỗi 10 giây
-│   └── webserver.h/.cpp ← 18 "cửa" (route) web + trang HTML điều khiển
+│   ├── *.h              ← header công khai ở gốc src/ (config, globals, logger, ...)
+│   ├── core/            ← config.cpp, globals.cpp, logger.cpp, settings.cpp
+│   ├── hal/             ← hal.cpp (GPIO, ADC, PWM, I2C, servo)
+│   ├── sensors/         ← sensors.cpp (đọc cảm biến + lọc trung bình động)
+│   ├── actuators/       ← actuators.cpp (bơm, quạt, còi, đèn, RGB, servo)
+│   ├── control/         ← control.cpp, demo.cpp, pid.cpp, softstart.cpp,
+│   │                       calibration.cpp, anomaly.cpp
+│   ├── connectivity/    ← wifi, webserver, mqtt, history, weather, notify,
+│   │                       networker, ota
+│   ├── ui/              ← oled.cpp
+│   └── observability/   ← metrics.cpp, health.cpp
 └── test/                ← Bộ test chạy trên máy tính, không cần kit thật
 ```
+
+Mỗi `.h` nằm ở `src/` gốc; file `.cpp` tương ứng nằm trong thư mục module và
+include header bằng đường dẫn tương đối `../<module>.h`.
 
 ### 0.3. Luồng hoạt động (vẽ đơn giản)
 
@@ -70,18 +81,21 @@ setup()  ── chạy MỘT LẦN ───────────────
    │  • khởi động DHT11, dải LED RGB, servo, màn hình OLED
    │  • đọc cài đặt đã lưu trong flash
    │  • kết nối WiFi (chờ tối đa 30 giây)
-   │  • đăng ký 14 đường dẫn web rồi mở "quầy tiếp tân" (server.begin)
+   │  • đăng ký 25 đường dẫn web rồi mở "quầy tiếp tân" (server.begin)
+   │  • khởi tạo lịch sử, thời tiết, Telegram, MQTT, Bluetooth (nếu bật)
    ▼
 loop()  ── chạy LẶP MÃI (hàng nghìn lần mỗi giây) ─────
    │  1. "đút thức ăn" cho watchdog (esp_task_wdt_reset)
    │  2. phục vụ khách web (server.handleClient)
    │  3. kiểm tra WiFi còn sống không (manageWiFi)
    │  4. đọc phím bấm từ Serial Monitor
-   │  5. đọc cảm biến theo nhịp 1 giây
+   │  5. đọc cảm biến theo nhịp 2 giây (SENSOR_INTERVAL)
    │  6. LUẬT AN TOÀN: nước thấp → bơm phải tắt
    │  7. nếu trình diễn đang chạy → chạy bước tiếp theo
    │     ngược lại → chạy bộ luật tự động (bơm/quạt/đèn/chạm/còi…)
-   │  8. cập nhật màn hình OLED mỗi 2 giây
+   │  8. ghi mẫu lịch sử mỗi 30 giây; cập nhật thời tiết mỗi 15 phút
+   │  9. phục vụ MQTT + đọc lệnh Bluetooth (nếu bật)
+   │ 10. cập nhật màn hình OLED mỗi 2 giây
    ▼
 (lặp lại từ đầu, khoảng vài nghìn lần mỗi giây)
 ```
@@ -103,7 +117,11 @@ loop()  ── chạy LẶP MÃI (hàng nghìn lần mỗi giây) ────�
 | 35 | Cảm biến độ ẩm đất | Đọc (ADC) | Đất khô ↔ ẩm |
 | 36 | Cảm biến mực nước | Đọc (ADC) | Bể cạn ↔ đầy |
 | 21 / 22 | OLED SDA / SCL | Giao tiếp I2C | Màn hình 128×64 |
+| 16 | Động cơ cối xay gió | Ghi | Mức HIGH = chạy; cần transistor/relay + diode flyback |
 | 15 | Kênh PWM cho LED xanh (core 2.x) | — | Tránh đụng timer với servo |
+
+> Khi `FAN_PWM_ENABLED=1`, quạt GPIO14 được điều khiển bằng LEDC thay vì mức số.
+> Khi `WINDMILL_SERVO_SIM=1`, servo GPIO13 vẫn quay mô phỏng song song với động cơ.
 
 ### 0.5. Từ vựng nhanh
 
@@ -119,7 +137,7 @@ loop()  ── chạy LẶP MÃI (hàng nghìn lần mỗi giây) ────�
 
 ---
 
-## PHẦN 1 — SmartFarm.ino (bộ não, 233 dòng)
+## PHẦN 1 — SmartFarm.ino (bộ não, 532 dòng)
 
 ### 1.1. Khối chú thích đầu file (dòng 1–6)
 
@@ -391,7 +409,7 @@ void setup() {
   server.begin();
 ```
 
-- Dòng 140–153: "đăng ký" 14 đường dẫn web. Mỗi dòng nghĩa là: khi có người mở địa chỉ này, hãy gọi hàm xử lý kia. Ví dụ mở `http://<IP>/?id=pump` của `/toggle` sẽ gọi `handleToggle()`.
+- Dòng 140–153: "đăng ký" 25 đường dẫn web. Mỗi dòng nghĩa là: khi có người mở địa chỉ này, hãy gọi hàm xử lý kia. Ví dụ mở `http://<IP>/?id=pump` của `/toggle` sẽ gọi `handleToggle()`.
 - Dòng 154–155: chú thích giải thích lý do phải khai báo header trước: thư viện `WebServer` **chỉ giữ lại** những header đã được "điểm danh" (mặc định chỉ vài header quen thuộc của trình duyệt).
 - Dòng 156–157: khai báo 4 header cần đọc (`Origin`, `Referer`, `Sec-Fetch-Site`, `X-Auth-Token`) rồi gọi `server.collectHeaders(...)` để thư viện lưu chúng. Nếu không khai báo, `guardWeb()` ở **PHẦN 12** không thấy `Origin`/`Referer`/`Sec-Fetch-Site` để chống CSRF và không thấy `X-Auth-Token` để kiểm token — vì vậy 4 header này phải được đăng ký ngay tại đây.
 - Dòng 158: mở "quầy tiếp tân" — từ đây server mới bắt đầu nhận khách.
@@ -532,7 +550,7 @@ void loop() {
 
 ---
 
-## PHẦN 2 — src/config.h và src/config.cpp (bảng cấu hình)
+## PHẦN 2 — src/config.h và src/core/config.cpp (bảng cấu hình)
 
 ### 2.1. config.h — khai báo chân, thời gian, cờ hiệu chuẩn
 
@@ -721,7 +739,7 @@ const unsigned long FEED_DURATION       = 2000;  // feed gate open time (activit
 
 ---
 
-## PHẦN 3 — src/globals.h và src/globals.cpp (biến dùng chung)
+## PHẦN 3 — src/globals.h và src/core/globals.cpp (biến dùng chung)
 
 ### 3.1. globals.h — lời hứa cho mọi mô-đun
 
@@ -871,7 +889,7 @@ bool sensorHealthy = true;
 
 ---
 
-## PHẦN 4 — src/logger.h và src/logger.cpp (ghi log + debug)
+## PHẦN 4 — src/logger.h và src/core/logger.cpp (ghi log + debug)
 
 ### 4.1. logger.h — hợp đồng của hệ thống log
 
@@ -1057,7 +1075,7 @@ void debugSensors() {
 }
 ```
 
-- Dòng 70–76: phím '1' của menu. Đáng chú ý: gọi `readAllSensors()` để bạn thấy số liệu **mới nhất ngay lúc đó**, kể cả chưa đến nhịp 1 giây.
+- Dòng 70–76: phím '1' của menu. Đáng chú ý: gọi `readAllSensors()` để bạn thấy số liệu **mới nhất ngay lúc đó**, kể cả chưa đến nhịp 2 giây (`SENSOR_INTERVAL`).
 
 ```cpp
 void debugActuators() {
@@ -1166,7 +1184,7 @@ void debugLogger() {
 
 ---
 
-## PHẦN 5 — src/sensors.h và src/sensors.cpp (đọc + lọc cảm biến)
+## PHẦN 5 — src/sensors.h và src/sensors/sensors.cpp (đọc + lọc cảm biến)
 
 ### 5.1. sensors.h
 
@@ -1359,7 +1377,7 @@ void testResetSensorStatics() {
 
 ---
 
-## PHẦN 6 — src/actuators.h và src/actuators.cpp (điều khiển thiết bị)
+## PHẦN 6 — src/actuators.h và src/actuators/actuators.cpp (điều khiển thiết bị)
 
 ### 6.1. actuators.h
 
@@ -1555,7 +1573,7 @@ void testResetActuatorStatics() { sBuzzerOn = false; }
 
 ---
 
-## PHẦN 7 — src/control.h và src/control.cpp (bộ luật tự động)
+## PHẦN 7 — src/control.h và src/control/control.cpp (bộ luật tự động)
 
 ### 7.1. control.h
 
@@ -1875,7 +1893,7 @@ void testResetControlStatics() {
 
 ---
 
-## PHẦN 8 — src/demo.h và src/demo.cpp (trình diễn 15 bước)
+## PHẦN 8 — src/demo.h và src/control/demo.cpp (trình diễn 15 bước)
 
 ### 8.1. demo.h
 
@@ -2093,7 +2111,7 @@ void testResetDemoStatics() {
 
 ---
 
-## PHẦN 9 — src/oled.h và src/oled.cpp (màn hình 128×64)
+## PHẦN 9 — src/oled.h và src/ui/oled.cpp (màn hình 128×64)
 
 ### 9.1. oled.h
 
@@ -2301,7 +2319,7 @@ if (sys.oledDirty || (now - sys.lastOledUpdate >= OLED_INTERVAL)) {
 
 ---
 
-## PHẦN 10 — src/settings.h và src/settings.cpp (lưu cài đặt)
+## PHẦN 10 — src/settings.h và src/core/settings.cpp (lưu cài đặt)
 
 ### 10.1. settings.h
 
@@ -2364,7 +2382,7 @@ void loadSettings() {
 
 ---
 
-## PHẦN 11 — src/wifi.h và src/wifi.cpp (giữ WiFi sống)
+## PHẦN 11 — src/wifi.h và src/connectivity/wifi.cpp (giữ WiFi sống)
 
 ### 11.1. wifi.h
 
@@ -2446,7 +2464,7 @@ void testResetWifiStatics() { sWarned = false; }
 
 ---
 
-## PHẦN 12 — src/webserver.h và src/webserver.cpp (web điều khiển)
+## PHẦN 12 — src/webserver.h và src/connectivity/webserver.cpp (web điều khiển)
 
 ### 12.1. webserver.h
 
@@ -2624,7 +2642,7 @@ void handleApi() {
 
 - Dòng 276: log debug.
 - Dòng 278–281: comment giải thích vì sao chỉ dùng biến global đã lọc (không đọc cảm biến thô — DHT11 cần 1 giây giữa hai lần đọc), **không tự nối `String`** trong handler và **không cấp phát heap thêm**; chỉ `send()` của thư viện vẫn tạo một `String` nội bộ đúng một lần.
-- Dòng 282–299: dựng JSON bằng `char buf[512]` + **một** `snprintf` duy nhất (thay cho nối `String` + `reserve(520)` trước đây). Buffer 512 byte đủ chứa JSON 21 khóa (kể cả bước demo dài nhất); giới hạn này đã được kiểm chứng bằng test hợp đồng JSON, và `snprintf` tự cắt an toàn nếu có gì vượt.
+- Dòng 282–299: dựng JSON bằng `char buf[512]` + **một** `snprintf` duy nhất (thay cho nối `String` + `reserve(520)` trước đây). Buffer 512 byte đủ chứa JSON 23 khóa (kể cả bước demo dài nhất); giới hạn này đã được kiểm chứng bằng test hợp đồng JSON, và `snprintf` tự cắt an toàn nếu có gì vượt.
 - Dòng 284–288: chuỗi định dạng — 6 giá trị cảm biến (`%.1f` cho nhiệt độ/độ ẩm, `%d` cho ánh sáng/đất/nước và thời tiết mã 0–3) cùng 14 giá trị boolean + 1 chuỗi `demoStep`, in đúng chữ `true`/`false` theo chuẩn JSON (không phải 1/0).
 - Dòng 289–299: danh sách giá trị truyền vào `snprintf` (biến global đã lọc, `weatherStatus()`, các cờ trạng thái).
 - Dòng 296: `demoStep` là chuỗi — khi không chạy demo thì truyền chuỗi rỗng `""`.
@@ -2872,7 +2890,7 @@ void handleThreshold() {
 
 ---
 
-## PHẦN 13 — Thư mục test/ (bộ kiểm thử 772.713 lượt)
+## PHẦN 13 — Thư mục test/ (bộ kiểm thử hàng trăm nghìn lượt)
 
 ### 13.1. Vì sao có bộ test này?
 
@@ -2888,14 +2906,15 @@ biên dịch **code thật** (`SmartFarm.ino` + `src/*.cpp`). Nhờ vậy:
 
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh
-./test/run_tests.sh --full       # 6 bản build (mặc định)
+./test/run_tests.sh --full       # 8 bản build (mặc định) + test JS
 ./test/run_tests.sh --coverage   # đo độ phủ dòng lệnh (gcov)
 ```
 
-6 bản build của `--full` chạy CÙNG bộ test với cấu hình khác nhau, để chắc mọi nhánh
+8 bản build của `--full` chạy CÙNG bộ test với cấu hình khác nhau, để chắc mọi nhánh
 `#if` đều đúng. Mọi bản build đều kèm `-DSMARTFARM_TEST_HOOKS` để bộ test reset được cả
-các biến static trong `src/` (xem các hook `testReset*Statics` ở PHẦN 5–8, 11). Bản
-`webtoken` chạy thêm test D16 nên có **772.738** lượt kiểm tra thay vì 772.713:
+các biến static trong `src/` (xem các hook `testReset*Statics` ở PHẦN 5–8, 11). Mỗi bản
+in dòng cuối `=== N checks, 0 failures ===`; N thay đổi theo cấu hình và theo code nên
+tài liệu không chốt cứng con số:
 
 | Bản build | Cấu hình | Kiểm tra điều gì |
 |---|---|---|
@@ -2904,13 +2923,20 @@ các biến static trong `src/` (xem các hook `testReset*Statics` ở PHẦN 5�
 | `passive-lowrelay` | Còi thụ động + relay kích mức thấp | Nhánh `tone()` và nhánh đảo mức relay |
 | `asan+ubsan` | Địa chỉ + hành vi không xác định | Bắt tràn bộ nhớ, dùng biến chưa khởi tạo… |
 | `webtoken` | `-DWEB_TOKEN='"token-bao-mat-test"'` | Bảo vệ token web: thiếu/sai token → 401, đúng qua header/`?token=` → 200 |
+| `tinyjson` | `-DAPI_JSON_BUF_SIZE=64` | Nhánh JSON `/api` bị cắt cụt → phải trả lỗi 500 |
+| `extras` | `-DFAN_PWM_ENABLED=1 -DMQTT_USE_TLS=1 -DMQTT_ENABLED=1` | PID/PWM quạt, MQTT + TLS |
+| `replay` | `-DANTI_REPLAY=1` | Nhánh nonce chống replay trong `guardWeb()` |
 
 ### 13.3. `test_main.cpp` gồm những gì?
 
 - **T1–T19**: test đơn vị từng mô-đun — ví dụ T3 kiểm tra bơm bật khi đất khô, giữ nguyên khi đất trong khoảng trễ, tắt khi đất ẩm; T16 kiểm tra PIR không tắt oan đèn bật thủ công và đèn thở được khôi phục; T18 kiểm tra reset mặc định, bỏ qua ghi flash khi giá trị không đổi và mã bảo mật không bị ghi vào NVS; T19 kiểm tra logger với cấp log ngoài enum.
 - **D1–D3**: soi đúng các giá trị **biên** — ví dụ `gWater` đúng bằng ngưỡng thì *được phép* chạy bơm (luật là `<` chứ không phải `<=`), hoặc van thời gian: đúng 29 ms chưa đổi nhịp, đúng 30 ms mới đổi.
-- **I1–I15**: test tích hợp với `setup()` + `loop()` thật — boot đăng ký đủ 18 route, thứ tự ghi mức điện trước `pinMode` (chống glitch relay), mất WiFi tự nối lại, boot thiếu OLED/không có WiFi vẫn chạy, cấu hình WiFi động qua web (I12), callback OTA in đúng trạng thái (I13), calibration qua HTTP (I14), health/metrics có guard (I15), v.v.
-- **D5–D16**: test chuyên sâu — hợp đồng JSON 21 khóa với bộ đọc JSON tự viết, đúng từng ký tự thân phản hồi, OLED từng dòng và giới hạn 21 ký tự, menu serial với byte rác, trình diễn đúng 15 bước/30.700 ms, chống spam WiFi đúng 10.000 ms, bền vững qua mất điện, **fuzz 90.000 bước ngẫu nhiên** với các bất biến an toàn (bơm không bao giờ chạy khô, chân luôn khớp trạng thái…), tràn `millis()` cho mọi bộ đếm, chặn CSRF (Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` → 403) và bảo vệ token web tùy chọn (thiếu/sai → 401, đúng → 200).
+- **I1–I15**: test tích hợp với `setup()` + `loop()` thật — boot đăng ký đủ 25 route, thứ tự ghi mức điện trước `pinMode` (chống glitch relay), mất WiFi tự nối lại, boot thiếu OLED/không có WiFi vẫn chạy, cấu hình WiFi động qua web (I12), callback OTA in đúng trạng thái (I13), calibration qua HTTP (I14), health/metrics có guard (I15), v.v.
+- **D25–D34**: tính năng mới — lịch sử 96 mẫu, parser thời tiết, endpoint app
+  ACEBOTT + tạm dừng automation, soft-start, động cơ cối xay gió, PID/PWM,
+  Telegram, cờ MQTT/TLS, parser Bluetooth và cửa sổ chống replay (D34 chỉ chạy
+  ở bản build `replay`).
+- **D5–D16**: test chuyên sâu — hợp đồng JSON 23 khóa với bộ đọc JSON tự viết, đúng từng ký tự thân phản hồi, OLED từng dòng và giới hạn 21 ký tự, menu serial với byte rác, trình diễn đúng 15 bước/30.700 ms, chống spam WiFi đúng 10.000 ms, bền vững qua mất điện, **fuzz 90.000 bước ngẫu nhiên** với các bất biến an toàn (bơm không bao giờ chạy khô, chân luôn khớp trạng thái…), tràn `millis()` cho mọi bộ đếm, chặn CSRF (Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` → 403) và bảo vệ token web tùy chọn (thiếu/sai → 401, đúng → 200).
 
 ### 13.4. Vài bất biến (invariant) quan trọng được kiểm tra liên tục
 
@@ -3185,34 +3211,11 @@ static void resetState() {
 - Dòng 140: đánh dấu cảm biến khỏe mạnh trở lại.
 - Tóm lại dòng 116–141: một nút "reset toàn bộ" — trả cả biến toàn cục lẫn biến static trong `src/` về mặc định, điểm khởi đầu công bằng cho mọi test.
 
-```cpp
-// Mô phỏng đúng phần điều khiển trong loop() của SmartFarm.ino (không có HTTP/OLED)
-static void simLoop() {
-  unsigned long now = mockMillis();
-  gTouch = readTouch();
-  gPir = readPIR();
-  if (now - lastSensorRead >= SENSOR_INTERVAL) {
-    readAllSensors();
-    lastSensorRead = now;
-  }
-  if (gWater < (int)waterThresholdLow && relayState) setRelay(false);
-  if (demoRunning()) {
-    updateDemo();
-    controlBreathe();
-  } else {
-    controlPump(); controlFan(); controlLight(); controlRgb(); controlBreathe();
-    controlTouch(); controlAlerts(); controlWindmill(); controlFeed();
-  }
-}
-```
-
-- Dòng 143: comment nói rõ `simLoop` chép lại đúng phần điều khiển của `loop()` thật nhưng **bỏ** phần HTTP/OLED — dùng cho các test không quan tâm mạng và màn hình.
-- Dòng 145: lấy đồng hồ giả `mockMillis()` (thay cho `millis()` thật) để đo thời gian mô phỏng.
-- Dòng 146–147: đọc ngay cảm biến chạm và PIR mỗi vòng, đúng như firmware (hai cảm biến này không cần bộ lọc trung bình).
-- Dòng 148–151: nếu đã qua `SENSOR_INTERVAL` kể từ lần đọc trước (`now - lastSensorRead >= SENSOR_INTERVAL`) thì gọi `readAllSensors()` — đọc cảm biến DHT/ADC có lọc trung bình — rồi chốt lại mốc thời gian. Đây là throttling: không đọc cảm biến quá dày.
-- Dòng 152: bất biến an toàn: nếu mức nước thấp hơn ngưỡng (`gWater < (int)waterThresholdLow`, ép về `int` vì ngưỡng là `float`) **và** bơm đang bật thì tắt bơm ngay — chống bơm chạy khô.
-- Dòng 153–155: nếu demo đang chạy, chỉ gọi `updateDemo()` và `controlBreathe()` — các bộ điều khiển tự động khác bị tạm khóa để không giành quyền điều khiển thiết bị với demo.
-- Dòng 156–159: chế độ thường — gọi lần lượt toàn bộ các bộ điều khiển tự động đúng thứ tự như trong `loop()` thật: bơm, quạt, đèn, RGB, đèn thở, chạm, cảnh báo (còi), cối xay gió, cho ăn.
+Bộ test hiện **gọi thẳng `loop()` thật** qua helper `runLoop()` (mô tả ngay dưới)
+thay vì chép lại phần điều khiển vào một hàm mô phỏng riêng như phiên bản cũ. Nhờ vậy
+mọi thứ `loop()` thật sự làm — đọc cảm biến theo `SENSOR_INTERVAL` (2000 ms), kiểm
+tra nước trước khi bơm, `runAutomation()`, lịch sử, OLED… — đều được test chạy qua,
+không có nguy cơ bản sao lệch khỏi firmware.
 
 ```cpp
 static int invoke(const char *path,
@@ -3267,11 +3270,11 @@ static void primeSensors(int water) {
 - Dòng 185: đặt ADC giả: ánh sáng (LDR) = 1000, độ ẩm đất = 600.
 - Dòng 186: đặt ADC nước. Nếu `INVERT_WATER` bật (cảm biến nước kiểu đảo: nước càng nhiều trị càng nhỏ) thì lấy `4095 - water` để đảo ngược; ngược lại dùng thẳng `water`. 4095 là giá trị ADC 12 bit lớn nhất của ESP32.
 - Dòng 187: gọi `readAllSensors()` đúng `SENSOR_FILTER_SIZE` lần — số phần tử của bộ lọc trung bình — để bộ lọc đầy toàn giá trị mới. Nếu chỉ gọi 1 lần, giá trị trung bình vẫn lẫn dữ liệu cũ/0 và test sẽ đọc ra số sai lệch.
-- Dòng 188: chốt `lastSensorRead = mockMillis()` — coi như vừa đọc cảm biến xong, để `simLoop` không đọc lại ngay lập tức mà chờ đủ chu kỳ.
+- Dòng 188: chốt `lastSensorRead = mockMillis()` — coi như vừa đọc cảm biến xong, để `runLoop` không đọc lại ngay lập tức mà chờ đủ chu kỳ.
 
 #### Cách đọc một test
 
-Các phần tiếp theo (14.2–14.12) mô tả từng hàm test, nhưng chỉ cần nắm **4 macro**: `CHECK` (điều kiện đúng), `CHECK_EQ` (hai số bằng nhau), `CHECK_NEAR` (hai số thực gần nhau), `CHECK_STR` (hai chuỗi giống nhau). Mọi test đều theo cùng một mô-típ 3 bước: **chuẩn bị** — gọi `resetState()` rồi chỉnh các biến mock (`mockAdc`, `mockDhtTemp`, `mockPinLevel`...) hoặc gọi `invoke`/`primeSensors`; **gọi hàm thật** — hàm điều khiển thật, `simLoop()`, `runLoop()` hay HTTP handler thật; **kiểm tra kết quả** — một loạt `CHECK*` so kết quả với mong đợi. Chỉ dòng nào in `FAIL` mới là có lỗi; `main()` cuối cùng tổng kết `gChecks`/`gFails` để báo PASS/FAIL toàn bộ.
+Các phần tiếp theo (14.2–14.12) mô tả từng hàm test, nhưng chỉ cần nắm **4 macro**: `CHECK` (điều kiện đúng), `CHECK_EQ` (hai số bằng nhau), `CHECK_NEAR` (hai số thực gần nhau), `CHECK_STR` (hai chuỗi giống nhau). Mọi test đều theo cùng một mô-típ 3 bước: **chuẩn bị** — gọi `resetState()` rồi chỉnh các biến mock (`mockAdc`, `mockDhtTemp`, `mockPinLevel`...) hoặc gọi `invoke`/`primeSensors`; **gọi hàm thật** — hàm điều khiển thật, `runLoop()` hay HTTP handler thật; **kiểm tra kết quả** — một loạt `CHECK*` so kết quả với mong đợi. Chỉ dòng nào in `FAIL` mới là có lỗi; `main()` cuối cùng tổng kết `gChecks`/`gFails` để báo PASS/FAIL toàn bộ.
 
 ### 14.2. T1–T12 — unit test cảm biến, bơm, quạt, đèn, chạm, RGB, còi, cơ cấu (dòng 195–476)
 
@@ -3715,7 +3718,7 @@ static void testFeedGate() {
 
 ### 14.3. T13–T15 và D1–D3 — thời tiết, settings, trình diễn, biên, tính bất biến, mốc thời gian (dòng 477–726)
 
-Sáu test trong mục này dùng lại các tiện ích chung đã giới thiệu ở 14.1: `resetState()` (gọi `mockReset()` rồi đưa toàn bộ biến toàn cục về mặc định), `mockAdvance(ms)` (đẩy đồng hồ ảo `millis()` thêm `ms`), `primeSensors()`, `simLoop()`, `checkRelayPin()`/`checkBuzzer()` và `currentLedPwm()`. Bốn macro `CHECK` đã được giải thích ở 14.1 nên không nhắc lại. Các hằng số thời gian lấy từ `src/config.cpp`: `TOUCH_DEBOUNCE = 300`, `BREATHE_INTERVAL = 30`, `WINDMILL_INTERVAL = 30`, `FEED_DURATION = 2000` (ms); các ngưỡng mặc định: `soilThresholdLow = 400`, `soilThresholdHigh = 700`, `waterThresholdLow = 200`, `lightThreshold = 500`, `tempThresholdHigh = 30`, `tempThresholdLow = 25`.
+Sáu test trong mục này dùng lại các tiện ích chung đã giới thiệu ở 14.1: `resetState()` (gọi `mockReset()` rồi đưa toàn bộ biến toàn cục về mặc định), `mockAdvance(ms)` (đẩy đồng hồ ảo `millis()` thêm `ms`), `primeSensors()`, `runLoop()`, `checkRelayPin()`/`checkBuzzer()` và `currentLedPwm()`. Bốn macro `CHECK` đã được giải thích ở 14.1 nên không nhắc lại. Các hằng số thời gian lấy từ `src/config.cpp`: `TOUCH_DEBOUNCE = 300`, `BREATHE_INTERVAL = 30`, `WINDMILL_INTERVAL = 30`, `FEED_DURATION = 2000` (ms); các ngưỡng mặc định: `soilThresholdLow = 400`, `soilThresholdHigh = 700`, `waterThresholdLow = 200`, `lightThreshold = 500`, `tempThresholdHigh = 30`, `tempThresholdLow = 25`.
 
 #### T13 — testWeather() (chú thích dòng 476; thân hàm 458–466)
 
@@ -3789,7 +3792,7 @@ static void testSettingsRoundtrip() {
 
 #### T15 — testDemoFullRun() (chú thích dòng 510; thân hàm 492–542)
 
-**Mục đích:** Chạy trọn một lượt trình diễn `startDemo()`/`updateDemo()` (các hoạt động 2–12) qua `simLoop()`, kiểm tra đủ các bước quan trọng diễn ra và sau khi demo kết thúc mọi cơ cấu phải được trả về trạng thái an toàn; chạy tiếp kịch bản hết nước để chắc chắn bước bơm bị bỏ qua.
+**Mục đích:** Chạy trọn một lượt trình diễn `startDemo()`/`updateDemo()` (các hoạt động 2–12) qua `runLoop()`, kiểm tra đủ các bước quan trọng diễn ra và sau khi demo kết thúc mọi cơ cấu phải được trả về trạng thái an toàn; chạy tiếp kịch bản hết nước để chắc chắn bước bơm bị bỏ qua.
 
 ```cpp
 // T15: chạy demo đầy đủ (hoạt động 2-12)
@@ -3806,7 +3809,7 @@ static void testDemoFullRun() {
   unsigned long cap = mockMillis() + 120000;
   while (demoRunning() && mockMillis() < cap) {
     mockAdvance(10);
-    simLoop();
+    runLoop();
     if (relayState) sawRelay = true;
     if (strstr(demoStepName(), "Den tho")) {
       inBreatheStep = true;
@@ -3837,7 +3840,7 @@ static void testDemoFullRun() {
   cap = mockMillis() + 120000;
   while (demoRunning() && mockMillis() < cap) {
     mockAdvance(10);
-    simLoop();
+    runLoop();
     if (relayState) sawRelay = true;
   }
   CHECK(!demoRunning());
@@ -3858,7 +3861,7 @@ static void testDemoFullRun() {
 - Dòng 521: `cap = mockMillis() + 120000` — mốc chặn 120 000 ms mô phỏng; nếu demo bị "kẹt" không kết thúc, vòng lặp vẫn thoát và các `CHECK` sau sẽ báo lỗi thay vì treo test.
 - Dòng 522–532: vòng lặp cho tới khi demo xong hoặc quá hạn:
   - Dòng 523: `mockAdvance(10)` — đẩy đồng hồ ảo thêm 10 ms (demo dùng `millis()` nên thời gian phải được đẩy mới có tiến triển).
-  - Dòng 524: `simLoop()` — mô phỏng đúng phần điều khiển mỗi vòng của `loop()`: đọc chạm/PIR, đọc cảm biến mỗi `SENSOR_INTERVAL` (1000 ms), cắt bơm khi hết nước, và vì demo đang chạy nên gọi `updateDemo()` + `controlBreathe()`.
+  - Dòng 524: `runLoop()` — đẩy đồng hồ rồi gọi `loop()` thật: đọc chạm/PIR, đọc cảm biến mỗi `SENSOR_INTERVAL` (2000 ms), `runAutomation()` (gồm `pumpDryRunGuard()` cắt bơm khi hết nước) và, khi demo đang chạy, `updateDemo()` + `controlBreathe()`.
   - Dòng 525: nếu `relayState` bật ở bất kỳ thời điểm nào → đánh dấu `sawRelay` (chứng minh bước HD7 đã thực sự đóng relay).
   - Dòng 526–531: khi tên bước hiện tại chứa "Den tho" (bước HD3, tên không dấu "HD3: Den tho PWM"), bật cờ `inBreatheStep` và cập nhật `breatheMin`/`breatheMax` từ `currentLedPwm()`.
 - Dòng 533: `CHECK(!demoRunning())` — demo đã tự kết thúc trong hạn 120 s, tức state machine của `updateDemo()` chạy hết 15 bước.
@@ -4163,11 +4166,11 @@ Khác với các unit test ở mục trước (gọi thẳng từng hàm), nhóm
 - `runLoop(ms)` — chạy vòng `loop()` thật trong thời gian mô phỏng: mỗi bước 10 ms gọi `mockAdvance()` (đẩy đồng hồ giả) rồi `loop()`.
 - `has(chuỗi, mẫu)` — dò chuỗi con bằng `strstr` (xem dòng 70–72).
 
-`setup()` chỉ được gọi **một lần duy nhất** ở I1; từ I2 trở đi các test tận dụng 18 route đã đăng ký sẵn đó. Bốn macro CHECK đã giải thích ở mục 14.1, không nhắc lại.
+`setup()` chỉ được gọi **một lần duy nhất** ở I1; từ I2 trở đi các test tận dụng 25 route đã đăng ký sẵn đó. Bốn macro CHECK đã giải thích ở mục 14.1, không nhắc lại.
 
 #### I1 — testInoBoot() (dòng 732–743)
 
-**Mục đích:** Chạy `setup()` đúng một lần để xác nhận firmware khởi động đăng ký đủ 18 route HTTP và in banner/menu ra Serial.
+**Mục đích:** Chạy `setup()` đúng một lần để xác nhận firmware khởi động đăng ký đủ 25 route HTTP và in banner/menu ra Serial.
 
 ```cpp
 static void testInoBoot() {
@@ -4188,7 +4191,7 @@ static void testInoBoot() {
 - Dòng 734: `mockSerialClear()` xóa cả output lẫn buffer nhập giả của Serial — nhờ vậy phần kiểm tra sau chỉ thấy đúng những gì `setup()` in ra.
 - Dòng 735: `mockServerReset()` xóa sạch bảng route giả + tham số + response cuối; mục đích là buộc `setup()` phải tự đăng ký lại từ đầu, nhờ đó con số đếm được ở dòng 737 mới đáng tin.
 - Dòng 736: gọi `setup()` thật của firmware (bật Serial, cấu hình GPIO/PWM, OLED, nạp cài đặt, WiFi, đăng ký route). Đây là lần gọi `setup()` duy nhất của nhóm I1–I10.
-- Dòng 737: sau `setup()` phải có **đúng 18 route** — khớp đúng 18 lệnh `server.on(...)` trong SmartFarm.ino (dòng 158–172).
+- Dòng 737: sau `setup()` phải có **đúng 25 route** — khớp đúng 25 lệnh `server.on(...)` trong SmartFarm.ino (dòng 376–402).
 - Dòng 738–739: mảng 14 đường dẫn mong đợi: trang gốc `/`, API `/api`, các nút điều khiển, và `/favicon.ico`.
 - Dòng 740: duyệt mảng, từng route một phải tồn tại trong mock (`mockServerHasRoute` trả về `false` thì CHECK báo FAIL).
 - Dòng 741: Serial phải chứa chuỗi `"SMART FARM DEBUG MENU"` — do `printDebugMenu()` in ở cuối `setup()`.
@@ -4594,7 +4597,7 @@ static void testWifiRecovery() {
 Để kiểm tra "hợp đồng" JSON của `/api`, bộ test **tự viết một parser JSON tối giản** thay vì dùng thư viện. Vì sao?
 
 - **Không phụ thuộc thư viện:** test được biên dịch và chạy trên máy tính (host) với các file mock, không có sẵn ArduinoJson. Tự viết giữ bộ test độc lập, biên dịch nhanh, không lo lệch phiên bản.
-- **Kiểm tra nghiêm ngặt đúng 21 khóa:** parser kèm bảng `API_KEYS` (21 khóa) buộc response `/api` phải đúng số lượng, đúng tên, đúng kiểu (số/bool/chuỗi), không thừa không thiếu không trùng. Chỉ cần đổi tên một trường mà quên cập nhật test là đổ ngay.
+- **Kiểm tra nghiêm ngặt đúng 23 khóa:** parser kèm bảng `API_KEYS` (23 khóa) buộc response `/api` phải đúng số lượng, đúng tên, đúng kiểu (số/bool/chuỗi), không thừa không thiếu không trùng. Chỉ cần đổi tên một trường mà quên cập nhật test là đổ ngay.
 - **Chỉ cần JSON phẳng:** `/api` trả object một tầng, không lồng nhau, nên parser "flat" là đủ và dễ đọc hơn cả thư viện.
 
 ```cpp
@@ -4710,7 +4713,7 @@ static const int API_KEY_COUNT = (int)(sizeof(API_KEYS) / sizeof(API_KEYS[0]));
 ```
 
 - Dòng 1042: `ApiKey` là cặp (tên khóa, ký tự kiểu mong đợi) — kiểu viết tắt đúng như trong `JsonPair.type`.
-- Dòng 1043–1048: "bảng vàng" **21 khóa** bắt buộc của `/api`: 6 số (`temp`, `hum`, `light`, `soil`, `water`, `weather`), 14 bool (`pir`, `touch`, `relay`, `fan`, `led`, `breathe`, `windmill`, `feed`, `demo`, `pumpAuto`, `lightAuto`, `rgbAuto`, `fanAuto`, `breatheAuto`) và 1 chuỗi (`demoStep`). Đủ 21 = 6 + 14 + 1.
+- Dòng 1043–1048: "bảng vàng" **23 khóa** bắt buộc của `/api`: 6 số (`temp`, `hum`, `light`, `soil`, `water`, `weather`), 15 bool (`pir`, `touch`, `relay`, `fan`, `led`, `breathe`, `alarm`, `windmill`, `feed`, `demo`, `pumpAuto`, `lightAuto`, `rgbAuto`, `fanAuto`, `breatheAuto`), 1 chuỗi (`demoStep`) và 1 số nonce. Đủ 23 = 6 + 15 + 1 + 1.
 - Dòng 1049: `API_KEY_COUNT` tự tính bằng `sizeof` — thêm/bớt khóa trong bảng thì con số này tự đúng, không phải sửa tay.
 
 ```cpp
@@ -4733,11 +4736,11 @@ static double numOf(const std::vector<JsonPair> &pairs, const char *key) {
 - Dòng 1056–1058: `numOf` lấy giá trị số của một khóa: tìm cặp (dòng 1057), có thì ép chuỗi `raw` thành `double` bằng `strtod`; **không có thì trả −1e9** — một số cực nhỏ, không thể trùng giá trị cảm biến thật, nên mọi so sánh sẽ lộ lỗi "thiếu khóa" ngay.
 - Dòng 1059: đóng hàm.
 
-Các hàm này (cùng parser) được dùng ở mục sau — `validateApiResponse()` và test D5 `testApiJsonContract()` (dòng 1061 trở đi, trong đó có `boolOf()` bắt đầu tại dòng 1061) — để khẳng định `/api` trả **đúng 21 khóa, đúng kiểu, không trùng lặp**, và giá trị số/bool khớp với trạng thái thật của firmware.
+Các hàm này (cùng parser) được dùng ở mục sau — `validateApiResponse()` và test D5 `testApiJsonContract()` (dòng 1061 trở đi, trong đó có `boolOf()` bắt đầu tại dòng 1061) — để khẳng định `/api` trả **đúng 23 khóa, đúng kiểu, không trùng lặp**, và giá trị số/bool khớp với trạng thái thật của firmware.
 
-### 14.6. validateApiResponse + D5 — hợp đồng JSON 21 khóa (dòng 1061–1173)
+### 14.6. validateApiResponse + D5 — hợp đồng JSON 23 khóa (dòng 1061–1173)
 
-Phần này kiểm tra /api có trả về đúng "contract" (hợp đồng dữ liệu) đã thỏa thuận giữa firmware và client hay không: đúng 21 khóa, đúng kiểu dữ liệu từng khóa, và giá trị phải khớp với các biến trạng thái thật. Bảng kỳ vọng nằm ngay trên vùng này: mảng `API_KEYS` (dòng 1043–1048) liệt kê 21 khóa với kiểu `'n'` number, `'b'` bool, `'s'` string; `API_KEY_COUNT` (dòng 1049) đếm ra 21.
+Phần này kiểm tra /api có trả về đúng "contract" (hợp đồng dữ liệu) đã thỏa thuận giữa firmware và client hay không: đúng 23 khóa, đúng kiểu dữ liệu từng khóa, và giá trị phải khớp với các biến trạng thái thật. Bảng kỳ vọng nằm ngay trên vùng này: mảng `API_KEYS` (dòng 1043–1048) liệt kê 23 khóa với kiểu `'n'` number, `'b'` bool, `'s'` string; `API_KEY_COUNT` (dòng 1049) đếm ra 23.
 
 #### boolOf() (dòng 1061–1064)
 
@@ -4814,7 +4817,7 @@ static bool validateApiResponse(std::string &err) {
 - Dòng 1069: header `Content-Type` phải đúng `application/json`; client không được nhận kiểu dữ liệu khác.
 - Dòng 1071–1072: parse thân phản hồi bằng parser flat-JSON tự viết; parser thất bại thì trả false (parser đã điền `err`).
 - Dòng 1074–1077: số cặp khóa phải đúng bằng 21; nếu sai thì in cả số thực tế lẫn số mong đợi để dễ debug.
-- Dòng 1079–1082: dùng `std::set` (tập hợp) để phát hiện khóa trùng — `insert(...).second` là `false` nghĩa là khóa đã tồn tại. Nhờ vậy 21 khóa phải là 21 khóa phân biệt, không được lặp.
+- Dòng 1079–1082: dùng `std::set` (tập hợp) để phát hiện khóa trùng — `insert(...).second` là `false` nghĩa là khóa đã tồn tại. Nhờ vậy 23 khóa phải là 23 khóa phân biệt, không được lặp.
 - Dòng 1083–1087: với từng khóa trong bảng `API_KEYS`: tìm khóa, thiếu thì lỗi "missing key"; kiểu (`p->type[0]`) phải khớp ký tự trong bảng (`'n'` number, `'b'` bool, `'s'` string, `'z'` null — quy ước ở dòng 977), sai thì lỗi "bad type".
 - Dòng 1089–1090: temp và hum là số thực, cho phép lệch 0.06 — vì giá trị in ra JSON bị làm tròn khi format nên không thể so tuyệt đối.
 - Dòng 1091–1093: light, soil, water là số nguyên; ép `(long)` trước khi so để tránh sai số kiểu float.
@@ -4827,12 +4830,12 @@ static bool validateApiResponse(std::string &err) {
 
 #### D5 — testApiJsonContract() (dòng 1119–1173; thân hàm 1100–1152)
 
-**Mục đích:** Xác minh /api luôn trả JSON đúng hợp đồng 21 khóa — với trạng thái biết trước, trạng thái demo/cho ăn, và 200 trạng thái ngẫu nhiên.
+**Mục đích:** Xác minh /api luôn trả JSON đúng hợp đồng 23 khóa — với trạng thái biết trước, trạng thái demo/cho ăn, và 200 trạng thái ngẫu nhiên.
 
 ```cpp
 // D5: JSON contract nghiêm ngặt của /api
 static void testApiJsonContract() {
-  printf("D5  api: strict JSON contract (21 keys)\n");
+  printf("D5  api: strict JSON contract (23 keys)\n");
   std::string err;
 
   // Trạng thái đã biết
@@ -4886,7 +4889,7 @@ static void testApiJsonContract() {
 }
 ```
 
-- Dòng 1120: in tên test — "strict JSON contract (21 keys)" nghĩa là hợp đồng JSON nghiêm ngặt với 21 khóa.
+- Dòng 1120: in tên test — "strict JSON contract (23 keys)" nghĩa là hợp đồng JSON nghiêm ngặt với 23 khóa.
 - Dòng 1123–1126: đặt trạng thái đã biết: nhiệt độ 26.5°C, độ ẩm 61.2%, ánh sáng 800, đất 650, nước 900, có người (pir) và không chạm (touch) — các biến `g...` mô phỏng cảm biến toàn cục.
 - Dòng 1127–1129: gọi /api rồi kiểm tra hợp đồng; nếu sai in lý do, và `CHECK(err.empty())` xác nhận không có lỗi (biến `err` do `validateApiResponse` điền).
 - Dòng 1131–1137: bật demo rồi gọi /api ngay; JSON phải hợp lệ trong lúc demo đang chạy.
@@ -5237,7 +5240,7 @@ static void testDemoDiagnostics() {
   unsigned long cap = mockMillis() + 120000;
   while (demoRunning() && mockMillis() < cap) {
     mockAdvance(10);
-    simLoop();
+    runLoop();
     if (!demoRunning()) break;
     const char *n = demoStepName();
     if (names.back() != n) {
@@ -5275,7 +5278,7 @@ static void testDemoDiagnostics() {
       mockAdc[WATER_PIN] = INVERT_WATER ? 4045 : 50;
       lastSensorRead = mockMillis();
     }
-    simLoop();
+    runLoop();
     if (relayState) sawPumpOn = true;
     if (relayState && gWater < (int)waterThresholdLow) violated = true;
   }
@@ -5293,7 +5296,7 @@ static void testDemoDiagnostics() {
 - Dòng 1399–1401: ghi mốc thời gian `t0`, gọi `startDemo()` thật (demo.cpp:79) rồi xác nhận demo đang chạy.
 - Dòng 1402–1405: lưu tên bước đầu tiên, vẽ OLED rồi CHECK dòng 7 hiển thị đúng tên bước — khi demo chạy, dòng trạng thái cuối màn hình thuộc về demo (oled.cpp:68–69).
 - Dòng 1406: tên bước phải ≤ 21 ký tự; tên dài nhất “HD6: Coi xay gio quay” đúng 21 ký tự nên vừa màn.
-- Dòng 1408–1420: vòng lặp mô phỏng thời gian: mỗi vòng đẩy đồng hồ 10 ms rồi gọi `simLoop()` (bản sao phần điều khiển của loop thật, không HTTP/OLED — test_main.cpp:144–160). Khi tên bước đổi, ghi lại tên mới, vẽ lại OLED và CHECK dòng 7 + giới hạn 21 ký tự. `cap` 120.000 ms chỉ là lưới an toàn chống treo (demo thật dài ~30,7 s).
+- Dòng 1408–1420: vòng lặp mô phỏng thời gian: mỗi vòng đẩy đồng hồ 10 ms rồi gọi `runLoop()` (gọi thẳng `loop()` thật — test_main.cpp:238–244). Khi tên bước đổi, ghi lại tên mới, vẽ lại OLED và CHECK dòng 7 + giới hạn 21 ký tự. `cap` 120.000 ms chỉ là lưới an toàn chống treo (demo thật dài ~30,7 s).
 - Dòng 1421–1423: đo tổng thời gian; xác nhận demo đã dừng; số tên ghi nhận đúng bằng 15.
 - Dòng 1424–1426: so từng tên với `DEMO_STEPS` — đúng thứ tự các hoạt động HD2 → HD12.
 - Dòng 1427: `elapsed` nằm trong 30.700–30.800 ms. Vì sao đúng 30.700? Cộng 15 khoảng thời gian ở demo.cpp:23–37: 2000+4000+1200+1000+2500+1000+4000+2500+1000+3000+3000+800+2500+1200+1000 = 30.700 ms. Cận trên 30.800 chừa sai số tối đa một nhịp 10 ms khi phát hiện chuyển bước.
@@ -5302,8 +5305,8 @@ static void testDemoDiagnostics() {
 - Dòng 1430–1433: demo kết thúc phải dọn sạch: bơm tắt, servo về `WINDMILL_MIN_ANGLE` (mặc định 0 — config.h:83), PWM đèn xanh bằng 0, còi tắt (demo.cpp:112–123).
 - Dòng 1436–1440: lượt 2 tái lập môi trường rồi khởi động demo; thêm 3 cờ theo dõi và lưới an toàn 120 s.
 - Dòng 1443–1448: ngay khi bước hiện tại là “HD7: Tuoi tu dong”, lần đầu tiên sẽ hạ mực nước xuống 50, cập nhật ADC thô cho khớp (đảo cực nếu INVERT_WATER) và dời `lastSensorRead` để chu kỳ đọc cảm biến không ghi đè ngay.
-- Dòng 1449–1451: chạy `simLoop()` rồi ghi nhận: `sawPumpOn` bật khi bơm từng chạy; `violated` bật nếu bắt gặp bơm chạy trong lúc nước dưới ngưỡng.
-- Vì sao `violated` luôn sai (không bao giờ chạy khô): bơm chỉ được bật đúng lúc bắt đầu bước HD7, khi nước còn 900; vòng kế tiếp nước đã cạn, dòng an toàn ở đầu `simLoop()` (dòng 152: nước thấp + bơm đang chạy → tắt bơm ngay) cắt bơm trước khi bất kỳ nhánh nào kịp bật lại.
+- Dòng 1449–1451: chạy `runLoop()` rồi ghi nhận: `sawPumpOn` bật khi bơm từng chạy; `violated` bật nếu bắt gặp bơm chạy trong lúc nước dưới ngưỡng.
+- Vì sao `violated` luôn sai (không bao giờ chạy khô): bơm chỉ được bật đúng lúc bắt đầu bước HD7, khi nước còn 900; vòng kế tiếp nước đã cạn, `pumpDryRunGuard()` trong `runAutomation()` (SmartFarm.ino:426–431, 449) tắt bơm ngay trước khi bất kỳ nhánh nào kịp bật lại.
 - Dòng 1453–1457: CHECK đủ 4 điều: đã hạ nước giữa bước; bơm từng chạy khi nước còn ổn; chưa từng chạy khô; demo vẫn kết thúc bình thường và bơm tắt khi kết thúc.
 
 #### D10 — testWifiThrottle() (dòng 1461–1504)
@@ -5373,7 +5376,7 @@ static void testWifiThrottle() {
 
 #### D11 — testBootOrder() (dòng 1507–1532)
 
-**Mục đích:** Chạy `setup()` thật trên “chip mới tinh” và soi log thứ tự gọi chân: mức an toàn phải được ghi vào chốt ra TRƯỚC khi chuyển chân sang OUTPUT (chống glitch), kèm kiểm tra watchdog và đủ 18 route.
+**Mục đích:** Chạy `setup()` thật trên “chip mới tinh” và soi log thứ tự gọi chân: mức an toàn phải được ghi vào chốt ra TRƯỚC khi chuyển chân sang OUTPUT (chống glitch), kèm kiểm tra watchdog và đủ 25 route.
 
 ```cpp
 static void testBootOrder() {
@@ -5416,7 +5419,7 @@ static void testBootOrder() {
 - Vì sao kiểm tra thứ tự “ghi mức trước pinMode”: nếu gọi `pinMode(OUTPUT)` trước, chân có thể tạm thời phát mức không mong muốn trong lúc khởi động — với relay kích mức thấp, bơm sẽ “chớp” một cái. Ghi trước mức an toàn vào chốt ra rồi mới chuyển chân sang OUTPUT sẽ triệt hiện tượng glitch đó (xem setup() SmartFarm.ino:81–88).
 - Dòng 1529: watchdog được khởi tạo ít nhất 1 lần — setup gọi `esp_task_wdt_init`, bản core 3.x còn gọi `esp_task_wdt_deinit` trước (SmartFarm.ino:66–76).
 - Dòng 1530: `esp_task_wdt_add(NULL)` đúng 1 lần (SmartFarm.ino:77) → task loop được bảo vệ và được “nuôi” ở đầu mỗi vòng loop.
-- Dòng 1531: setup đăng ký đúng 18 route (SmartFarm.ino:140–153) — mock đếm được vì ghi lại từng lời gọi `server.on`.
+- Dòng 1531: setup đăng ký đúng 25 route (SmartFarm.ino:376–402) — mock đếm được vì ghi lại từng lời gọi `server.on`.
 
 ### 14.10. D12 — bền vững sau khi mất điện (dòng 1535–1689)
 
@@ -5468,8 +5471,8 @@ static void testRebootPersistence() {
 - Dòng 1548: chú thích nói rõ mô hình: flash giữ prefs, trạng thái chỉ trong RAM bị mất.
 - Dòng 1549: `mockServerReset()` đóng vai “khởi động lại chip”: nó chỉ xóa route và tham số request tạm thời (mock.cpp:235–241), KHÔNG đụng tới `sPrefs` — khác hẳn `mockReset()` ở D11 vốn xóa cả `sPrefs` (mock.cpp:355). Vì thế “flash” vẫn nguyên.
 - Dòng 1550–1551: tự tay xóa các biến trạng thái chỉ sống trong RAM (bơm, quạt, cối xay, 2 chế độ đèn xanh, RGB) — tương đương cúp điện làm RAM mất sạch.
-- Dòng 1552: `setup()` chạy lại như lần cấp điện đầu: đăng ký lại 18 route và gọi `loadSettings()` đọc cài đặt từ “flash” (Preferences mock → `mockPrefGet`, Preferences.h:14–16).
-- Dòng 1554: đủ 18 route được đăng ký lại sau khi khởi động.
+- Dòng 1552: `setup()` chạy lại như lần cấp điện đầu: đăng ký lại 25 route và gọi `loadSettings()` đọc cài đặt từ “flash” (Preferences mock → `mockPrefGet`, Preferences.h:14–16).
+- Dòng 1554: đủ 25 route được đăng ký lại sau khi khởi động.
 - Dòng 1555–1556: hai ngưỡng đất 1234/1284 vẫn còn nguyên — bằng chứng sống sót qua “mất điện”.
 - Dòng 1557–1559: các cờ tự động bơm/quạt/thở đều khôi phục đúng: bơm không tự động, quạt không tự động, thở tự động.
 - Dòng 1560: `breatheLedState` đang bật vì setup có dòng `if (breatheAuto) setBreatheLed(true)` (SmartFarm.ino:119) — hiệu ứng thở đã lưu được khôi phục khi boot.
@@ -5510,7 +5513,7 @@ static void testFuzzSoak() {
 - Dòng 1692: `resetState()` đưa mọi biến toàn cục về mặc định (ngưỡng, trạng thái relay, cờ auto... — xem định nghĩa ở dòng 116).
 - Dòng 1693: giả lập WiFi đang kết nối để `loop()` không mất thời gian thử kết nối lại.
 - Dòng 1694: `mockServerReset()` xóa các route/tham số HTTP đã đăng ký trên web server giả.
-- Dòng 1695: `setup()` chạy đúng hàm boot thật: đăng ký 18 route, nạp settings từ "flash" giả, bật breathing nếu `breatheAuto`.
+- Dòng 1695: `setup()` chạy đúng hàm boot thật: đăng ký 25 route, nạp settings từ "flash" giả, bật breathing nếu `breatheAuto`.
 - Dòng 1697–1699: ba lượt `fuzzRun` với seed **1**, **42**, **2026**, mỗi lượt 30.000 vòng → đúng 90.000 bước. Dùng nhiều seed để dải dữ liệu ngẫu nhiên đa dạng hơn, và seed cố định nên **kết quả lặp lại được** (chạy lại luôn ra cùng chuỗi).
 - Dòng 1702: `stopFeed()` đóng máng ăn trước khi chờ ổn định.
 - Dòng 1703: đặt trần thời gian mô phỏng 120.000 ms, tránh vòng lặp chờ treo vô hạn nếu demo không bao giờ kết thúc.
@@ -5663,7 +5666,7 @@ static void testClockWrap() {
   unsigned long cap = mockMillis() + 120000;
   while (demoRunning() && mockMillis() < cap) {
     mockAdvance(10);
-    simLoop();
+    runLoop();
   }
   CHECK(!demoRunning());
   CHECK(!relayState);
@@ -5715,7 +5718,7 @@ static void testClockWrap() {
   - Dòng 1759–1760: chạm mới phải đổi được trạng thái LED xanh — chứng minh công thức `now - lastTouch >= TOUCH_DEBOUNCE` đúng với mốc thời gian lớn.
 - **Phần E — demo đầy đủ xuyên mốc wrap (dòng 1764–1775):**
   - Dòng 1765–1767: bắt đầu demo ở 256 ms trước mốc tràn, với nước đầy (`primeSensors(900)`) để demo chạy trọn kịch bản.
-  - Dòng 1768–1772: chờ tối đa 120.000 ms, mỗi bước 10 ms gọi `simLoop()` (đúng phần điều khiển của `loop()`).
+  - Dòng 1768–1772: chờ tối đa 120.000 ms, mỗi bước 10 ms gọi `runLoop()` (đúng phần điều khiển của `loop()`).
   - Dòng 1773–1775: demo phải kết thúc, relay tắt, PWM về 0 — "kết thúc sạch" dù mốc tràn rơi vào giữa lượt chạy.
 - **Phần F — timer thử lại WiFi xuyên mốc wrap (dòng 1777–1791):**
   - Dòng 1778–1780: đặt đồng hồ sát tràn và giả lập đang kết nối; gọi `loop()` để `manageWiFi()` xóa cờ "đã cảnh báo" (`sWarned` trong `src/wifi.cpp:8`).
@@ -5822,7 +5825,7 @@ static void testDemoBreathingRestore() {
   setBreatheLed(true);
   startDemo();
   unsigned long cap = mockMillis() + 120000;
-  while (demoRunning() && mockMillis() < cap) { mockAdvance(10); simLoop(); }
+  while (demoRunning() && mockMillis() < cap) { mockAdvance(10); runLoop(); }
   CHECK(!demoRunning());
   CHECK(breatheAuto);
   CHECK(breatheLedState);                 // breathing bật lại sau DEMO DONE
@@ -5877,7 +5880,7 @@ static void testBootDegraded() {
 - Dòng 1957: `mockWifiStatus = WL_DISCONNECTED` — giả lập WiFi không bao giờ kết nối, buộc nhánh chờ phải hết hạn.
 - Dòng 1958: `mockSerialClear()` để log bắt được chỉ chứa thông báo của lần boot này.
 - Dòng 1959: `setup()` — chạy đúng hàm boot thật trong điều kiện suy giảm.
-- Dòng 1961: dù thiếu OLED/WiFi, vẫn phải đăng ký đủ **18 route** của web server.
+- Dòng 1961: dù thiếu OLED/WiFi, vẫn phải đăng ký đủ **25 route** của web server.
 - Dòng 1962: log phải chứa `MA LOI: 101` — mã lỗi "OLED not found" (`SmartFarm.ino:111`).
 - Dòng 1963: log phải chứa `MA LOI: 102` — mã lỗi "WiFi timeout" (`SmartFarm.ino:136`): chờ tối đa `WIFI_CONNECT_TIMEOUT` = 30.000 ms rồi chạy tiếp, `manageWiFi()` sẽ thử lại nền.
 - Dòng 1964: `mockWdtResetCalls >= 100` — trong vòng chờ WiFi blocking, mỗi 250 ms firmware gọi `esp_task_wdt_reset()` (`SmartFarm.ino:127`), tức khoảng 120 lần trên 30 giây; nếu không nuôi watchdog, chip sẽ bị reset giữa lúc boot.
@@ -6000,7 +6003,7 @@ extern const char *mockWifiIp;          // chuỗi WiFi.localIP()
 extern bool mockDisplayBeginOk;         // kết quả display.begin() (false = thiếu OLED)
 ```
 
-- Dòng 8: `mockDhtTemp`, `mockDhtHum` — nhiệt độ/độ ẩm mà `DHT::readTemperature()`/`readHumidity()` sẽ trả về; test gán trước khi gọi `readSensors()`.
+- Dòng 8: `mockDhtTemp`, `mockDhtHum` — nhiệt độ/độ ẩm mà `DHT::readTemperature()`/`readHumidity()` sẽ trả về; test gán trước khi gọi `readAllSensors()`.
 - Dòng 9: `mockAdc[40]` — bảng giá trị `analogRead()` theo chân 0..39; test gán ví dụ `mockAdc[LDR_PIN] = 3000` để giả lập trời sáng/tối.
 - Dòng 10: `mockDigital[40]` — giá trị `digitalRead()` trả về (dùng cho cảm biến PIR, chạm...).
 - Dòng 11: `mockPinLevel[40]` — mức mà firmware đã ghi ra chân bằng `digitalWrite()`; đây là căn cứ để test xác nhận bơm/quạt/relay bật hay tắt.
@@ -6101,7 +6104,7 @@ const char *mockServerLastBody();
 ```
 
 - Dòng 49: `mockServerReset()` — quên hết route, tham số và response đã ghi (dùng trong `mockReset()`).
-- Dòng 50: `mockServerRouteCount()` — đếm số route firmware đã đăng ký `server.on(...)`; test I1 yêu cầu đủ 18 route.
+- Dòng 50: `mockServerRouteCount()` — đếm số route firmware đã đăng ký `server.on(...)`; test I1 yêu cầu đủ 25 route.
 - Dòng 51: `mockServerHasRoute(path)` — kiểm tra một đường dẫn cụ thể đã được đăng ký chưa (ví dụ `/api`, `/on`, `/off`...).
 - Dòng 52: `mockServerSetArg(name, value)` — "tiêm" tham số request giả, ví dụ `mockServerSetArg("device", "pump")`, để handler đọc `server.arg("device")` như request thật.
 - Dòng 54: `mockServerInvoke(path)` — **gọi thẳng handler** của route, mô phỏng một request HTTP; trả `false` nếu đường dẫn chưa đăng ký.
@@ -6223,20 +6226,19 @@ SerialStub Serial;
 
 - Dòng 42–44: `Arduino.h:101`, `Arduino.h:106`, `WiFi.h:31` chỉ **khai báo** `extern` ba đối tượng này; đây là nơi **định nghĩa** chúng. Firmware gọi `Serial.println(...)`, `Wire.begin(...)`, `WiFi.status()` đều trỏ về đúng ba đối tượng duy nhất này.
 
-**Khối 6 — Lõi Arduino: `millis`/`delay` giả (dòng 46–51)**
+**Khối 6 — Lõi Arduino: `millis` giả (dòng 45–49)**
 
 ```cpp
 // ── Lõi Arduino ──
 unsigned long millis() { return sMillis; }
-void delay(unsigned long ms) { sMillis += ms; }
 unsigned long mockMillis() { return sMillis; }
 void mockAdvance(unsigned long ms) { sMillis += ms; }
 void mockSetMillis(unsigned long ms) { sMillis = ms; }
 ```
 
-- Dòng 47: `millis()` — firmware gọi hàm này như thật, nhưng giá trị lấy từ đồng hồ giả `sMillis`.
-- Dòng 48: `delay(ms)` — **không ngủ thật**, chỉ cộng thẳng `ms` vào đồng hồ rồi trả về ngay. Nhờ vậy các test "chờ" 10.000 ms hay 30.700 ms vẫn chạy xong trong tích tắc, mà mốc thời gian vẫn chính xác từng mili-giây (test D-series kiểm chống dội 300 ms, cửa ăn 2000 ms, nhịp thở 30 ms...).
-- Dòng 49–51: ba hàm điều khiển dành riêng cho test; `mockAdvance` và `delay` cho kết quả giống nhau nhưng tách tên để phân biệt "firmware chờ" với "test tua".
+- Dòng 46: `millis()` — firmware gọi hàm này như thật, nhưng giá trị lấy từ đồng hồ giả `sMillis`.
+- Dòng 47–49: ba hàm điều khiển dành riêng cho test; mọi mốc thời gian (chống dội 300 ms, cửa ăn 2000 ms, nhịp thở 30 ms...) đều được tua bằng các hàm này.
+- Mock **không cung cấp `delay()`**: firmware chỉ nhường CPU bằng `vTaskDelay(1)` trong tác vụ mạng nền. Nếu `delay()` xuất hiện lại trong phần mã biên dịch trên host, bản build test báo lỗi biên dịch (`'delay' was not declared`) ngay; các khối chỉ dành cho thiết bị (`#if !SMARTFARM_TEST_HOOKS`) do job build firmware ESP32 kiểm tra.
 
 **Khối 7 — Log thứ tự IO (dòng 53–64)**
 
@@ -6294,7 +6296,7 @@ void ledcAttach(uint8_t, uint32_t, uint8_t) {}
 - Dòng 74–75: `ledcSetup`, `ledcAttachPin` — no-op (không làm gì), chỉ để đủ hàm cho đường core 2.x.
 - Dòng 76–80: `ledcWrite` — tăng counter, chặn "kênh/chân" ngoài phạm vi (tăng `mockInvalidPwmWrites` rồi thoát, bắt bug tràn mảng), còn lại lưu giá trị vào `mockPwm[ch]` để test đọc độ sáng/stato LED xanh.
 - Dòng 81: `ledcAttach` — no-op cho đường core 3.x.
-- Vì sao đủ cả hai: `SmartFarm.ino:93–98` chọn `ledcAttach(BLUE_LED_PIN, ...)` khi core >= 3, ngược lại `ledcSetup(...) + ledcAttachPin(...)`; `src/actuators.cpp:62–68` tương tự với `ledcWrite` (core 3 truyền **chân**, core 2 truyền **kênh** `LED_PWM_CHANNEL = 15`). Mock phải cung cấp đủ cả hai bộ hàm để cả 6 bản build trong `--full` đều link được; test đọc `mockPwm[BLUE_LED_PIN]` hoặc `mockPwm[LED_PWM_CHANNEL]` tùy phiên bản (`test_main.cpp:83,85`). Mặc định `test/mocks/esp_arduino_version.h` đặt major = 3.
+- Vì sao đủ cả hai: `SmartFarm.ino:93–98` chọn `ledcAttach(BLUE_LED_PIN, ...)` khi core >= 3, ngược lại `ledcSetup(...) + ledcAttachPin(...)`; `src/actuators/actuators.cpp` tương tự với `ledcWrite` (core 3 truyền **chân**, core 2 truyền **kênh** `LED_PWM_CHANNEL = 15`). Mock phải cung cấp đủ cả hai bộ hàm để cả 8 bản build trong `--full` đều link được; test đọc `mockPwm[BLUE_LED_PIN]` hoặc `mockPwm[LED_PWM_CHANNEL]` tùy phiên bản (`test_main.cpp:83,85`). Mặc định `test/mocks/esp_arduino_version.h` đặt major = 3.
 
 **Khối 10 — Buzzer: `tone`/`noTone` (dòng 82–89)**
 
@@ -6417,9 +6419,11 @@ void mockSerialClear() { sSerialOut.clear(); sSerialIn.clear(); }
 
 ```cpp
 // ── mock WebServer ──
-struct Route { std::string path; void (*fn)(); };
-static Route sRoutes[24];
+struct Route { std::string path; void (*fn)(); int method; };
+static const int MOCK_MAX_ROUTES = 40;
+static Route sRoutes[MOCK_MAX_ROUTES];
 static int sRouteCount = 0;
+static bool sRouteOverflow = false;
 
 struct Arg { std::string name; std::string value; };
 static Arg sArgs[16];
@@ -6429,7 +6433,7 @@ static std::string sLastType, sLastBody;
 static int sLastCode = 0;
 ```
 
-- Dòng 150–152: `Route` gồm đường dẫn + **con trỏ hàm** handler (hàm không đối số, giống thư viện WebServer thật); mảng tĩnh 24 route là dư sức chứa 18 route firmware đăng ký.
+- Dòng 150–152: `Route` gồm đường dẫn + **con trỏ hàm** handler (giống thư viện WebServer thật) + method; mảng tĩnh 40 chỗ dư sức chứa 25 route firmware đăng ký, kèm cờ `sRouteOverflow` để test báo nếu vượt sức chứa thay vì âm thầm bỏ route.
 - Dòng 154–156: `Arg` gồm tên/giá trị tham số; tối đa 16 tham số cho một request giả.
 - Dòng 168–169: nơi lưu response gần nhất: kiểu nội dung, thân, mã HTTP (khởi tạo 0 = "chưa gửi gì").
 
@@ -6437,14 +6441,11 @@ static int sLastCode = 0;
 
 ```cpp
 void WebServer::on(const char *path, void (*handler)()) {
-  for (int i = 0; i < sRouteCount; i++) {
-    if (sRoutes[i].path == path) { sRoutes[i].fn = handler; return; }
-  }
-  if (sRouteCount < 24) {
-    sRoutes[sRouteCount].path = path;
-    sRoutes[sRouteCount].fn = handler;
-    sRouteCount++;
-  }
+  registerRoute(path, HTTP_ANY, handler);
+}
+
+void WebServer::on(const char *path, HTTPMethod method, void (*handler)()) {
+  registerRoute(path, method, handler);
 }
 ```
 
@@ -6879,11 +6880,10 @@ inline String operator+(const String &a, int b) { return String(a.std_str() + St
 - Dòng 46: `std::string s_` — toàn bộ dữ liệu của String giả nằm ở đây (private).
 - Dòng 48–51: các `operator+` tự do (không phải thành viên) cho mọi tổ hợp cần dùng: String+cstr, cstr+String, String+String, String+int. Nhờ vậy biểu thức cộng chuỗi viết như Arduino thật.
 
-#### Khối 4 — Khai báo API phần cứng lõi (dòng 53–64)
+#### Khối 4 — Khai báo API phần cứng lõi (dòng 63–74)
 
 ```cpp
 unsigned long millis();
-void delay(unsigned long);
 void pinMode(uint8_t, uint8_t);
 void digitalWrite(uint8_t, uint8_t);
 int digitalRead(uint8_t);
@@ -6894,21 +6894,22 @@ void ledcWrite(uint8_t, uint32_t);
 void ledcAttach(uint8_t, uint32_t, uint8_t);
 void tone(uint8_t, unsigned int, unsigned long = 0);
 void noTone(uint8_t);
+void setToneChannel(uint8_t);
 ```
 
-Đây là **khai báo** (chỉ có tên hàm, dấu `;`); phần thân nằm trong `mock.cpp`:
+Đây là **khai báo** (chỉ có tên hàm, dấu `;`); phần thân nằm trong `mock.cpp`. Mock **không còn khai báo `delay()`** — xem ghi chú ở khối lõi Arduino bên dưới:
 
-- Dòng 53: `millis()` — trả "đồng hồ" ảo `sMillis` (mock.cpp:47). Test có thể đặt/đẩy thời gian bằng `mockSetMillis`/`mockAdvance`, nhờ đó mô phỏng nhiều giờ trong vài mili-giây thật.
-- Dòng 54: `delay(ms)` — bản mock **không chờ** mà cộng thẳng `ms` vào `sMillis` (mock.cpp:48); logic đếm thời gian của firmware vẫn chạy đúng mà test không bị treo.
-- Dòng 55: `pinMode` — mock ghi log `"M:pin;"` (mock.cpp:66) để test kiểm tra thứ tự "chốt mức ra trước khi pinMode" (chống glitch lúc khởi động).
-- Dòng 56: `digitalWrite` — mock lưu mức vào `mockPinLevel[pin]`, tăng `mockDigitalWriteCount` và ghi log `"W:pin=value;"` (mock.cpp:67-71).
-- Dòng 57: `digitalRead` — trả `mockDigital[pin]` (mock.cpp:72); test đặt trước để giả lập TOUCH/PIR.
-- Dòng 58: `analogRead` — trả `mockAdc[pin]` (mock.cpp:73); test giả lập ánh sáng/độ ẩm đất/mực nước.
-- Dòng 59–60: `ledcSetup`, `ledcAttachPin` — API PWM của core 2.x; mock để rỗng (mock.cpp:74-75).
-- Dòng 61: `ledcWrite` — mock tăng `mockLedcWriteCount`, lưu giá trị vào `mockPwm[ch]`, kênh `>= 40` bị đếm vào `mockInvalidPwmWrites` (mock.cpp:76-80).
-- Dòng 62: `ledcAttach` — API PWM mới của core 3.x (firmware gọi trong `SmartFarm.ino:94` khi `ESP_ARDUINO_VERSION_MAJOR >= 3`); mock để rỗng (mock.cpp:81).
-- Dòng 63: `tone(pin, freq, duration = 0)` — tiếng còi; mock lưu tần số vào `mockBuzzerToneHz` và tăng `mockToneCalls` (mock.cpp:82-85).
-- Dòng 64: `noTone` — tắt còi; mock tăng `mockNoToneCalls` và đưa tần số về 0 (mock.cpp:86-89).
+- Dòng 63: `millis()` — trả "đồng hồ" ảo `sMillis` (mock.cpp:60). Test có thể đặt/đẩy thời gian bằng `mockSetMillis`/`mockAdvance`, nhờ đó mô phỏng nhiều giờ trong vài mili-giây thật.
+- Dòng 64: `pinMode` — mock ghi log `"M:pin;"` (mock.cpp:78) để test kiểm tra thứ tự "chốt mức ra trước khi pinMode" (chống glitch lúc khởi động).
+- Dòng 65: `digitalWrite` — mock lưu mức vào `mockPinLevel[pin]`, tăng `mockDigitalWriteCount` và ghi log `"W:pin=value;"` (mock.cpp:79-83).
+- Dòng 66: `digitalRead` — trả `mockDigital[pin]` (mock.cpp:84); test đặt trước để giả lập TOUCH/PIR.
+- Dòng 67: `analogRead` — trả `mockAdc[pin]` (mock.cpp:85); test giả lập ánh sáng/độ ẩm đất/mực nước.
+- Dòng 68–69: `ledcSetup`, `ledcAttachPin` — API PWM của core 2.x; mock để rỗng (mock.cpp:86-87).
+- Dòng 70: `ledcWrite` — mock tăng `mockLedcWriteCount`, lưu giá trị vào `mockPwm[ch]`, kênh `>= 40` bị đếm vào `mockInvalidPwmWrites` (mock.cpp:88-92).
+- Dòng 71: `ledcAttach` — API PWM mới của core 3.x (firmware gọi trong `SmartFarm.ino:94` khi `ESP_ARDUINO_VERSION_MAJOR >= 3`); mock để rỗng (mock.cpp:93).
+- Dòng 72: `tone(pin, freq, duration = 0)` — tiếng còi; mock lưu tần số vào `mockBuzzerToneHz` và tăng `mockToneCalls` (mock.cpp:94-97).
+- Dòng 73: `noTone` — tắt còi; mock tăng `mockNoToneCalls` và đưa tần số về 0 (mock.cpp:98-101).
+- Dòng 74: `setToneChannel` — chọn kênh LEDC cho còi; mock để rỗng (mock.cpp:102).
 
 #### Khối 5 — Hook ghi Serial (dòng 66–70)
 
@@ -7119,7 +7120,7 @@ public:
 - Dòng 1–2: `#pragma once` + include `Arduino.h`.
 - Dòng 4–5: chú thích mô tả triết lý mock: route được ghi nhận, test gọi lại được, tham số được "tiêm" (inject) từ test, phản hồi được ghi lại.
 - Dòng 8: hàm tạo nhận cổng nhưng bỏ qua.
-- Dòng 9: `on(path, handler)` chỉ khai báo; `mock.cpp:171-180` lưu vào bảng `sRoutes[24]`, nếu trùng path thì cập nhật handler. Nhờ đó test I1 boot đếm đủ 18 route.
+- Dòng 9: `on(path, handler)` chỉ khai báo; `mock.cpp` lưu vào bảng `sRoutes` (40 chỗ) qua `registerRoute()`, nếu trùng path thì cập nhật handler; tràn bảng bật cờ để test báo. Nhờ đó test I1 boot đếm đủ 25 route.
 - Dòng 11–12: `begin()`/`handleClient()` rỗng — không có socket thật.
 - Dòng 14–17: bốn biến thể `send` chỉ khai báo; `mock.cpp:197-204` ghi mã HTTP, content-type, body vào `sLastCode`/`sLastType`/`sLastBody`. Có hai bản body vì firmware dùng cả chuỗi `const char*` (trang HTML, webserver.cpp:271) lẫn `String` (JSON sinh động, webserver.cpp:301). `send_P` chuyển tiếp sang `send` thường (mock.cpp:204).
 - Dòng 18–19: `arg`/`hasArg` chỉ khai báo; `mock.cpp:207-218` tra bảng tham số `sArgs[16]` do test "tiêm" bằng `mockServerSetArg` — `arg` trả chuỗi rỗng nếu không có, thay vì NULL.
@@ -7227,11 +7228,11 @@ int esp_task_wdt_deinit();
 
 ## PHẦN 16 — test/run_tests.sh (script build & chạy)
 
-`test/run_tests.sh` là điểm vào duy nhất để build và chạy bộ test trên máy tính: nó biên dịch firmware thật (`SmartFarm.ino` + `src/*.cpp`) cùng mock phần cứng, rồi chạy một trong các cấu hình. Chế độ `--quick` chạy 1 bản build, `--full` chạy 6 bản build (core 3 mặc định, core 2 đảo cảm biến, còi thụ động + relay mức thấp, ASan+UBSan, token web, buffer JSON nhỏ) cộng bộ test JS trang web, còn `--coverage` build với `gcov` để đo độ phủ theo dòng và chặn nếu dưới ngưỡng `COVERAGE_MIN` (mặc định 80%). Nhờ `set -e`, chỉ cần một bản build/test lỗi là script dừng ngay với mã thoát khác 0 — tiện cho cả người chạy tay lẫn CI.
+`test/run_tests.sh` là điểm vào duy nhất để build và chạy bộ test trên máy tính: nó biên dịch firmware thật (`SmartFarm.ino` + `src/**/*.cpp`) cùng mock phần cứng, rồi chạy một trong các cấu hình. Chế độ `--quick` chạy 1 bản build, `--full` chạy 8 bản build (core 3 mặc định, core 2 đảo cảm biến, còi thụ động + relay mức thấp, ASan+UBSan, token web, buffer JSON nhỏ, PID/PWM + TLS + MQTT, `ANTI_REPLAY=1`) cộng bộ test JS trang web, `--extras` chỉ chạy bản PID/PWM + TLS + MQTT, còn `--coverage` build với `gcov` để đo cả độ phủ dòng và độ phủ nhánh, chặn nếu dưới `COVERAGE_MIN` (mặc định 80%) hoặc `BRANCH_MIN` (mặc định 75%). Nhờ `set -e`, chỉ cần một bản build/test lỗi là script dừng ngay với mã thoát khác 0 — tiện cho cả người chạy tay lẫn CI.
 
-### 16.1. run_tests.sh — giải thích từng dòng (dòng 1–164)
+### 16.1. run_tests.sh — giải thích từng dòng (dòng 1–273)
 
-#### Khối 1 — Shebang và mô tả cách dùng (dòng 1–13)
+#### Khối 1 — Shebang và mô tả cách dùng (dòng 1–20)
 
 ```bash
 #!/usr/bin/env bash
@@ -7242,20 +7243,27 @@ int esp_task_wdt_deinit();
 #
 # Cách dùng:
 #   ./test/run_tests.sh --quick      một bản build (mặc định core 3.x, cấu hình kit mặc định)
-#   ./test/run_tests.sh --full       bốn bản build: core3, core2+inverts,
-#                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan
-#   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng
+#   ./test/run_tests.sh --full       tám bản build: core3, core2+inverts,
+#                                    buzzer thụ động + relay kích mức thấp, ASan+UBSan, web token,
+#                                    buffer JSON nhỏ (nhánh JSON bị cắt), PID/PWM + TLS + MQTT,
+#                                    ANTI_REPLAY=1 (nhánh chống replay)
+#                                    + bộ test JS trang web
+#   ./test/run_tests.sh --extras     chỉ bản PID/PWM + TLS + MQTT (dùng khi phát triển)
+#   ./test/run_tests.sh --coverage   build với gcov và in độ phủ theo dòng + nhánh
 #
-# Yêu cầu: g++ với C++17, bash. Không cần toolchain ESP32.
+# Biến môi trường:
+#   COVERAGE_MIN   ngưỡng độ phủ dòng (mặc định 80)
+#   BRANCH_MIN     ngưỡng độ phủ nhánh, "taken at least once" (mặc định 75)
+#   FUZZ_ITERS     số vòng fuzz mỗi seed (mặc định 30000)
 ```
 
 - Dòng 1: shebang — bảo hệ điều hành chạy file này bằng `bash` tìm qua biến môi trường `PATH` (`env bash`).
 - Dòng 2: chú thích mục đích: trình chạy test chuyên sâu phía host cho firmware Smart Farm QE002.
 - Dòng 3–6: giải thích script biên dịch firmware **thật** dựa trên mock phần cứng điều khiển được trong `test/mocks/`.
-- Dòng 7–11: liệt kê ba chế độ chạy: `--quick` (1 bản build, core 3.x mặc định), `--full` (6 bản build: core3, core2 kèm đảo cảm biến, còi thụ động + relay kích mức thấp, ASan+UBSan, token web, buffer JSON nhỏ), `--coverage` (build với gcov, in độ phủ theo dòng).
-- Dòng 12–13: yêu cầu môi trường: `g++` chuẩn C++17 và `bash`; không cần toolchain ESP32.
+- Dòng 7–15: liệt kê bốn chế độ chạy: `--quick` (1 bản build, core 3.x mặc định), `--full` (8 bản build + bộ test JS), `--extras` (chỉ bản PID/PWM + TLS + MQTT khi phát triển), `--coverage` (build với gcov, in độ phủ dòng + nhánh).
+- Dòng 17–20: ba biến môi trường tùy chỉnh: `COVERAGE_MIN`, `BRANCH_MIN`, `FUZZ_ITERS`.
 
-#### Khối 2 — `set` an toàn và các đường dẫn (dòng 14–20)
+#### Khối 2 — `set` an toàn và các đường dẫn (dòng 23–29)
 
 ```bash
 set -euo pipefail
@@ -7267,48 +7275,63 @@ BUILD="$TEST_DIR/build"
 mkdir -p "$BUILD"
 ```
 
-- Dòng 14: `set -euo pipefail` — ba tùy chọn an toàn: `-e` dừng ngay khi một lệnh lỗi; `-u` báo lỗi khi dùng biến chưa khai báo; `-o pipefail` khiến cả đường ống (`|`) thất bại nếu bất kỳ lệnh nào trong đó thất bại. Nhờ vậy lỗi build/test không bị "chìm".
-- Dòng 16: `ROOT` — thư mục gốc repo: lấy thư mục chứa script (`${BASH_SOURCE[0]}` là đường dẫn file này), đi lên một cấp (`/..`), rồi `pwd` để có đường dẫn tuyệt đối; `cd` chạy trong subshell nên không đổi thư mục hiện tại.
-- Dòng 17: `TEST_DIR="$ROOT/test"`.
-- Dòng 18: `MOCKS="$TEST_DIR/mocks"` — nơi chứa các header/nguồn giả lập.
-- Dòng 19: `BUILD="$TEST_DIR/build"` — thư mục chứa file build tạm (đã nằm trong `.gitignore`).
-- Dòng 20: `mkdir -p` tạo thư mục build nếu chưa có; `-p` không báo lỗi khi thư mục đã tồn tại.
+- Dòng 23: `set -euo pipefail` — ba tùy chọn an toàn: `-e` dừng ngay khi một lệnh lỗi; `-u` báo lỗi khi dùng biến chưa khai báo; `-o pipefail` khiến cả đường ống (`|`) thất bại nếu bất kỳ lệnh nào trong đó thất bại. Nhờ vậy lỗi build/test không bị "chìm".
+- Dòng 25: `ROOT` — thư mục gốc repo: lấy thư mục chứa script (`${BASH_SOURCE[0]}` là đường dẫn file này), đi lên một cấp (`/..`), rồi `pwd` để có đường dẫn tuyệt đối; `cd` chạy trong subshell nên không đổi thư mục hiện tại.
+- Dòng 26: `TEST_DIR="$ROOT/test"`.
+- Dòng 27: `MOCKS="$TEST_DIR/mocks"` — nơi chứa các header/nguồn giả lập.
+- Dòng 28: `BUILD="$TEST_DIR/build"` — thư mục chứa file build tạm (đã nằm trong `.gitignore`).
+- Dòng 29: `mkdir -p` tạo thư mục build nếu chưa có; `-p` không báo lỗi khi thư mục đã tồn tại.
 
-#### Khối 3 — Danh sách nguồn, cờ biên dịch (dòng 22–36)
+#### Khối 3 — Danh sách nguồn, cờ biên dịch (dòng 31–58)
 
 ```bash
 SRC=(
-  "$ROOT/src/actuators.cpp"
-  "$ROOT/src/config.cpp"
-  "$ROOT/src/control.cpp"
-  "$ROOT/src/demo.cpp"
-  "$ROOT/src/globals.cpp"
-  "$ROOT/src/logger.cpp"
-  "$ROOT/src/oled.cpp"
-  "$ROOT/src/sensors.cpp"
-  "$ROOT/src/settings.cpp"
-  "$ROOT/src/webserver.cpp"
-  "$ROOT/src/wifi.cpp"
+  "$ROOT/src/actuators/actuators.cpp"
+  "$ROOT/src/core/config.cpp"
+  "$ROOT/src/control/control.cpp"
+  "$ROOT/src/control/demo.cpp"
+  "$ROOT/src/core/globals.cpp"
+  "$ROOT/src/hal/hal.cpp"
+  "$ROOT/src/control/calibration.cpp"
+  "$ROOT/src/control/anomaly.cpp"
+  "$ROOT/src/control/pid.cpp"
+  "$ROOT/src/control/softstart.cpp"
+  "$ROOT/src/connectivity/mqtt.cpp"
+  "$ROOT/src/connectivity/history.cpp"
+  "$ROOT/src/connectivity/weather.cpp"
+  "$ROOT/src/connectivity/notify.cpp"
+  "$ROOT/src/connectivity/networker.cpp"
+  "$ROOT/src/connectivity/ota.cpp"
+  "$ROOT/src/observability/metrics.cpp"
+  "$ROOT/src/observability/health.cpp"
+  "$ROOT/src/core/logger.cpp"
+  "$ROOT/src/ui/oled.cpp"
+  "$ROOT/src/sensors/sensors.cpp"
+  "$ROOT/src/core/settings.cpp"
+  "$ROOT/src/connectivity/webserver.cpp"
+  "$ROOT/src/connectivity/wifi.cpp"
 )
-FLAGS=(-std=gnu++17 -Wall -Wextra -Wshadow -Wundef -I"$MOCKS" -I"$ROOT/src")
+FLAGS=(-std=gnu++17 -Wall -Wextra -Wshadow -Wundef -DSMARTFARM_TEST_HOOKS -I"$MOCKS" -I"$ROOT/src" -I"$ROOT/src/core" -I"$ROOT/src/hal" -I"$ROOT/src/sensors" -I"$ROOT/src/actuators" -I"$ROOT/src/control" -I"$ROOT/src/connectivity" -I"$ROOT/src/ui" -I"$ROOT/src/observability")
 FILES=("$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}" -x c++ "$ROOT/SmartFarm.ino")
 ```
 
-- Dòng 22–34: mảng `SRC` liệt kê đủ 11 file nguồn production trong `src/` — đây là code thật của firmware.
-- Dòng 35: `FLAGS` gồm: `-std=gnu++17` (chuẩn C++17), `-Wall -Wextra` (bật cảnh báo), `-Wshadow` (cảnh báo biến che khuất), `-Wundef` (cảnh báo dùng macro chưa định nghĩa trong `#if`), `-I"$MOCKS"` **đặt trước** `-I"$ROOT/src"` để `#include <Arduino.h>` trỏ vào mock chứ không phải thư viện thật.
-- Dòng 36: `FILES` là danh sách đầy đủ đưa cho `g++`: test chính, `mock.cpp`, toàn bộ `SRC`, rồi `-x c++` + `SmartFarm.ino`. Hai điểm đáng chú ý: (1) `-x c++` báo cho g++ "file tiếp theo là C++" vì đuôi `.ino` không được nhận diện mặc định; (2) thứ tự đặt sao cho `-x` chỉ ảnh hưởng đúng file `.ino` ở cuối.
+- Dòng 31–56: mảng `SRC` liệt kê đủ 24 file nguồn production — toàn bộ code thật của firmware, gom theo thư mục module như trong `src/` (core, hal, sensors, actuators, control, connectivity, ui, observability). Không có file nào bị chép lại; test chạy đúng code sẽ nạp lên kit.
+- Dòng 57: `FLAGS` gồm: `-std=gnu++17` (chuẩn C++17), `-Wall -Wextra` (bật cảnh báo), `-Wshadow` (cảnh báo biến che khuất), `-Wundef` (cảnh báo dùng macro chưa định nghĩa trong `#if`), `-DSMARTFARM_TEST_HOOKS` (bật các hook chỉ dành cho test), `-I"$MOCKS"` **đặt trước** mọi `-I` khác để `#include <Arduino.h>` trỏ vào mock chứ không phải thư viện thật, rồi các `-I` cho từng thư mục module để header nằm trong `src/core`, `src/hal`... vẫn được tìm thấy.
+- Dòng 58: `FILES` là danh sách đầy đủ đưa cho `g++`: test chính, `mock.cpp`, toàn bộ `SRC`, rồi `-x c++` + `SmartFarm.ino`. Hai điểm đáng chú ý: (1) `-x c++` báo cho g++ "file tiếp theo là C++" vì đuôi `.ino` không được nhận diện mặc định; (2) thứ tự đặt sao cho `-x` chỉ ảnh hưởng đúng file `.ino` ở cuối.
 
-#### Khối 4 — Chế độ chạy và ngưỡng phủ (dòng 38–39)
+#### Khối 4 — Chế độ chạy và ngưỡng phủ (dòng 60–62)
 
 ```bash
 MODE="${1:---full}"
 COVERAGE_MIN="${COVERAGE_MIN:-80}"
+BRANCH_MIN="${BRANCH_MIN:-75}"
 ```
 
-- Dòng 38: `MODE="${1:---full}"` — lấy tham số dòng lệnh thứ nhất; nếu người dùng không truyền gì thì mặc định là `--full` (chạy đủ 6 bản build).
-- Dòng 39: `COVERAGE_MIN="${COVERAGE_MIN:-80}"` — ngưỡng độ phủ tối thiểu, mặc định 80%; có thể ghi đè bằng biến môi trường khi chạy, ví dụ `COVERAGE_MIN=90 ./test/run_tests.sh --coverage`.
+- Dòng 60: `MODE="${1:---full}"` — lấy tham số dòng lệnh thứ nhất; nếu người dùng không truyền gì thì mặc định là `--full` (chạy đủ 8 bản build + test JS).
+- Dòng 61: `COVERAGE_MIN="${COVERAGE_MIN:-80}"` — ngưỡng độ phủ dòng tối thiểu, mặc định 80%; có thể ghi đè bằng biến môi trường khi chạy, ví dụ `COVERAGE_MIN=90 ./test/run_tests.sh --coverage`.
+- Dòng 62: `BRANCH_MIN="${BRANCH_MIN:-75}"` — ngưỡng độ phủ nhánh ("taken at least once") tối thiểu, mặc định 75%; ghi đè được như `COVERAGE_MIN`.
 
-#### Khối 5 — Hàm `build_and_run` (dòng 41–48)
+#### Khối 5 — Hàm `build_and_run` (dòng 64–71)
 
 ```bash
 build_and_run() {
@@ -7321,15 +7344,15 @@ build_and_run() {
 }
 ```
 
-- Dòng 41: định nghĩa hàm `build_and_run`.
-- Dòng 42: `local name="$1"` nhận tên bản build; `shift` bỏ tham số đầu để `$@` còn lại là các cờ `-D...` riêng cho cấu hình đó.
-- Dòng 43: đường dẫn file thực thi, ví dụ `test/build/core3.bin`.
-- Dòng 44: in dấu `=== Build: ... ===` để người đọc biết đang ở bản build nào.
-- Dòng 45: gọi `g++` với cờ chung (`FLAGS`), cờ riêng cấu hình (`"$@"`), `-o` file ra, rồi danh sách `FILES`. Lưu ý mọi biến đều để trong dấu ngoặc kép + `[@]` để đường dẫn có khoảng trắng vẫn an toàn.
-- Dòng 46: chạy file vừa build. Nếu test thất bại, `set -e` (dòng 14) dừng script ngay — không có dòng "PASSED" nào được in.
-- Dòng 47: in một dòng trống ngăn cách giữa các bản build.
+- Dòng 64: định nghĩa hàm `build_and_run`.
+- Dòng 65: `local name="$1"` nhận tên bản build; `shift` bỏ tham số đầu để `$@` còn lại là các cờ `-D...` riêng cho cấu hình đó.
+- Dòng 66: đường dẫn file thực thi, ví dụ `test/build/core3.bin`.
+- Dòng 67: in dấu `=== Build: ... ===` để người đọc biết đang ở bản build nào.
+- Dòng 68: gọi `g++` với cờ chung (`FLAGS`), cờ riêng cấu hình (`"$@"`), `-o` file ra, rồi danh sách `FILES`. Lưu ý mọi biến đều để trong dấu ngoặc kép + `[@]` để đường dẫn có khoảng trắng vẫn an toàn.
+- Dòng 69: chạy file vừa build. Nếu test thất bại, `set -e` (dòng 23) dừng script ngay — không có dòng "PASSED" nào được in.
+- Dòng 70: in một dòng trống ngăn cách giữa các bản build.
 
-#### Khối 6 — Ba cấu hình thường (dòng 50–54)
+#### Khối 6 — Các cấu hình thường và cấu hình phụ (dòng 73–90)
 
 ```bash
 run_default()  { build_and_run core3 -DESP_ARDUINO_VERSION_MAJOR=3; }
@@ -7337,13 +7360,30 @@ run_core2()    { build_and_run core2-invert -DESP_ARDUINO_VERSION_MAJOR=2 \
                    -DINVERT_LIGHT=1 -DINVERT_SOIL=1 -DINVERT_WATER=1; }
 run_buzzer()   { build_and_run passive-lowrelay -DESP_ARDUINO_VERSION_MAJOR=3 \
                    -DBUZZER_PASSIVE=1 -DRELAY_ACTIVE_LOW=1; }
+run_token()    { build_and_run webtoken -DESP_ARDUINO_VERSION_MAJOR=3 \
+                    -DWEB_TOKEN='"token-bao-mat-test"'; }
+# Buffer JSON /api cố ý nhỏ để kiểm tra nhánh "JSON bị cắt cụt": firmware
+# phải trả lỗi 500 thay vì trả JSON hỏng cho trình duyệt.
+run_tinyjson() { build_and_run tinyjson -DESP_ARDUINO_VERSION_MAJOR=3 \
+                    -DAPI_JSON_BUF_SIZE=64; }
+run_extras()   { build_and_run extras -DESP_ARDUINO_VERSION_MAJOR=3 \
+                    -DFAN_PWM_ENABLED=1 -DMQTT_USE_TLS=1 -DMQTT_ENABLED=1; }
+# ANTI_REPLAY mặc định = 0, nghĩa là toàn bộ nhánh nonce trong guardWeb() không
+# được biên dịch ở bất kỳ cấu hình nào khác -> một lỗi ở đó có thể lọt qua mọi
+# build còn lại. Build này bật nó để test D34 thật sự chạy.
+run_replay()   { build_and_run replay -DESP_ARDUINO_VERSION_MAJOR=3 \
+                    -DANTI_REPLAY=1; }
 ```
 
-- Dòng 50: `run_default` — bản `core3`, mô phỏng kit mặc định chạy ESP32 Arduino core 3.x (định nghĩa `ESP_ARDUINO_VERSION_MAJOR=3`).
-- Dòng 51–52: `run_core2` — bản `core2-invert`, chạy core 2.x và bật đồng thời `INVERT_LIGHT`, `INVERT_SOIL`, `INVERT_WATER` để kiểm tra nhánh đảo chiều cảm biến (tức điện áp tăng khi trời tối/đất khô...). Dấu `\` cuối dòng 51 là nối dòng lệnh.
-- Dòng 53–54: `run_buzzer` — bản `passive-lowrelay`, còi thụ động dùng `tone()` (`BUZZER_PASSIVE=1`) và relay kích mức thấp (`RELAY_ACTIVE_LOW=1`); đây là hai biến thể phần cứng khác kit mặc định.
+- Dòng 73: `run_default` — bản `core3`, mô phỏng kit mặc định chạy ESP32 Arduino core 3.x (định nghĩa `ESP_ARDUINO_VERSION_MAJOR=3`).
+- Dòng 74–75: `run_core2` — bản `core2-invert`, chạy core 2.x và bật đồng thời `INVERT_LIGHT`, `INVERT_SOIL`, `INVERT_WATER` để kiểm tra nhánh đảo chiều cảm biến (tức điện áp tăng khi trời tối/đất khô...). Dấu `\` cuối dòng là nối dòng lệnh.
+- Dòng 76–77: `run_buzzer` — bản `passive-lowrelay`, còi thụ động dùng `tone()` (`BUZZER_PASSIVE=1`) và relay kích mức thấp (`RELAY_ACTIVE_LOW=1`); đây là hai biến thể phần cứng khác kit mặc định.
+- Dòng 78–79: `run_token` — bản `webtoken`, đặt `WEB_TOKEN` để bộ test D16 kiểm tra chặn request thiếu/sai token (các bản khác có `WEB_TOKEN` rỗng nên tự bỏ qua nhóm test này).
+- Dòng 80–83: `run_tinyjson` — bản `tinyjson`, cố ý đặt `API_JSON_BUF_SIZE=64` để JSON `/api` bị cắt; firmware phải trả lỗi 500 thay vì gửi JSON hỏng (D21).
+- Dòng 84–85: `run_extras` — bản `extras`, bật `FAN_PWM_ENABLED`, `MQTT_USE_TLS`, `MQTT_ENABLED` để kiểm tra PID/PWM quạt, MQTT + TLS (D30, D32).
+- Dòng 86–90: `run_replay` — bản `replay`, bật `ANTI_REPLAY=1`. Mặc định cờ này bằng 0 nên nhánh nonce trong `guardWeb()` không được biên dịch ở các bản khác; build này để D34 thật sự chạy. Đây là bản build thứ tám của `--full`.
 
-#### Khối 7 — Bản build ASan + UBSan (dòng 57–66)
+#### Khối 7 — Bản build ASan + UBSan (dòng 91–100)
 
 ```bash
 run_asan() {
@@ -7358,14 +7398,35 @@ run_asan() {
 }
 ```
 
-- Dòng 57: định nghĩa hàm `run_asan`.
-- Dòng 58–59: file ra `asan.bin` và dòng thông báo build.
-- Dòng 60–61: biên dịch kèm `-g` (giữ thông tin gỡ lỗi để sanitizer in đúng số dòng), `-fsanitize=address,undefined` (bật AddressSanitizer phát hiện truy cập bộ nhớ sai và UndefinedBehaviorSanitizer phát hiện hành vi không xác định), `-fno-omit-frame-pointer` (giữ con trỏ khung để stack trace đầy đủ), cấu hình core 3.
-- Dòng 62–63: chú thích giải thích vì sao chạy bằng `env -u LD_PRELOAD`: một số phiên desktop đặt `LD_PRELOAD` (ví dụ `libgtk-nocsd`) khiến thư viện khác được nạp trước runtime của ASan; ASan bắt buộc phải nạp đầu tiên, nên phải **bỏ biến này cho riêng lệnh chạy** (`-u` = unset), không ảnh hưởng phần còn lại của script.
-- Dòng 64: chạy binary với `LD_PRELOAD` đã bỏ; nếu sanitizer phát hiện lỗi, mã thoát khác 0 và `set -e` dừng script.
-- Dòng 65: dòng trống ngăn cách.
+- Dòng 91: định nghĩa hàm `run_asan`.
+- Dòng 92–93: file ra `asan.bin` và dòng thông báo build.
+- Dòng 94–95: biên dịch kèm `-g` (giữ thông tin gỡ lỗi để sanitizer in đúng số dòng), `-fsanitize=address,undefined` (bật AddressSanitizer phát hiện truy cập bộ nhớ sai và UndefinedBehaviorSanitizer phát hiện hành vi không xác định), `-fno-omit-frame-pointer` (giữ con trỏ khung để stack trace đầy đủ), cấu hình core 3.
+- Dòng 96–97: chú thích giải thích vì sao chạy bằng `env -u LD_PRELOAD`: một số phiên desktop đặt `LD_PRELOAD` (ví dụ `libgtk-nocsd`) khiến thư viện khác được nạp trước runtime của ASan; ASan bắt buộc phải nạp đầu tiên, nên phải **bỏ biến này cho riêng lệnh chạy** (`-u` = unset), không ảnh hưởng phần còn lại của script.
+- Dòng 98: chạy binary với `LD_PRELOAD` đã bỏ; nếu sanitizer phát hiện lỗi, mã thoát khác 0 và `set -e` dừng script.
+- Dòng 99: dòng trống ngăn cách.
 
-#### Khối 8 — Coverage: build từng file với gcov (dòng 68–88)
+#### Khối 8 — Test JavaScript trang web (dòng 102–112)
+
+```bash
+# Kiểm thử JavaScript của trang web (Node). Trích đúng đoạn <script> từ
+# src/webserver.cpp nên kiểm thử chính mã đang chạy trên thiết bị.
+run_js() {
+  echo "=== JS: web page script ==="
+  if ! command -v node > /dev/null 2>&1; then
+    echo "SKIP: không có node trong PATH"
+    return 0
+  fi
+  node "$TEST_DIR/js/page_test.mjs"
+  echo
+}
+```
+
+- Dòng 102–103: chú thích: test trích đúng đoạn `<script>` từ `src/connectivity/webserver.cpp` (đường dẫn trong script viết tắt `src/webserver.cpp`), nên kiểm thử chính mã chạy trên thiết bị chứ không phải bản chép.
+- Dòng 105: in dấu bắt đầu test JS.
+- Dòng 106–109: nếu máy không có `node`, in `SKIP` và trả về 0 — bộ test JS là tùy chọn, không làm hỏng `--full`.
+- Dòng 110: chạy `test/js/page_test.mjs` bằng Node.
+
+#### Khối 9 — Coverage: build từng file với gcov (dòng 114–150)
 
 ```bash
 run_coverage() {
@@ -7375,58 +7436,85 @@ run_coverage() {
   echo "=== Build: coverage (gcov) ==="
   local objs=()
   local f o
+  # Bản coverage bật các cờ compile-time để phủ những nhánh chỉ tồn tại khi
+  # bật cờ: token web (D16) và PWM quạt (D30). Nhánh tương ứng với cờ tắt đã
+  # được phủ ở các bản build khác.
+  local covflags=(-DWEB_TOKEN='"token-bao-mat-test"' -DFAN_PWM_ENABLED=1)
   # gcov tạo file ghi chú bằng cách thay phần mở rộng của file object bằng
   # .gcno, nên đặt tên object như "control.o" (không phải "control.cpp.o").
   for f in "$TEST_DIR/test_main.cpp" "$MOCKS/mock.cpp" "${SRC[@]}"; do
     o="$cov/$(basename "${f%.cpp}").o"
-    g++ "${FLAGS[@]}" --coverage -c "$f" -o "$o"
+    g++ "${FLAGS[@]}" "${covflags[@]}" --coverage -c "$f" -o "$o"
     objs+=("$o")
   done
-  g++ "${FLAGS[@]}" --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.o"
+  g++ "${FLAGS[@]}" "${covflags[@]}" --coverage -c -x c++ "$ROOT/SmartFarm.ino" -o "$cov/SmartFarm.o"
   objs+=("$cov/SmartFarm.o")
   g++ --coverage -o "$cov/test.bin" "${objs[@]}"
+  # Xóa .gcda cũ nếu còn (tránh cộng dồn số liệu của lần chạy trước).
+  rm -f "$cov"/*.gcda
   "$cov/test.bin" | tail -n 1
+  # gcov chỉ có số liệu khi tìm thấy .gcda cho từng file. Nếu .gcda bị thiếu
+  # (lỗi ghi file tạm khi chạy song song) thì chạy lại test một lần để thu
+  # thập đủ dữ liệu, tránh báo độ phủ sai rồi fail CI.
+  local missing=0 o2
+  for o2 in "$cov"/*.gcno; do
+    [ -e "$o2" ] || continue
+    [ -e "${o2%.gcno}.gcda" ] || missing=1
+  done
+  if [ "$missing" = "1" ]; then
+    echo "coverage: thiếu file .gcda — chạy lại test để thu thập lại dữ liệu"
+    "$cov/test.bin" | tail -n 1
+  fi
   echo
 ```
 
-- Dòng 68: định nghĩa hàm `run_coverage`.
-- Dòng 69–71: xóa sạch rồi tạo lại thư mục `test/build/cov` — tránh dữ liệu phủ cũ lẫn vào kết quả mới.
-- Dòng 72: thông báo đang build chế độ coverage.
-- Dòng 73–74: mảng `objs` chứa các file object và hai biến vòng lặp `f`, `o`.
-- Dòng 77–78: chú thích then chốt: `gcov` tìm file ghi chú `.gcno` bằng cách thay đuôi của file object, nên object phải tên `control.o` — nếu đặt `control.cpp.o` thì gcov (được gọi trên `control.cpp`) sẽ tìm `control.gcno` và không thấy. Vì vậy `o="$cov/$(basename "${f%.cpp}").o"` cắt đuôi `.cpp` trước khi thêm `.o`.
-- Dòng 79–83: vòng lặp biên dịch từng file test, mock và 11 file `src/` thành object riêng với cờ `--coverage` (tương đương `-fprofile-arcs -ftest-coverage`, sinh `.gcno` lúc biên dịch và `.gcda` lúc chạy), rồi thêm đường dẫn object vào mảng `objs`.
-- Dòng 84–85: biên dịch `SmartFarm.ino` với `-x c++` thành `SmartFarm.o` và thêm vào `objs`.
-- Dòng 86: liên kết tất cả object thành `test.bin`; bước link cũng cần `--coverage` để nối runtime gcov.
-- Dòng 87: chạy test, nhưng chỉ giữ **dòng cuối** nhờ `tail -n 1` — vì binary in rất nhiều dòng kết quả, dòng cuối là dòng tổng kết. `pipefail` (dòng 14) đảm bảo nếu test thất bại thì cả đường ống thất bại.
-- Dòng 88: dòng trống ngăn cách.
+- Dòng 114: định nghĩa hàm `run_coverage`.
+- Dòng 115–117: xóa sạch rồi tạo lại thư mục `test/build/cov` — tránh dữ liệu phủ cũ lẫn vào kết quả mới.
+- Dòng 118: thông báo đang build chế độ coverage.
+- Dòng 119–120: mảng `objs` chứa các file object và hai biến vòng lặp `f`, `o`.
+- Dòng 121–124: mảng `covflags` — bộ cờ compile-time riêng cho bản coverage. Token web (`-DWEB_TOKEN=...`) để nhánh kiểm tra token (D16) thật sự được biên dịch và chạy; `-DFAN_PWM_ENABLED=1` để nhánh PID/PWM quạt (D30) được phủ. Các nhánh ứng với cờ **tắt** đã được phủ ở những bản build khác trong `--full`. Cờ được gom vào mảng để cả ba lệnh `g++` (từng file, `SmartFarm.ino`, link) dùng đúng một nguồn cấu hình.
+- Dòng 125–126: chú thích then chốt: `gcov` tìm file ghi chú `.gcno` bằng cách thay đuôi của file object, nên object phải tên `control.o` — nếu đặt `control.cpp.o` thì gcov (được gọi trên `control.cpp`) sẽ tìm `control.gcno` và không thấy. Vì vậy `o="$cov/$(basename "${f%.cpp}").o"` cắt đuôi `.cpp` trước khi thêm `.o`.
+- Dòng 127–131: vòng lặp biên dịch từng file test, mock và 24 file `src/` thành object riêng với `"${covflags[@]}"` và cờ `--coverage` (tương đương `-fprofile-arcs -ftest-coverage`, sinh `.gcno` lúc biên dịch và `.gcda` lúc chạy), rồi thêm đường dẫn object vào mảng `objs`.
+- Dòng 132–133: biên dịch `SmartFarm.ino` (cùng `covflags`) với `-x c++` thành `SmartFarm.o` và thêm vào `objs`.
+- Dòng 134: liên kết tất cả object thành `test.bin`; bước link cũng cần `--coverage` để nối runtime gcov.
+- Dòng 135–136: xóa mọi `.gcda` cũ trước khi chạy — `.gcda` là bộ đếm cộng dồn, nếu còn file cũ thì số liệu bị thổi phồng.
+- Dòng 137: chạy test, nhưng chỉ giữ **dòng cuối** nhờ `tail -n 1` — dòng cuối là dòng tổng kết. `pipefail` (dòng 23) đảm bảo nếu test thất bại thì cả đường ống thất bại.
+- Dòng 138–149: kiểm tra hậu chạy — nếu thiếu `.gcda` cho bất kỳ `.gcno` nào (thường do lỗi ghi file tạm), chạy lại `test.bin` một lần để thu thập đủ dữ liệu thay vì để CI báo độ phủ sai.
+- Dòng 150: dòng trống ngăn cách.
 
-#### Khối 9 — Sinh file `.gcov` (dòng 90–94)
+#### Khối 10 — Sinh file `.gcov` (dòng 152–156)
 
 ```bash
   echo "=== Coverage (production code: src/*.cpp + SmartFarm.ino) ==="
   ( cd "$cov"
-    for f in "$ROOT/src/"*.cpp "$ROOT/SmartFarm.ino"; do
-      gcov -o "$cov" "$f" > /dev/null 2>&1 || true
+    for f in $(find "$ROOT/src" -name "*.cpp") "$ROOT/SmartFarm.ino"; do
+      gcov -b -o "$cov" "$f" > /dev/null 2>&1 || true
     done )
 ```
 
-- Dòng 90: thông báo phạm vi đo: chỉ code production (`src/*.cpp` + `SmartFarm.ino`), không tính `test_main.cpp`/`mock.cpp`.
-- Dòng 91: mở subshell (`(...)`) rồi `cd` vào thư mục `cov` — gcov ghi file `.gcov` vào thư mục hiện hành, và subshell giúp không đổi thư mục của script chính.
-- Dòng 92–94: với từng file nguồn production, gọi `gcov -o "$cov"` (chỉ cho gcov biết nơi chứa `.gcno`/`.gcda`) và bỏ toàn bộ output thường lẫn output lỗi (`> /dev/null 2>&1`). `|| true` để một lần gcov "càu nhàu" không làm `set -e` dừng script; kết quả được đọc ở bước sau qua các file `.gcov`.
+- Dòng 152: thông báo phạm vi đo: chỉ code production (`src/**/*.cpp` + `SmartFarm.ino`), không tính `test_main.cpp`/`mock.cpp`.
+- Dòng 153: mở subshell (`(...)`) rồi `cd` vào thư mục `cov` — gcov ghi file `.gcov` vào thư mục hiện hành, và subshell giúp không đổi thư mục của script chính.
+- Dòng 154: `find` liệt kê **mọi** file `.cpp` trong `src/` (kể cả thư mục con) cộng `SmartFarm.ino`.
+- Dòng 155–156: với từng file nguồn production, gọi `gcov -b` (bật số liệu nhánh) với `-o "$cov"` (nơi chứa `.gcno`/`.gcda`) và bỏ toàn bộ output thường lẫn output lỗi (`> /dev/null 2>&1`). `|| true` để một lần gcov "càu nhàu" không làm `set -e` dừng script; kết quả được đọc ở bước sau qua các file `.gcov`.
 
-#### Khối 10 — Đọc từng file `.gcov` và tính độ phủ (dòng 96–128)
+#### Khối 11 — Đọc từng file `.gcov`, tính độ phủ dòng (dòng 158–188)
 
 ```bash
-  local total=0 covered=0
-  printf "%-30s %8s %8s %8s\n" "File" "Lines" "Hit" "Cover"
-  local gc base stats hit tot pct
+  local total=0 covered=0 btotal=0 bcovered=0
+  printf "%-22s %7s %7s %7s %10s %7s %7s\n" "File" "Lines" "Hit" "Cover" "Branches" "BHit" "BCover"
+  local gc base f stats hit tot pct bstats bhit btot bpct
   for gc in "$cov"/*.gcov; do
     [ -e "$gc" ] || continue
     base="$(basename "$gc" .gcov)"
     case "$base" in
-      actuators.cpp|config.cpp|control.cpp|demo.cpp|globals.cpp|logger.cpp|\
-      oled.cpp|sensors.cpp|settings.cpp|webserver.cpp|wifi.cpp|SmartFarm.ino) ;;
+      actuators.cpp|anomaly.cpp|calibration.cpp|config.cpp|control.cpp|demo.cpp|globals.cpp|health.cpp|\
+      hal.cpp|history.cpp|logger.cpp|metrics.cpp|mqtt.cpp|networker.cpp|notify.cpp|oled.cpp|ota.cpp|pid.cpp|sensors.cpp|\
+      settings.cpp|softstart.cpp|weather.cpp|webserver.cpp|wifi.cpp|SmartFarm.ino) ;;
       *) continue ;;
+    esac
+    case "$base" in
+      SmartFarm.ino) f="$ROOT/SmartFarm.ino" ;;
+      *)             f="$ROOT/src/$base" ;;
     esac
     stats="$(awk -F: '
       $2 ~ /^[ ]*[0-9]+$/ {
@@ -7443,58 +7531,97 @@ run_coverage() {
     tot="${stats##* }"
     total=$((total + tot))
     covered=$((covered + hit))
+```
+
+- Dòng 158: khởi tạo bốn biến tổng: `total`/`covered` (dòng) và `btotal`/`bcovered` (nhánh).
+- Dòng 159: in tiêu đề bảng canh cột: `File`, `Lines`, `Hit`, `Cover`, `Branches`, `BHit`, `BCover`.
+- Dòng 160: khai báo các biến cục bộ dùng trong vòng lặp, gồm `f` cho đường dẫn nguồn.
+- Dòng 161–162: duyệt mọi file `.gcov` mà gcov vừa sinh; nếu mẫu không khớp file nào (không có `.gcov`), `continue` — vì bash giữ nguyên chuỗi `"$cov"/*.gcov` khi không khớp.
+- Dòng 163: lấy tên file bỏ đuôi `.gcov`, ví dụ `control.cpp`.
+- Dòng 164–169: bộ lọc `case` — chỉ xử lý 25 tên thuộc code production (24 file `.cpp` trong `src/` + `SmartFarm.ino`, đúng bằng danh sách `SRC`); mọi file khác (như `test_main.cpp.gcov`, `mock.cpp.gcov`) bị `continue` bỏ qua, đảm bảo độ phủ phản ánh đúng firmware.
+- Dòng 170–173: chọn đường dẫn nguồn thật (`$ROOT/SmartFarm.ino` hoặc `$ROOT/src/$base`) để dùng lại ở bước đo nhánh.
+- Dòng 174–184: đoạn `awk -F:` phân tích file `.gcov`. Mỗi dòng gcov có dạng `số_lần_chạy:số_dòng:nội_dung`, nên `$1` là số lần chạy, `$2` là số dòng.
+  - Dòng 175: chỉ xử lý dòng mà cột 2 là số thuần (dòng nguồn thật); các dòng tiêu đề kiểu `function ...` bị loại.
+  - Dòng 176–177: bỏ dòng số 0 (dòng tổng kết của gcov).
+  - Dòng 178: lấy cột đếm và xóa khoảng trắng đệm.
+  - Dòng 179: nếu cột đếm là `-` thì bỏ qua — đây là các dòng **không thực thi được** (chú thích, dòng trống, dấu `}`...). Nếu tính cả chúng, mẫu số độ phủ bị thổi phồng và chỉ số không còn phản ánh số dòng thực sự chạy.
+  - Dòng 180: `total++` — đếm một dòng thực thi được.
+  - Dòng 181: `covered++` khi dòng không phải `#####` (chưa chạy), không phải `=====` (đường đặc biệt) và số lần chạy lớn hơn 0.
+  - Dòng 183: `END` in ra hai số `covered total` cách nhau bằng dấu cách.
+- Dòng 185–188: cắt chuỗi `stats` bằng tham số mở rộng của bash (`%% *` lấy từ cuối, `##* ` lấy từ đầu) rồi cộng dồn vào tổng dòng toàn cục.
+
+#### Khối 12 — Độ phủ nhánh, dòng TOTAL và kiểm tra ngưỡng (dòng 190–243)
+
+```bash
+    # Độ phủ nhánh: "Taken at least once" là chỉ số branch coverage cổ điển
+    # (một nhánh đã được đi qua ít nhất một lần). Số liệu lấy từ dòng tổng
+    # kết của gcov -b nên chính xác, không bị ảnh hưởng bởi làm tròn %.
+    bstats="$( (cd "$cov" && gcov -b -o "$cov" "$f" 2>/dev/null) | awk -v n="$base" '
+      /^File / { sec = $0 }
+      /^Taken at least once:/ && sec ~ n {
+        p = $4; sub(/^once:/, "", p); sub(/%$/, "", p);
+        printf "%d %d", $6 * p / 100 + 0.5, $6;
+      }')" || true
+    if [ -n "$bstats" ]; then
+      bhit="${bstats%% *}"
+      btot="${bstats##* }"
+    else
+      bhit=0
+      btot=0
+    fi
+    btotal=$((btotal + btot))
+    bcovered=$((bcovered + bhit))
+
     if [ "$tot" -gt 0 ]; then
       pct="$(awk -v c="$hit" -v t="$tot" 'BEGIN { printf "%.1f", 100.0*c/t }')"
     else
       pct="n/a"
     fi
-    printf "%-30s %8d %8d %7s%%\n" "$base" "$tot" "$hit" "$pct"
+    if [ "$btot" -gt 0 ]; then
+      bpct="$(awk -v c="$bhit" -v t="$btot" 'BEGIN { printf "%.1f", 100.0*c/t }')"
+    else
+      bpct="n/a"
+    fi
+    printf "%-22s %7d %7d %6s%% %10d %7d %6s%%\n" "$base" "$tot" "$hit" "$pct" "$btot" "$bhit" "$bpct"
   done
-```
 
-- Dòng 96: khởi tạo hai biến tổng `total` (dòng thực thi được) và `covered` (dòng đã chạy).
-- Dòng 97: in tiêu đề bảng canh cột bằng `printf`: `File`, `Lines`, `Hit`, `Cover`.
-- Dòng 98: khai báo các biến cục bộ dùng trong vòng lặp.
-- Dòng 99: duyệt mọi file `.gcov` mà gcov vừa sinh.
-- Dòng 100: nếu mẫu không khớp file nào (không có `.gcov`), `continue` để bỏ qua — vì bash có thể giữ nguyên chuỗi `"$cov"/*.gcov` khi không khớp.
-- Dòng 101: lấy tên file bỏ đuôi `.gcov`, ví dụ `control.cpp`.
-- Dòng 102–106: bộ lọc `case` — chỉ xử lý 12 tên thuộc code production (`actuators.cpp` ... `wifi.cpp`, `SmartFarm.ino`); mọi file khác (như `test_main.cpp.gcov`, `mock.cpp.gcov`) bị `continue` bỏ qua, đảm bảo độ phủ phản ánh đúng firmware.
-- Dòng 107–117: đoạn `awk -F:` phân tích file `.gcov`. Mỗi dòng gcov có dạng `số_lần_chạy:số_dòng:nội_dung`, nên `$1` là số lần chạy, `$2` là số dòng.
-  - Dòng 108: chỉ xử lý dòng mà cột 2 là số thuần (dòng nguồn thật); các dòng tiêu đề kiểu `function ...` bị loại.
-  - Dòng 109–110: bỏ dòng số 0 (dòng tổng kết của gcov).
-  - Dòng 111: lấy cột đếm và xóa khoảng trắng đệm.
-  - Dòng 112: nếu cột đếm là `-` thì bỏ qua — đây là các dòng **không thực thi được** (chú thích, dòng trống, dấu `}`...). Vì sao phải bỏ: nếu tính cả chúng, mẫu số độ phủ bị thổi phồng và chỉ số không còn phản ánh số dòng thực sự chạy.
-  - Dòng 113: `total++` — đếm một dòng thực thi được.
-  - Dòng 114: `covered++` khi dòng không phải `#####` (chưa chạy), không phải `=====` (đường đặc biệt) và số lần chạy lớn hơn 0.
-  - Dòng 116: `END` in ra hai số `covered total` cách nhau bằng dấu cách.
-- Dòng 118–121: cắt chuỗi `stats` bằng tham số mở rộng của bash (`%% *` lấy từ cuối, `##* ` lấy từ đầu) rồi cộng dồn vào tổng toàn cục.
-- Dòng 122–126: nếu file có ít nhất một dòng thực thi được thì tính phần trăm một chữ số thập phân bằng awk; nếu không thì ghi `n/a` để tránh chia cho 0.
-- Dòng 127: in một hàng của bảng: tên file, tổng dòng, số dòng đã chạy, phần trăm.
-
-#### Khối 11 — Dòng TOTAL và kiểm tra ngưỡng (dòng 130–141)
-
-```bash
-  local overall
+  local overall boverall
   if [ "$total" -gt 0 ]; then
     overall="$(awk -v c="$covered" -v t="$total" 'BEGIN { printf "%.1f", 100.0*c/t }')"
   else
     overall="0.0"
   fi
-  echo "--------------------------------------------------------"
-  printf "%-30s %8d %8d %7s%%\n" "TOTAL" "$total" "$covered" "$overall"
+  if [ "$btotal" -gt 0 ]; then
+    boverall="$(awk -v c="$bcovered" -v t="$btotal" 'BEGIN { printf "%.1f", 100.0*c/t }')"
+  else
+    boverall="0.0"
+  fi
+  echo "------------------------------------------------------------------------------"
+  printf "%-22s %7d %7d %6s%% %10d %7d %6s%%\n" "TOTAL" "$total" "$covered" "$overall" "$btotal" "$bcovered" "$boverall"
   awk -v p="$overall" -v m="$COVERAGE_MIN" 'BEGIN { exit (p+0 >= m+0) ? 0 : 1 }' || {
     echo "ERROR: coverage ${overall}% is below the ${COVERAGE_MIN}% threshold (set COVERAGE_MIN to override)"
     exit 1
   }
+  awk -v p="$boverall" -v m="$BRANCH_MIN" 'BEGIN { exit (p+0 >= m+0) ? 0 : 1 }' || {
+    echo "ERROR: branch coverage ${boverall}% is below the ${BRANCH_MIN}% threshold (set BRANCH_MIN to override)"
+    exit 1
+  }
+}
 ```
 
-- Dòng 130–135: tính `overall` — phần trăm phủ toàn dự án; nếu tổng số dòng bằng 0 thì gán `"0.0"` cho an toàn.
-- Dòng 136: in dải phân cách.
-- Dòng 137: in hàng `TOTAL` với tổng dòng, tổng dòng đã chạy và phần trăm chung.
-- Dòng 138: `awk` so sánh số học `overall >= COVERAGE_MIN`; nếu đạt thì thoát 0, không đạt thì thoát 1. `p+0`/`m+0` ép chuỗi thành số. Nếu awk thoát 1, khối sau dấu `||` chạy.
-- Dòng 139–140: in thông báo lỗi kèm gợi ý đặt `COVERAGE_MIN` để hạ/đổi ngưỡng, rồi `exit 1` — test coi như thất bại.
+- Dòng 190–192: chú thích giải thích chỉ số nhánh dùng "Taken at least once" — nhánh đã đi qua ít nhất một lần; số liệu lấy từ dòng tổng kết của `gcov -b` nên không bị sai lệch do làm tròn phần trăm.
+- Dòng 193–198: chạy lại `gcov -b` cho đúng file nguồn, lọc phần báo cáo của file đó (`/^File /` ghi nhớ mục, điều kiện `sec ~ n`), rồi tính `bhit = tổng × % / 100` và in `bhit btot`. `|| true` để lỗi gcov không làm hỏng cả script.
+- Dòng 199–205: nếu có số liệu nhánh thì tách `bhit`/`btot`; nếu không (file lỗi/không có nhánh) gán 0 để bảng vẫn in được.
+- Dòng 206–207: cộng dồn vào tổng nhánh toàn dự án.
+- Dòng 209–218: tính phần trăm dòng (`pct`) và phần trăm nhánh (`bpct`) cho từng file bằng awk; file không có dòng/nhánh thực thi được thì ghi `n/a` để tránh chia cho 0.
+- Dòng 219: in một hàng của bảng: tên file, tổng dòng, dòng đã chạy, % dòng, tổng nhánh, nhánh đã chạy, % nhánh.
+- Dòng 222–232: tính `overall` và `boverall` — phần trăm phủ toàn dự án; nếu tổng bằng 0 thì gán `"0.0"` cho an toàn.
+- Dòng 233–234: in dải phân cách và hàng `TOTAL` với cả hai cặp chỉ số.
+- Dòng 235–238: `awk` so sánh số học `overall >= COVERAGE_MIN`; không đạt thì in thông báo lỗi kèm gợi ý đặt `COVERAGE_MIN` để đổi ngưỡng, rồi `exit 1` — test coi như thất bại.
+- Dòng 239–242: làm tương tự cho độ phủ nhánh với `BRANCH_MIN` (mặc định 75%).
+- Dòng 243: đóng hàm `run_coverage`.
 
-#### Khối 12 — Bộ chọn chế độ chạy (dòng 144–164)
+#### Khối 13 — Bộ chọn chế độ chạy (dòng 245–273)
 
 ```bash
 case "$MODE" in
@@ -7507,24 +7634,34 @@ case "$MODE" in
     run_core2
     run_buzzer
     run_asan
-    echo "FULL: ALL 4 BUILDS PASSED"
+    run_token
+    run_tinyjson
+    run_extras
+    run_replay
+    run_js
+    echo "FULL: ALL 8 BUILDS + JS TESTS PASSED"
+    ;;
+  --extras)
+    run_extras
+    echo "EXTRAS: PASSED"
     ;;
   --coverage)
     run_coverage
     ;;
   *)
-    echo "Usage: $0 [--quick|--full|--coverage]" >&2
+    echo "Usage: $0 [--quick|--full|--extras|--coverage]" >&2
     exit 2
     ;;
 esac
 ```
 
-- Dòng 144: `case "$MODE"` — rẽ nhánh theo chế độ đã lấy ở dòng 38.
-- Dòng 145–147: `--quick` — chỉ chạy bản core3; nếu xong không lỗi thì in `QUICK: PASSED`. Vì có `set -e`, dòng này chỉ tới được khi test đã qua.
-- Dòng 149–155: `--full` — lần lượt chạy đủ 6 bản build (core3, core2-invert, passive-lowrelay, asan+ubsan, webtoken, tinyjson) cộng bộ test JS rồi in `FULL: ALL 6 BUILDS + JS TESTS PASSED`. Bất kỳ bản nào lỗi sẽ dừng ngay trước khi in dòng này.
-- Dòng 157–158: `--coverage` — gọi `run_coverage`.
-- Dòng 160–162: nhánh còn lại (`*`) — in hướng dẫn dùng ra **stderr** (`>&2`) rồi thoát mã 2 (mã quy ước "dùng sai tham số").
-- Dòng 164: `esac` kết thúc `case`.
+- Dòng 245: `case "$MODE"` — rẽ nhánh theo chế độ đã lấy ở dòng 60.
+- Dòng 246–249: `--quick` — chỉ chạy bản core3; nếu xong không lỗi thì in `QUICK: PASSED`. Vì có `set -e`, dòng này chỉ tới được khi test đã qua.
+- Dòng 250–261: `--full` — lần lượt chạy đủ 8 bản build (core3, core2-invert, passive-lowrelay, asan+ubsan, webtoken, tinyjson, extras, replay) cộng bộ test JS rồi in `FULL: ALL 8 BUILDS + JS TESTS PASSED`. Bất kỳ bản nào lỗi sẽ dừng ngay trước khi in dòng này.
+- Dòng 262–265: `--extras` — chỉ chạy bản `extras` (PID/PWM + TLS + MQTT) khi đang phát triển, in `EXTRAS: PASSED`.
+- Dòng 266–267: `--coverage` — gọi `run_coverage`.
+- Dòng 269–272: nhánh còn lại (`*`) — in hướng dẫn dùng ra **stderr** (`>&2`) rồi thoát mã 2 (mã quy ước "dùng sai tham số").
+- Dòng 273: `esac` kết thúc `case`.
 
 ---
 
@@ -7535,15 +7672,21 @@ esac
 | Mã | Ý nghĩa | Xử lý |
 |---|---|---|
 | 101 | Không tìm thấy màn hình OLED | Vẫn chạy tiếp; kiểm tra dây I2C, địa chỉ 0x3C |
-| 102 | Hết 30 giây chưa kết nối WiFi | Tự thử lại mỗi 10 giây ở nền |
+| 102 | Hết 30 giây chưa kết nối WiFi | Báo một lần; tiếp tục thử lại ở nền mỗi 10 giây |
 | 103 | I2C OLED hỏng 3 lần liên tiếp | Màn hình đã bị tắt để loop không bị nghẽn; kiểm tra dây I2C rồi khởi động lại |
+| 104 | Không cấu hình được watchdog | Vẫn chạy với timeout mặc định của core; kiểm tra log |
 | 201 | Nước thấp, buộc tắt bơm | Châm nước; bơm tự được phép chạy lại |
-| 202 | Đất khô, bật bơm (thông tin) | Bình thường |
-| 203 | Đất đủ ẩm, tắt bơm (thông tin) | Bình thường |
+| 204 | Cảm biến nhiệt không khỏe, quạt bật fail-safe | Kiểm tra DHT11; quạt chạy để bảo vệ cây |
 | 301 | Phát hiện chuyển động (PIR) | Bật đèn theo HOẠT ĐỘNG 5 |
 | 302 | Báo động nước cạn (còi) | Châm nước để tắt còi |
-| 401 | Mất WiFi, đang nối lại | Chỉ ghi 1 lần mỗi đợt; tự nối lại |
-| 501 | Cảm biến DHT11 lỗi liên tục (>5 lần) | Kiểm tra dây/chân 23; giá trị cũ được dùng tạm |
+| 401 | Mất WiFi, đang nối lại | Chỉ ghi 1 lần mỗi đợt; tự nối lại theo `WIFI_CHECK_INTERVAL` (10 giây) |
+| 501 | Cảm biến DHT11 lỗi quá 5 lần liên tiếp | Kiểm tra dây/chân 23; giá trị cũ được dùng tạm |
+| 601 | Bật MQTT TLS nhưng thiếu CA và `MQTT_TLS_INSECURE=0` | Nạp `MQTT_CA_CERT` hoặc chủ động bật `MQTT_TLS_INSECURE=1`; MQTT không kết nối |
+| 602 | Không tạo được queue cho task mạng | Thử lại sau `NET_INIT_RETRY_MS`; kiểm tra heap |
+| 603 | Không tạo được task mạng | Queue vừa tạo được xóa bỏ; thử lại sau `NET_INIT_RETRY_MS` |
+| 999 | Mã mẫu của `debugLogger()` (menu debug) | Chỉ để kiểm tra định dạng log, không phải sự cố |
+
+Hai nhãn `[202]` và `[203]` trong log **không phải mã lỗi**: chúng là `LOG_INFO` khi đất khô → bật bơm và đất đủ ẩm → tắt bơm, in dạng `Soil dry... [202]`. Chỉ các dòng đi qua `LOG_ERROR_CODE` mới có tiền tố `[MA LOI: xxx]`.
 
 ### 17.2. Bảng chân — bản đầy đủ kèm tên biến trong code
 
@@ -7580,6 +7723,118 @@ esac
   `src/config.h`, không phải sửa bất kỳ dòng logic nào.
 - **"Relay/còi của tôi khác loại?"** — Đặt `RELAY_ACTIVE_LOW` hoặc `BUZZER_PASSIVE` trong
   `src/config.h` cho đúng module bạn có.
+
+---
+
+## PHẦN 18 — Các module mở rộng (bổ sung)
+
+Phần này tóm tắt các module thêm sau tài liệu gốc. Vì số dòng thay đổi liên tục,
+hãy đọc theo **tên hàm** trong file.
+
+### 18.1. Lịch sử và biểu đồ — `src/connectivity/history.cpp`
+
+- `historyLoop()` được gọi mỗi vòng `loop()`; chỉ ghi mẫu khi đủ
+  `HISTORY_INTERVAL_MS` (mặc định 30.000 ms).
+- Mỗi mẫu gồm thời điểm (giây), nhiệt độ, độ ẩm, ánh sáng, độ ẩm đất, mực nước
+  và 3 cờ relay/fan/alarm. Vòng đệm có `HISTORY_CAPACITY` = 96 phần tử; khi đầy
+  thì mẫu mới ghi đè mẫu cũ nhất.
+- Dữ liệu **chỉ nằm trong RAM** (mất khi reset). `/history` dựng JSON bằng
+  `buildHistoryJson()` vào buffer heap có kích thước đúng bằng `historyJsonSize()`
+  (không còn buffer cố định 9.216 byte), rồi ghi ra bằng **một** `sendContent()`.
+  Hàm vẫn theo hợp đồng `snprintf`: nếu buffer nhỏ hơn độ dài cần, nó trả về độ
+  dài cần thiết để test kiểm tra nhánh cắt.
+- Web vẽ biểu đồ bằng `<canvas>`; `refreshExtras()` gọi `/history` và `/weather`
+  định kỳ, không chặn các request điều khiển khác.
+
+### 18.2. Thời tiết thực — `src/connectivity/weather.cpp`
+
+- `weatherLoop()` gọi Open-Meteo mỗi `WEATHER_REFRESH_MS` (15 phút) bằng HTTP
+  thường (không cần API key, không cần chứng chỉ TLS).
+- URL dùng `WEATHER_LATITUDE`/`WEATHER_LONGITUDE` (mặc định Hà Nội) và các trường
+  `temperature_2m`, `relative_humidity_2m`, `weather_code`.
+- `testParseWeatherBody()` bỏ qua object `current_units` để không nhầm đơn vị với
+  giá trị; mã WMO được đổi sang mô tả tiếng Việt qua `weatherCodeDescription()`.
+- `/weather` trả `valid`, `temp`, `hum`, `code`, `desc`; khi chưa có dữ liệu thì
+  `valid=false` và web hiển thị "chưa có dữ liệu".
+
+### 18.3. Telegram — `src/connectivity/notify.cpp`
+
+- `notifyEvent(kind, message)` gửi POST tới `api.telegram.org` bằng
+  `WiFiClientSecure` khi đã điền `TELEGRAM_BOT_TOKEN` và `TELEGRAM_CHAT_ID`.
+- Nội dung được URL-encode; mỗi loại sự kiện (`water`, `motion`, ...) có khoảng
+  chờ tối thiểu để tránh spam.
+- `controlAlerts()` gọi thông báo khi nước cạn và khi PIR phát hiện chuyển động.
+- Khi thiếu token/chat id, module tắt hoàn toàn và không cấp phát socket.
+
+### 18.4. MQTT và TLS — `src/connectivity/mqtt.cpp`
+
+- Chỉ hoạt động khi `MQTT_ENABLED=1`; dùng `PubSubClient`.
+- Kết nối tới `MQTT_BROKER:MQTT_PORT`, LWT `smartfarm/status` = `offline`, publish
+  JSON trạng thái mỗi `MQTT_PUBLISH_INTERVAL_MS` lên `smartfarm/state`.
+- Nhận lệnh tại `smartfarm/cmd` với các lệnh `pump on/off`, `fan on/off`,
+  `led on/off`, `windmill on/off`, `feed`, `alarm on/off`, `rgb R G B`.
+- Khi `MQTT_USE_TLS=1`, dùng `WiFiClientSecure` và đặt `setHandshakeTimeout()`
+  để bắt tay TLS không treo lâu. Mặc định `MQTT_TLS_INSECURE=0`: bắt buộc có
+  `MQTT_CA_CERT`, nếu thiếu CA thì module ghi lỗi 601 và **không kết nối**.
+  Chỉ khi chủ động đặt `MQTT_TLS_INSECURE=1` mới bỏ kiểm tra chứng chỉ (phù hợp
+  mô hình học tập/LAN, không dùng cho dữ liệu nhạy cảm).
+- TCP connect và socket read đều bị giới hạn bởi `MQTT_SOCKET_TIMEOUT_S`; riêng
+  `connect()` của PubSubClient không nhận timeout nên firmware đặt timeout của
+  client theo từng core (`setConnectionTimeout` ở core 3.x, `setTimeout` ở 2.x).
+- Không còn module `tls.cpp`/`tlsEnabled()`/cờ `TLS_ENABLED`: transport TLS nằm
+  ngay trong MQTT (`WiFiClientSecure`) và Telegram (`notify.cpp`).
+
+### 18.5. Khởi động mềm và PID — `softstart.cpp`, `pid.cpp`, `control.cpp`
+
+- `softStartPump(true)` không đóng relay ngay mà hẹn giờ `SOFTSTART_MS` (500 ms);
+  `softStartUpdate()` đóng relay khi đủ giờ. `softStartCancel()` hủy khi mất nước,
+  khi người dùng tắt bơm hoặc khi vào chế độ khác.
+- Luật an toàn nước vẫn chạy trước mọi nhánh, nên bơm không bao giờ chạy khô dù
+  đang chờ khởi động mềm.
+- Khi `FAN_PWM_ENABLED=1`, `controlFan()` dùng PID với `pidUpdate(tempHigh, gTemp)`;
+  đầu ra dương khi nhiệt độ vượt ngưỡng, duty tối thiểu 80/255 để quạt khởi động.
+- `setFanPwm()` là nơi duy nhất ghi PWM quạt; khi tắt thì ghi duty 0 và cập nhật
+  `sys.fanState` để API/lịch sử luôn khớp phần cứng.
+
+### 18.6. Động cơ cối xay gió — `SmartFarm.ino`, `control.cpp`
+
+- Chân `WINDMILL_MOTOR_PIN` (mặc định 16) được đặt OUTPUT và ghi mức an toàn khi
+  boot. `setWindmill(on)` ghi mức theo `WINDMILL_MOTOR_ACTIVE_HIGH` và vẫn quay
+  servo mô phỏng nếu `WINDMILL_SERVO_SIM=1`.
+- Cần transistor/relay + diode flyback; không nối động cơ trực tiếp vào GPIO.
+
+### 18.7. Bluetooth Serial — `SmartFarm.ino`
+
+- Mặc định **tắt** (`BLUETOOTH_ENABLED=0`); bật bằng `-DBLUETOOTH_ENABLED=1`
+  (cần partition `huge_app` vì firmware tăng lên khoảng 1,9 MB). Tên thiết bị
+  là `SmartFarm`.
+- `loop()` đọc từng byte có sẵn, tích lũy đến `\n`/`\r` rồi gọi
+  `processBluetoothCommand()`; không dùng `readStringUntil()` để tránh chặn loop.
+- Lệnh: `on/off`, `led on/off`, `pump on/off`, `fan on/off`, `windmill on/off`,
+  `feed`, `demo`, `alarm on/off`, `rgb R G B`, `door/servo 0-180`, `status`, `help`.
+- Buffer 64 byte không có newline vẫn được xử lý để không kẹt; test D33 kiểm tra
+  cả đường đi qua `loop()`.
+
+### 18.8. Endpoint tương thích app ACEBOTT — `webserver.cpp`
+
+- `/config` trả `{"appCallInterval":1000}` để app biết nhịp gọi lại.
+- `/all` trả các trường viết hoa (`WaterLevel`, `Humidity`, `Human`, ...) đúng
+  định dạng app đọc, đồng thời gọi `pauseAutoForApp()`.
+- Trong `APP_CONTROL_PAUSE_MS` (3 giây), `runAutomation()` chỉ chạy cảnh báo an
+  toàn, không tự bật/tắt bơm/quạt/đèn để không giành quyền với app.
+- `/door?level=0/1` đóng/mở cửa cho ăn; `/led?level=0/1` tắt/bật đèn xanh;
+  `/rgb` và các lệnh thủ công khác cũng tạm dừng automation.
+
+### 18.9. Kiểm thử mới
+
+- **D25** lịch sử, **D26** thời tiết, **D27** app ACEBOTT, **D28** soft-start,
+  **D29** động cơ cối xay gió, **D30** PID/PWM, **D31** Telegram, **D32** cờ
+  MQTT/TLS, **D33** Bluetooth, **D34** cửa sổ chống replay (chỉ chạy ở bản
+  build `replay`; các bản khác bỏ qua vì `ANTI_REPLAY=0`).
+- Mock `BluetoothSerial` có `mockFeed()` để bơm lệnh và `mockWriteCount()` để đếm
+  phản hồi; `SmartFarm.ino` có hook `testProcessBluetoothCommand()` khi build test.
+- Bản `extras` của `--full` bật đồng thời `FAN_PWM_ENABLED`, `MQTT_USE_TLS`,
+  `MQTT_ENABLED` để kiểm tra các nhánh phần cứng/giao thức.
 
 ---
 

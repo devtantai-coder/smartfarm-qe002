@@ -29,6 +29,24 @@ static int wifiStatusCached(unsigned long now) {
   return sLastStatus;
 }
 
+// Cache CHUỖI IP đã định dạng: webserver/OLED gọi ở tần số cao nhưng IP hiếm
+// khi đổi, nên chỉ cấp phát String/format lại khi địa chỉ thực sự khác.
+static char sIpStr[16] = {0};
+static IPAddress sCachedIp;
+static bool sIpValid = false;
+
+const char* wifiIpString() {
+  const IPAddress ip = WiFi.localIP();
+  if (!sIpValid || ip != sCachedIp) {
+    sCachedIp = ip;
+    String ts = ip.toString();
+    strncpy(sIpStr, ts.c_str(), sizeof(sIpStr) - 1);
+    sIpStr[sizeof(sIpStr) - 1] = '\0';
+    sIpValid = true;
+  }
+  return sIpStr;
+}
+
 void manageWiFi() {
   unsigned long now = millis();
   if (sBootMs == 0) sBootMs = now;   // lần gọi đầu tiên ngay sau setup()
@@ -72,10 +90,21 @@ void testResetWifiStatics() {
   sBootTimedOut = false;
   sBootMs = 0;
   sStatusValid = false;      // ép hỏi lại trạng thái ở lần gọi kế tiếp
+  sIpValid = false;
+  sIpStr[0] = '\0';
 }
 #endif
 
 bool wifiConnected() {
   // Use cached status to avoid hammering WiFi.status() driver.
   return wifiStatusCached(millis()) == WL_CONNECTED;
+}
+
+// Tác vụ mạng nền KHÔNG được dùng cache ở trên: ba biến sLastStatus/sStatusAt/
+// sStatusValid thuộc về loopTask và không có khóa nào bảo vệ, task nền vừa đọc
+// vừa ghi là thành data race thực sự (loopTask có thể lấy lại giá trị do task
+// khác ghi rồi gia hạn mốc sStatusAt, khiến manageWiFi chậm thấy mất kết nối).
+// Mỗi job chỉ hỏi driver một lần, cái giá chấp nhận được.
+bool wifiConnectedFresh() {
+  return WiFi.status() == WL_CONNECTED;
 }

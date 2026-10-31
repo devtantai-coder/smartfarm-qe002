@@ -36,9 +36,48 @@ void setBuzzer(bool on) {
 void setFan(bool on) {
   if (sys.fanState == on) return;
   sys.fanState = on;
+#if FAN_PWM_ENABLED
+  // Với quạt kích mức thấp, duty 0% (mức LOW liên tục) là CHẠY và 100% là TẮT:
+  // phải đảo duty, nếu không quạt chạy hết tốc khi "tắt" và đứng yên khi "bật".
+  const uint8_t duty = on ? 255 : 0;
+  const uint8_t level = FAN_ACTIVE_LOW ? (uint8_t)(255 - duty) : duty;
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(FAN_PIN, level);
+#else
+  ledcWrite(FAN_PWM_CHANNEL, level);
+#endif
+#else
   bool level = FAN_ACTIVE_LOW ? !on : on;
   halDigitalWrite(FAN_PIN, level);
+#endif
   LOG_INFO(on ? "Fan: ON" : "Fan: OFF");
+}
+
+// Điều tốc quạt bằng PWM (chỉ có tác dụng khi FAN_PWM_ENABLED=1).
+void setFanPwm(uint8_t duty) {
+  const bool on = duty > 0;
+#if FAN_PWM_ENABLED
+  const uint8_t level = FAN_ACTIVE_LOW ? (uint8_t)(255 - duty) : duty;
+  if (sys.fanState == on) {
+    // Vẫn cập nhật duty khi đang chạy để PID thay đổi tốc độ mượt.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcWrite(FAN_PIN, level);
+#else
+    ledcWrite(FAN_PWM_CHANNEL, level);
+#endif
+    return;
+  }
+  sys.fanState = on;
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(FAN_PIN, level);
+#else
+  ledcWrite(FAN_PWM_CHANNEL, level);
+#endif
+  LOG_INFO(on ? "Fan: ON" : "Fan: OFF");
+#else
+  setFan(on);
+  (void)duty;
+#endif
 }
 
 // Blue LED (chân 27) được điều khiển bằng PWM để cả chế độ bật/tắt liên tục
@@ -99,7 +138,6 @@ void setRgb(uint8_t r, uint8_t g, uint8_t b) {
     strip.setPixelColor(i, color);
   }
   strip.show();
-  MOD_DEBUG(Rgb, "RGB set");
 }
 
 bool rgbPlantPatternActive() { return sPlantPattern; }
@@ -115,7 +153,6 @@ void setRgbPlant() {
     strip.setPixelColor(i, red ? colorRed : colorBlue);
   }
   strip.show();
-  MOD_DEBUG(Rgb, "RGB plant light");
 }
 
 void setRgbAuto(bool on)  { sys.rgbAuto = on; }

@@ -2,12 +2,18 @@
 #include "../logger.h"
 #include "../config.h"
 #include "../settings.h"
+#include "../calibration.h"
 
 // ── Bản chụp giá trị đã ghi flash ──
 // NVS chỉ chịu được số lần ghi hữu hạn; UI có thể bấm nút liên tục nên
 // saveSettings() chỉ put các khóa THỰC SỰ đổi (mỗi put là một lần commit flash).
-// Mã bảo mật (webToken/otaPassword) KHÔNG được ghi flash dạng plaintext;
-// chúng chỉ tồn tại ở firmware (compile-time) trong RAM.
+//
+// Về bảo mật: webToken/otaPassword là hằng compile-time, KHÔNG bao giờ ghi
+// xuống flash — chúng chỉ sống trong RAM. Ngược lại SSID/mật khẩu WiFi CÓ được
+// lưu vào NVS (namespace "smartfarm") vì tính năng /wifi cần nó sau khi khởi
+// động lại. NVS KHÔNG mã hóa: ai đọc được flash (esptool read_flash, hoặc nạp
+// sketch khác vào cùng board) đều đọc được PSK. Nếu điều đó không chấp nhận
+// được trong môi trường của bạn, hãy bỏ trống mật khẩu và nạp lại firmware.
 namespace {
 struct SettingsSnapshot {
   bool valid;
@@ -17,7 +23,10 @@ struct SettingsSnapshot {
   bool pumpAuto, lightAuto, rgbAuto, fanAuto, breatheAuto;
   bool powerSave;
   uint32_t sleepSeconds;
-  char ssid[32], wifiPass[64];
+  // Kích thước lấy theo đúng buffer trong SystemState: khai báo cứng số 32 sẽ
+  // cắt SSID 32 octet xuống 31, khiến so sánh "chỉ ghi khóa đổi" luôn sai và
+  // ghi lại y nguyên giá trị cũ mỗi lần lưu.
+  char ssid[sizeof(sys.ssid)], wifiPass[sizeof(sys.password)];
 };
 SettingsSnapshot sLast = {};
 }  // namespace
@@ -67,7 +76,13 @@ void saveSettings() {
     return;
   }
 
-  preferences.begin("smartfarm", false);
+  // begin() trả false khi mở NVS hỏng (partition lỗi/full): khi đó mọi put* âm
+  // thầm mất tác dụng. Phải trả về TRƯỚC captureSnapshot — nếu chụp, bản "đã
+  // lưu" giả này khiến lần sau bỏ qua đúng những khóa chưa bao giờ xuống flash.
+  if (!preferences.begin("smartfarm", false)) {
+    LOG_ERROR("NVS open failed (write) - settings NOT saved");
+    return;
+  }
   if (writeAll || sLast.soilLow != sys.soilThresholdLow)   preferences.putFloat("soilLow", sys.soilThresholdLow);
   if (writeAll || sLast.soilHigh != sys.soilThresholdHigh) preferences.putFloat("soilHigh", sys.soilThresholdHigh);
   if (writeAll || sLast.waterLow != sys.waterThresholdLow) preferences.putFloat("waterLow", sys.waterThresholdLow);
@@ -90,7 +105,14 @@ void saveSettings() {
 }
 
 void loadSettings() {
-  preferences.begin("smartfarm", true);
+  // Không mở được NVS thì mọi get* trả default của thư viện một cách im lặng:
+  // giữ nguyên mặc định firmware, và đặt bản chụp vô hiệu để lần lưu đầu sau
+  // này ghi lại ĐỦ mọi khóa (chưa biết gì trong flash).
+  if (!preferences.begin("smartfarm", true)) {
+    LOG_ERROR("NVS open failed (read) - using firmware defaults");
+    sLast.valid = false;
+    return;
+  }
   // Khoảng giá trị hợp lệ: ngoài khoảng này (flash bị hỏng, hoặc ghi tay sai)
   // thì logic so ngưỡng sẽ hành xử sai — ví dụ soilHigh < soilLow thì bơm
   // không bao giờ chạy. Constrain ngay khi đọc lên.
@@ -100,6 +122,25 @@ void loadSettings() {
   sys.lightThreshold    = constrain(preferences.getInt("lightThr", 500), 0, 4095);
   sys.tempThresholdHigh = constrain(loadFloat("tempHigh", 30.0f), 0.0f, 60.0f);
   sys.tempThresholdLow  = constrain(loadFloat("tempLow", 25.0f), 0.0f, 60.0f);
+
+  // Kẹp từng giá trị riêng lẻ chưa đủ: ảnh NVS hỏng / ghi tay / từ firmware cũ
+  // vẫn có thể để lại cặp ngược (high <= low), và controlPump()/controlFan()
+  // bỏ qua luôn khi thấy cặp ngược -> tưới/tự động im lặng dừng tới lần boot
+  // sau. Dựng lại bất biến high > low y như cách /threshold làm khi ghi.
+  if (sys.soilThresholdHigh <= sys.soilThresholdLow) {
+    sys.soilThresholdHigh = sys.soilThresholdLow + 50.0f;      // ưu tiên giữ ngưỡng thấp
+    if (sys.soilThresholdHigh > 4095.0f) {                     // sát trần: hạ thấp để còn khoảng
+      sys.soilThresholdHigh = 4095.0f;
+      sys.soilThresholdLow = 4045.0f;
+    }
+  }
+  if (sys.tempThresholdHigh <= sys.tempThresholdLow) {
+    sys.tempThresholdHigh = sys.tempThresholdLow + 1.0f;
+    if (sys.tempThresholdHigh > 60.0f) {
+      sys.tempThresholdHigh = 60.0f;
+      sys.tempThresholdLow = 59.0f;
+    }
+  }
   sys.pumpAuto          = preferences.getBool("pumpAuto", true);
   sys.lightAuto         = preferences.getBool("lightAuto", true);
   sys.rgbAuto           = preferences.getBool("rgbAuto", true);
@@ -125,9 +166,24 @@ void loadSettings() {
 }
 
 void resetSettings() {
-  preferences.begin("smartfarm", false);
-  preferences.clear();
-  preferences.end();
+  if (!preferences.begin("smartfarm", false)) {
+    LOG_ERROR("NVS open failed (reset) - only RAM defaults restored");
+  } else {
+    preferences.clear();
+    preferences.end();
+  }
+  // "Về mặc định" phải bao gồm cả hiệu chuẩn: offset/gain nằm ở namespace
+  // "calib" nên /reset trước đây khôi phục ngưỡng nhưng giữ thầm độ lệch
+  // ADC/nhiệt-ẩm. calibrationLoad() nạp lại mặc định từ flash vừa xóa và cập
+  // nhật bản chụp riêng của nó, nên calibrationSave() kế tiếp không ghi thừa.
+  static Preferences calibPrefs;
+  if (!calibPrefs.begin("calib", false)) {
+    LOG_ERROR("NVS open failed (calib) - calibration kept");
+  } else {
+    calibPrefs.clear();
+    calibPrefs.end();
+  }
+  calibrationLoad();
   sLast.valid = false;   // flash đã xóa: lần lưu sau phải ghi lại toàn bộ
 
   // Mặc định lấy từ chính SystemState để chỉ có một nguồn sự thật.

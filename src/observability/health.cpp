@@ -27,7 +27,11 @@ void handleCalibrate() {
     return;
   }
   const String sensorArg = server.arg("sensor");
-  const float offset = server.arg("offset").toFloat();
+  float offset = 0.0f;
+  if (!webFloatArg("offset", &offset)) {
+    server.send(400, "text/plain", "missing args");
+    return;
+  }
   if (!calibrationSetOffset(sensorArg.c_str(), offset)) {
     server.send(400, "text/plain", "invalid sensor or offset");
     return;

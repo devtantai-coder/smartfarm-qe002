@@ -6,7 +6,40 @@
 #include "../sensors.h"
 #include "../control.h"
 #include "../demo.h"
+#include "../softstart.h"
+#include "../wifi.h"
+#include "history.h"
+#include "weather.h"
 #include "../webserver.h"
+#include <stdlib.h>
+
+// ── Tạm dừng automation sau lệnh của app ACEBOTT ──
+// App QE002 hỏi /all mỗi giây và điều khiển trực tiếp; nếu automation vẫn
+// chạy, bơm/đèn có thể bị bật lại ngay sau lệnh app. Tạm dừng ngắn giống
+// cơ chế cancelAutoMode của firmware gốc.
+static bool sAppPauseActive = false;
+static unsigned long sAppPauseUntil = 0;
+
+bool appControlActive() {
+  if (!sAppPauseActive) return false;
+  if ((int32_t)(millis() - sAppPauseUntil) >= 0) {
+    sAppPauseActive = false;
+    return false;
+  }
+  return true;
+}
+
+static void pauseAutoForApp() {
+  sAppPauseUntil = millis() + APP_CONTROL_PAUSE_MS;
+  sAppPauseActive = true;
+}
+
+#ifdef SMARTFARM_TEST_HOOKS
+void testResetWebStatics() {
+  sAppPauseActive = false;
+  sAppPauseUntil = 0;
+}
+#endif
 
 // ── Trang chủ (lưu trong flash, không copy heap mỗi request) ──
 static const char ROOT_HTML[] PROGMEM = R"rawliteral(
@@ -15,7 +48,6 @@ static const char ROOT_HTML[] PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">\n<meta name="theme-color" content="#2e7d32">
-<meta name="referrer" content="no-referrer">
 <title>Smart Farm IoT</title>
 <!-- Font Awesome tải KHÔNG chặn hiển thị: thiết bị thường chỉ có mạng nội
      bộ (không có Internet) — nếu để link chặn render, trình duyệt phải chờ
@@ -76,6 +108,14 @@ header h1 span{color:var(--primary);font-weight:800}
 @media (hover:hover){.card:hover{box-shadow:0 10px 24px -6px rgba(0,0,0,.12)}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 .ip-badge{backdrop-filter:blur(6px)}
+.chart-wrap{position:relative;width:100%;overflow:hidden;border:1px solid var(--border);border-radius:10px;background:#fff}
+#historyChart{display:block;width:100%;height:240px}
+.chart-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}
+.chart-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.outdoor{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px}
+.outdoor .item{background:var(--bg);border-radius:10px;padding:10px 12px}
+.outdoor .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.outdoor .value{font-size:18px;font-weight:700;margin-top:2px}
 </style>
 </head>
 <body>
@@ -96,8 +136,26 @@ header h1 span{color:var(--primary);font-weight:800}
 <div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-tint"></i> Mực nước</div><div class="sensor-value" id="valWater">--</div></div>
 <div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-cloud-sun"></i> Thời tiết</div><div class="sensor-value" id="valWeather">--</div></div>
 <div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-person-walking"></i> Chuyển động</div><div class="sensor-value" id="valPir">--</div></div>
-<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-hand-point-up"></i> Cảm ứng</div><div class="sensor-value" id="valTouch">--</div></div>
+<div class="sensor-row"><div class="sensor-label"><i class="fa-solid fa-hand-point-up"></i> Cảm ứng</div><div class="sensor-value" id="valTouch">--</div></div>\n</div>
+</section>
+
+<section class="card">
+<h2><i class="fa-solid fa-chart-line"></i> Thời tiết Internet &amp; lịch sử</h2>
+<div class="outdoor">
+<div class="item"><div class="label">Ngoài trời</div><div class="value" id="outTemp">--</div></div>
+<div class="item"><div class="label">Độ ẩm ngoài trời</div><div class="value" id="outHum">--</div></div>
+<div class="item"><div class="label">Thời tiết</div><div class="value" id="outDesc" style="font-size:15px">--</div></div>
+<div class="item"><div class="label">Cập nhật</div><div class="value" id="outAge" style="font-size:15px">--</div></div>
 </div>
+<div class="chart-wrap"><canvas id="historyChart"></canvas></div>
+<div class="chart-legend">
+<span><i style="background:#e53935"></i>Nhiệt độ</span>
+<span><i style="background:#1e88e5"></i>Độ ẩm KK</span>
+<span><i style="background:#43a047"></i>Độ ẩm đất</span>
+<span><i style="background:#00acc1"></i>Mực nước</span>
+<span><i style="background:#fb8c00"></i>Ánh sáng</span>
+</div>
+<div class="refresh" id="chartInfo">Lịch sử lưu tạm trong RAM, tự xóa khi khởi động lại.</div>
 </section>
 
 <section class="card">
@@ -157,6 +215,8 @@ header h1 span{color:var(--primary);font-weight:800}
 </div>
 <div class="badge off" id="badgeAlarm"><i class="fa-solid fa-circle"></i> Tắt</div>
 </div>
+<div class="control-group">
+<h3><i class="fa-solid fa-circle-arrow-right"></i> Servo (cửa)</h3>
 <div class="slider-group">
 <label><span id="servoLabel">0</span> độ</label>
 <input type="range" id="servoSlider" min="0" max="180" value="0" onchange="setServo(this.value)">
@@ -261,6 +321,7 @@ const p=document.getElementById('badgePump');p.textContent=d.relay?'Bật':'Tắ
 const l=document.getElementById('badgeLed');l.textContent=d.led?'Bật':'Tắt';l.className='badge '+(d.led?'on':'off');
 const f=document.getElementById('badgeFan');f.textContent=d.fan?'Bật':'Tắt';f.className='badge '+(d.fan?'on':'off');
 const b=document.getElementById('badgeBreathe');b.textContent=d.breathe?'Bật':'Tắt';b.className='badge '+(d.breathe?'on':'off');
+const a=document.getElementById('badgeAlarm');a.textContent=d.alarm?'Bật':'Tắt';a.className='badge '+(d.alarm?'on':'off');
 const w=document.getElementById('badgeWindmill');w.textContent=d.windmill?'Đang quay':(d.feed?'Đang cho ăn':'Tắt');w.className='badge '+(d.windmill||d.feed?'on':'off');
 document.getElementById('statusPumpAuto').textContent=d.pumpAuto?'Bật':'Tắt';
 document.getElementById('statusLightAuto').textContent=d.lightAuto?'Bật':'Tắt';
@@ -284,11 +345,57 @@ async function runDemo(){if(!confirm('Chạy trình diễn lần lượt các ho
 async function setAutoMode(id,on){await call('/auto?id='+id+'&on='+on);fetchData()}
 async function setRgb(r,g,b){await call('/rgb?r='+r+'&g='+g+'&b='+b);fetchData()}
 async function setServo(v){document.getElementById('servoLabel').textContent=v;await call('/servo?angle='+v)}
+let lastExtras=0;
+function drawHistory(d){
+const cv=document.getElementById('historyChart');
+if(!cv||!cv.getContext)return;
+const ctx=cv.getContext('2d');if(!ctx||!d||!d.samples)return;
+const samples=d.samples, W=cv.clientWidth||800, H=240;
+const dpr=window.devicePixelRatio||1;
+cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
+ctx.setTransform(dpr,0,0,dpr,0,0);
+ctx.clearRect(0,0,W,H);
+const pad={l:34,r:8,t:10,b:18};
+const gw=W-pad.l-pad.r, gh=H-pad.t-pad.b;
+ctx.strokeStyle='#e5e7eb';ctx.lineWidth=1;
+ctx.fillStyle='#6b7280';ctx.font='11px system-ui,sans-serif';
+for(let i=0;i<=4;i++){const y=pad.t+gh*i/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+gw,y);ctx.stroke();ctx.fillText(String(100-i*25),4,y+4)}
+if(samples.length<2){ctx.textAlign='center';ctx.fillText('Chưa đủ dữ liệu lịch sử',pad.l+gw/2,pad.t+gh/2);ctx.textAlign='left';return}
+const sx=gw/(samples.length-1);
+function line(key,scale,color){
+ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=2;
+for(let i=0;i<samples.length;i++){const v=Math.max(0,Math.min(1,(samples[i][key]||0)/scale));const x=pad.l+i*sx,y=pad.t+gh*(1-v);if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)}
+ctx.stroke();
+}
+line('temp',50,'#e53935');
+line('hum',100,'#1e88e5');
+line('soil',4095,'#43a047');
+line('water',4095,'#00acc1');
+line('light',4095,'#fb8c00');
+}
+async function refreshExtras(){
+const cv=document.getElementById('historyChart');
+if(!cv||!cv.getContext)return;
+try{
+const wr=await apiGet('/weather');
+if(wr.ok){const w=await wr.json();
+document.getElementById('outTemp').textContent=w.valid?w.temp.toFixed(1)+' °C':'--';
+document.getElementById('outHum').textContent=w.valid?Math.round(w.hum)+' %':'--';
+document.getElementById('outDesc').textContent=w.valid?w.desc:'--';
+document.getElementById('outAge').textContent=w.valid?(w.age<60?'Vừa cập nhật':Math.round(w.age/60)+' phút trước'):'Chưa có';
+}
+const hr=await apiGet('/history');
+if(hr.ok){const h=await hr.json();drawHistory(h);
+document.getElementById('chartInfo').textContent='Đang hiển thị '+h.count+' mẫu, mỗi '+h.interval+' giây một mẫu (lưu tạm trong RAM).';
+}
+}catch(e){console.error(e)}
+}
 async function pollTick(){
 if(!document.hidden){const changed=await fetchData();if(changed){stable=0;pollMs=2000}else{stable++;if(stable>=3)pollMs=5000}}
+if(Date.now()-lastExtras>60000){lastExtras=Date.now();refreshExtras()}
 schedulePoll();
 }
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){wakePoll();fetchData()}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){wakePoll();lastExtras=0;fetchData()}});
 wakePoll();
 fetchData();
 </script>
@@ -297,19 +404,67 @@ fetchData();
 )rawliteral";
 
 // ── Bảo vệ web ──
-// 1) Chống CSRF: trình duyệt gửi kèm Origin/Referer khi trang khác gọi vào
-//    thiết bị; chỉ chấp nhận yêu cầu cùng nguồn với IP của thiết bị.
+// 1) Chống CSRF: trình duyệt gửi kèm Origin/Referer/Sec-Fetch-Site khi trang
+//    khác gọi vào thiết bị; chỉ chấp nhận yêu cầu cùng nguồn với thiết bị.
 // 2) Token tùy chọn: nếu WEB_TOKEN được đặt trong config.h, mọi lệnh đổi
 //    trạng thái (và cả /api vì trả nonce + dữ liệu cảm biến) phải kèm đúng
 //    token qua header X-Auth-Token; ?token= vẫn chấp nhận cho client tự viết.
 //    Trang chủ cũng đọc ?token= một lần rồi tự gửi bằng header, không để
 //    token dính vào URL các lệnh phía sau.
-static bool sameOriginCStr(const char* url, const char* origin, size_t olen) {
+static bool ciEqual(const char* a, const char* b, size_t n) {
+  for (size_t i = 0; i < n; i++) {
+    char ca = a[i], cb = b[i];
+    if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+    if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+    if (ca != cb) return false;
+  }
+  return true;
+}
+
+// So tên host (bỏ phần cổng) không phân biệt hoa/thường.
+// Cổng bị bỏ qua có chủ đích: thiết bị chỉ phục vụ web trên MỘT cổng, nên
+// "cùng tên, khác cổng" vẫn là chính thiết bị này chứ không phải nguồn lạ.
+static bool hostNameEq(const char* a, size_t alen, const char* b) {
+  if (b == nullptr || b[0] == '\0') return false;
+  size_t an = 0;
+  while (an < alen && a[an] != ':') an++;
+  size_t bn = 0;
+  while (b[bn] != '\0' && b[bn] != ':') bn++;
+  if (an != bn) return false;
+  return ciEqual(a, b, an);
+}
+
+// IP hiện tại dạng chuỗi — dùng cache chung với OLED (wifiIpString) để không
+// hỏi driver WiFi trên mỗi request được bảo vệ.
+static const char* localIpString() { return wifiIpString(); }
+
+// Thiết bị trả lời trên ba "tên" hợp lệ: IP hiện tại, tên host mà chính
+// firmware quảng bá qua mDNS (ArduinoOTA.setHostname("smartfarm")), và tên đầy
+// đủ "smartfarm.local". Trước đây chỉ so với "http://<localIP>", nên mở
+// dashboard bằng http://smartfarm.local làm MỌI lệnh điều khiển trả 403.
+//
+// mDNS chỉ tồn tại khi ArduinoOTA.begin() được gọi (OTA_PASSWORD khác rỗng);
+// khi OTA tắt, firmware không quảng bá tên nào nên allowlist cũng không chứa
+// tên đó — Origin "http://smartfarm.local" lúc này là một nguồn không tồn tại.
+//
+// KHÔNG tin header Host của chính request: kẻ tấn công DNS-rebinding cho tên
+// miền của hắn trỏ về IP thiết bị thì Host + Origin đều là tên của hắn và sẽ
+// khớp nhau — đúng lỗ hổng mà kiểm tra Origin sinh ra để chặn.
+static bool sameOriginCStr(const char* url) {
   if (url == nullptr || url[0] == '\0') return true;
-  if (olen == 0) return true;
-  if (strncmp(url, origin, olen) != 0) return false;
-  char c = url[olen];
-  return c == '\0' || c == '/' || c == ':' || c == '?';
+  const char* p = url;
+  if (strncmp(p, "http://", 7) == 0) p += 7;
+  else if (strncmp(p, "https://", 8) == 0) p += 8;
+  else return false;   // "null" (iframe sandbox) hoặc scheme lạ
+
+  size_t hlen = 0;
+  while (p[hlen] && p[hlen] != '/' && p[hlen] != '?' && p[hlen] != '#') hlen++;
+  if (hlen == 0) return false;
+
+  if (hostNameEq(p, hlen, localIpString())) return true;
+  if (sys.otaPassword[0] == '\0') return false;   // không có mDNS/OTA
+  if (hostNameEq(p, hlen, "smartfarm")) return true;
+  return hostNameEq(p, hlen, "smartfarm.local");
 }
 
 // So sánh token kiểu constant-time để không rò rỉ độ dài/ký tự khớp qua thời gian phản hồi.
@@ -320,18 +475,12 @@ static bool secretMatches(const char* a, const char* b) {
   return diff == 0;
 }
 
-// Tiền tố nguồn của thiết bị ("http://<ip>") chỉ đổi khi IP đổi; nhớ lại để
-// mỗi request của trang web không phải cấp phát String + snprintf.
-static size_t sMeLen = 0;
-static const char* localOriginCached() {
-  static IPAddress sCachedIp;
-  static char sMe[64] = {0};
-  IPAddress ip = WiFi.localIP();
-  if (sMe[0] == '\0' || ip != sCachedIp) {
-    sCachedIp = ip;
-    sMeLen = (size_t)snprintf(sMe, sizeof(sMe), "http://%s", ip.toString().c_str());
-  }
-  return sMe;
+// Trình duyệt LUÔN gửi User-Agent. Dùng nó để phân biệt "curl/app nội bộ"
+// (không có header nguồn vì không phải trình duyệt) với "trang web cố tình
+// giấu nguồn" (referrer-policy: no-referrer, <img referrerpolicy=no-referrer>).
+static bool looksLikeBrowser(const String& ua) {
+  const char* s = ua.c_str();
+  return s != nullptr && strstr(s, "Mozilla") != nullptr;
 }
 
 static bool checkSameOrigin() {
@@ -341,23 +490,27 @@ static bool checkSameOrigin() {
   const String referer = server.header("Referer");
   const String site = server.header("Sec-Fetch-Site");
 
-  // Client không gửi header nguồn (curl, app nội bộ): không có gì để đối chiếu.
   if (origin.length() == 0 && referer.length() == 0 && site.length() == 0) {
+    // Không có header nguồn: client không phải trình duyệt (curl, app tự viết).
+    // Nhưng nếu UA là của trình duyệt thì request được tạo từ một trang khác
+    // đã giấu Referer — đúng kịch bản CSRF — nên phải từ chối.
+    if (looksLikeBrowser(server.header("User-Agent"))) {
+      server.send(403, "text/plain", "forbidden");
+      return false;
+    }
     return true;
   }
 
-  const char* me = localOriginCached();
-  const size_t meLen = sMeLen ? sMeLen : strlen(me);
-
-  if (origin.length() > 0 && !sameOriginCStr(origin.c_str(), me, meLen)) {
+  if (origin.length() > 0 && !sameOriginCStr(origin.c_str())) {
     server.send(403, "text/plain", "forbidden");
     return false;
   }
-  if (referer.length() > 0 && !sameOriginCStr(referer.c_str(), me, meLen)) {
+  if (referer.length() > 0 && !sameOriginCStr(referer.c_str())) {
     server.send(403, "text/plain", "forbidden");
     return false;
   }
-  if (strcmp(site.c_str(), "cross-site") == 0) {
+  // "same-site" (subdomain/khác cổng cùng site) vẫn là nguồn KHÁC → chặn.
+  if (strcmp(site.c_str(), "cross-site") == 0 || strcmp(site.c_str(), "same-site") == 0) {
     server.send(403, "text/plain", "forbidden");
     return false;
   }
@@ -405,12 +558,16 @@ bool webTokenGuard() { return checkToken(); }
 bool webGuard() { return guardWeb(); }
 
 void handleRoot() {
-  MOD_DEBUG(Webserver, "GET /");
   server.sendHeader("X-Frame-Options", "DENY");   // chống nhúng iframe (clickjacking)
-  // Trang tĩnh: mọi dữ liệu động đều lấy qua /api, nên trình duyệt được
-  // cache lại -> mở trang lần sau không phải tải lại 16 KB.
-  // "private" để không lưu vào cache dùng chung (proxy).
-  server.sendHeader("Cache-Control", "private, max-age=60");
+  // Trang tĩnh theo từng bản firmware: ETag cho phép trình duyệt hỏi lại và
+  // nhận 304 (không body) thay vì tải lại 16 KB mỗi lần mở dashboard.
+  if (server.header("If-None-Match") == WEB_ROOT_ETAG) {
+    server.send(304, "text/plain", "");
+    return;
+  }
+  server.sendHeader("ETag", WEB_ROOT_ETAG);
+  // "no-cache" = luôn xác thực lại bằng ETag; dữ liệu động đi qua /api.
+  server.sendHeader("Cache-Control", "private, no-cache");
   server.send_P(200, "text/html", ROOT_HTML);
 }
 
@@ -420,17 +577,22 @@ void handleRoot() {
 // kích thước buffer thì JSON bị cắt cụt.
 static int buildApiJson(char* buf, size_t cap) {
   const bool demoOn = demoRunning();   // đọc một lần, tránh gọi lặp 2 chỗ trong snprintf
+  // NaN/Inf không phải số JSON hợp lệ ("nan"/"inf" làm hỏng cả response);
+  // quy về 0 — cùng quy ước với floatArg() khi nhận tham số.
+  const float temp = isfinite(sys.gTemp) ? sys.gTemp : 0.0f;
+  const float hum = isfinite(sys.gHum) ? sys.gHum : 0.0f;
   return snprintf(buf, cap,
            "{\"temp\":%.1f,\"hum\":%.1f,\"light\":%d,\"soil\":%d,\"water\":%d,"
            "\"weather\":%d,\"pir\":%s,\"touch\":%s,\"relay\":%s,\"fan\":%s,"
-           "\"led\":%s,\"breathe\":%s,\"windmill\":%s,\"feed\":%s,\"demo\":%s,"
+           "\"led\":%s,\"breathe\":%s,\"alarm\":%s,\"windmill\":%s,\"feed\":%s,\"demo\":%s,"
            "\"demoStep\":\"%s\",\"pumpAuto\":%s,\"lightAuto\":%s,\"rgbAuto\":%s,"
            "\"fanAuto\":%s,\"breatheAuto\":%s,\"nonce\":%u}",
-           (double)sys.gTemp, (double)sys.gHum, (int)sys.gLight, (int)sys.gSoil, (int)sys.gWater,
+           (double)temp, (double)hum, (int)sys.gLight, (int)sys.gSoil, (int)sys.gWater,
            (int)weatherStatus(),
            sys.gPir ? "true" : "false", sys.gTouch ? "true" : "false",
            sys.relayState ? "true" : "false", sys.fanState ? "true" : "false",
            sys.blueLedState ? "true" : "false", sys.breatheLedState ? "true" : "false",
+           manualAlarm() ? "true" : "false",
            sys.windmillOn ? "true" : "false", feedRunning() ? "true" : "false",
            demoOn ? "true" : "false",
            demoOn ? demoStepName() : "",
@@ -446,8 +608,6 @@ int testBuildApiJson(char* buf, size_t cap) { return buildApiJson(buf, cap); }
 #endif
 
 void handleApi() {
-  MOD_DEBUG(Webserver, "GET /api");
-
   // Khi WEB_TOKEN được đặt, dữ liệu cảm biến + nonce chỉ trả cho client đã xác thực.
   // Ở đây chỉ kiểm tra token (không kèm chống replay) vì client cần /api để LẤY nonce.
   if (!checkToken()) return;
@@ -496,6 +656,21 @@ static bool floatArg(const char* name, float* out) {
   if (v.length() == 0) return false;
   const float f = v.toFloat();
   *out = isfinite(f) ? f : 0.0f;
+  return true;
+}
+
+// Bản NGHIÊM TÚC cho các tham số mà "0" là một giá trị có nghĩa (offset hiệu
+// chuẩn): String::toFloat() trả 0 cho "abc" nên một phím lỗi khi gõ sẽ âm thầm
+// xóa luôn độ lệch đang dùng. Ở đây chuỗi phải parse hết và ra số hữu hạn.
+bool webFloatArg(const char* name, float* out) {
+  const String v = server.arg(name);
+  if (v.length() == 0) return false;
+  char* end = nullptr;
+  const float f = strtof(v.c_str(), &end);
+  if (end == v.c_str()) return false;              // không phải số
+  while (*end == ' ' || *end == '\t') end++;       // "12abc"/"1 " -> vẫn từ chối
+  if (*end != '\0' || !isfinite(f)) return false;
+  *out = f;
   return true;
 }
 
@@ -551,6 +726,7 @@ void handleAuto() {
 // ── Màu RGB ──
 void handleRgb() {
   if (!guardWeb()) return;
+  pauseAutoForApp();
   uint8_t r = clampByte(server.arg("r").toInt());
   uint8_t g = clampByte(server.arg("g").toInt());
   uint8_t b = clampByte(server.arg("b").toInt());
@@ -574,7 +750,6 @@ void handleBreatheLed() {
 // Thao tác thủ công sẽ tắt chế độ tự động đèn để automation không tranh giành điều khiển.
 void handleLedOn() {
   if (!guardWeb()) return;
-  MOD_DEBUG(Webserver, "GET /on");
   setLightAuto(false);
   setBlueLed(true);
   saveSettings();
@@ -583,7 +758,6 @@ void handleLedOn() {
 
 void handleLedOff() {
   if (!guardWeb()) return;
-  MOD_DEBUG(Webserver, "GET /off");
   setLightAuto(false);
   setBlueLed(false);
   saveSettings();
@@ -621,7 +795,6 @@ void handleFeed() {
 // ── Demo hoạt động (HD2-HD12) ──
 void handleDemo() {
   if (!guardWeb()) return;
-  MOD_DEBUG(Webserver, "GET /demo");
   startDemo();
   server.send(200, "text/plain", "demo started");
 }
@@ -660,24 +833,153 @@ void handleThreshold() {
 // ── Cấu hình WiFi động (lưu vào Preferences, khởi động lại để áp dụng) ──
 void handleWifi() {
   if (!guardWeb()) return;
-  bool changed = false;
   const String ssidArg = server.arg("ssid");
+  const String passArg = server.arg("password");
+  if (ssidArg.length() == 0 && passArg.length() == 0) {
+    server.send(400, "text/plain", "no params");
+    return;
+  }
+
+  // SSID phải nằm vừa trong sys.ssid và không được chỉ toàn khoảng trắng.
+  // Nhận bừa rồi strncpy cắt ngắn sẽ ghi xuống NVS một SSID sai: máy restart
+  // vào mạng không tồn tại và mất liên lạc hoàn toàn qua WiFi — chỉ cứu được
+  // bằng cách nạp lại firmware.
   if (ssidArg.length() > 0) {
+    String probe = ssidArg;      // trim() sửa tại chỗ nên cần bản sao
+    probe.trim();
+    if (ssidArg.length() >= sizeof(sys.ssid) || probe.length() == 0) {
+      server.send(400, "text/plain", "bad ssid");
+      return;
+    }
+  }
+  if (passArg.length() >= sizeof(sys.password)) {
+    server.send(400, "text/plain", "password too long");
+    return;
+  }
+
+  // "changed" phải so với GIÁ TRỊ ĐANG DÙNG, không phải "có tham số". Trước
+  // đây /wifi?ssid=X gửi hai lần cũng hai lần restart: mất 3-4 giây WiFi,
+  // đang bật bơm thì cắt mất một chu kỳ, và mỗi lần là một vòng NVS.
+  bool changed = false;
+  if (ssidArg.length() > 0 && strcmp(sys.ssid, ssidArg.c_str()) != 0) {
     strncpy(sys.ssid, ssidArg.c_str(), sizeof(sys.ssid) - 1);
     sys.ssid[sizeof(sys.ssid) - 1] = '\0';
     changed = true;
   }
-  const String passArg = server.arg("password");
-  if (passArg.length() > 0) {
+  if (passArg.length() > 0 && strcmp(sys.password, passArg.c_str()) != 0) {
     strncpy(sys.password, passArg.c_str(), sizeof(sys.password) - 1);
     sys.password[sizeof(sys.password) - 1] = '\0';
     changed = true;
   }
   if (!changed) {
-    server.send(400, "text/plain", "no params");
+    server.send(200, "text/plain", "unchanged");
     return;
   }
   saveSettings();
   server.send(200, "text/plain", "ok");
   sys.gNeedRestart = true;
+}
+
+// Nhà máy: mọi ngưỡng, cờ tự động và WiFi về mặc định của bản firmware đang chạy.
+// resetSettings() trước đây không có ai gọi, nên một bộ ngưỡng sửa sai
+// (soilHigh < soilLow -> bơm không bao giờ bật) chỉ thoát được bằng cách
+// nạp lại firmware qua OTA/USB.
+void handleReset() {
+  if (!guardWeb()) return;
+  resetSettings();
+  server.send(200, "text/plain", "reset");
+  // Restart: SSID/mật khẩu vừa về mặc định build, phải kết nối lại từ đầu.
+  sys.gNeedRestart = true;
+}
+
+// ── Tương thích app ACEBOTT QE002 (hoạt động 13) ──
+// Firmware gốc dùng các endpoint: /config, /all, /door?level=, /led?level=,
+// /rgb?r=&g=&b=. Giữ đúng tên khóa JSON để app nhận dữ liệu.
+void handleAppConfig() {
+  server.send(200, "text/plain", "{\"appCallInterval\":1000}");
+}
+
+void handleAppAll() {
+  if (!checkToken()) return;
+  // KHÔNG gọi pauseAutoForApp() ở đây: /all là route CHỈ ĐỌC mà app hỏi mỗi
+  // giây, nên trước đây mở app là automation bị tắt vĩnh viễn (bơm không bao
+  // giờ chạy tự động). Chỉ các route ra lệnh mới được tạm dừng automation.
+
+  char buf[256];
+  const float hum = isfinite(sys.gHum) ? sys.gHum : 0.0f;
+  const float temp = isfinite(sys.gTemp) ? sys.gTemp : 0.0f;
+  const int n = snprintf(buf, sizeof(buf),
+                         "{\"WaterLevel\":%d,\"Humidity\":%.1f,\"Human\":%d,"
+                         "\"SoilMoisture\":%d,\"Temperature\":%.1f,\"Photoresistor\":%d}",
+                         sys.gWater, (double)hum, sys.gPir ? 1 : 0,
+                         sys.gSoil, (double)temp, sys.gLight);
+  if (n < 0 || (size_t)n >= sizeof(buf)) {
+    server.send(500, "text/plain", "response too large");
+    return;
+  }
+  server.send(200, "text/plain", buf);
+}
+
+void handleAppDoor() {
+  if (!guardWeb()) return;
+  pauseAutoForApp();
+  const int level = server.arg("level").toInt();
+  setWindmill(false);
+  stopFeed();
+  sys.servoAngle = level ? FEED_OPEN_ANGLE : FEED_CLOSE_ANGLE;
+  servo.write(sys.servoAngle);
+  server.send(200, "text/plain", "ok");
+}
+
+void handleAppLed() {
+  if (!guardWeb()) return;
+  pauseAutoForApp();
+  setLightAuto(false);
+  setBlueLed(server.arg("level").toInt() != 0);
+  saveSettings();
+  server.send(200, "text/plain", "ok");
+}
+
+// ── Lịch sử cảm biến (biểu đồ trên web) ──
+// Thân response được dựng TRỌN vào heap rồi ghi ra bằng MỘT lần sendContent.
+// Lý do không stream từng mẫu: mỗi sendContent() là một NetworkClient::write(),
+// và write() của core chặn tới WIFI_CLIENT_MAX_WRITE_RETRY(10) ×
+// WIFI_CLIENT_SELECT_TIMEOUT_US(1 s) = 10 s khi phía nhận không chịu đọc
+// (slow-loris chỉ cần gửi GET /history rồi ngừng đọc socket). Đường stream cũ
+// thực hiện HISTORY_CAPACITY + 2 lần write ≈ 98 × 10 s, trong khi esp_task_wdt
+// phát panic ở 30 s — và loop() dừng thì liên khoá an toàn bơm (cắt relay khi
+// bình cạn) cũng dừng theo. Một write duy nhất buộc thời gian chặn ≤ 10 s.
+void handleHistory() {
+  if (!checkToken()) return;
+  const size_t total = historyJsonSize();
+  char* buf = (char*)malloc(total + 1);
+  if (buf == nullptr) {
+    server.send(500, "application/json", "{\"error\":\"history out of memory\"}");
+    return;
+  }
+  const int n = buildHistoryJson(buf, total + 1);
+  // historyJsonSize() và buildHistoryJson() đi qua cùng một formatSample, nên
+  // hai số phải khớp. Lệch = JSON bị cắt: thà trả 500 còn hơn gửi
+  // Content-Length dài hơn thân (trình duyệt treo chờ byte cuối).
+  if (n < 0 || (size_t)n != total) {
+    free(buf);
+    server.send(500, "application/json", "{\"error\":\"history too large\"}");
+    return;
+  }
+  server.setContentLength(total);
+  server.send(200, "application/json", "");
+  server.sendContent(buf, total);
+  free(buf);
+}
+
+// ── Thời tiết Internet (Open-Meteo, cập nhật mỗi 15 phút) ──
+void handleWeather() {
+  if (!checkToken()) return;
+  char buf[256];
+  const int n = buildWeatherJson(buf, sizeof(buf));
+  if (n < 0 || (size_t)n >= sizeof(buf)) {
+    server.send(500, "application/json", "{\"error\":\"weather too large\"}");
+    return;
+  }
+  server.send(200, "application/json", buf);
 }

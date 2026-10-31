@@ -8,8 +8,9 @@ rồi chạy toàn bộ logic như trên kit — không cần phần cứng, kh�
 
 ```bash
 ./test/run_tests.sh --quick      # 1 bản build nhanh (core 3.x, cấu hình kit)
-./test/run_tests.sh --full       # 6 bản build (mặc định khi không truyền tham số)
-./test/run_tests.sh --coverage   # đo độ phủ dòng + nhánh bằng gcov (cũng đặt WEB_TOKEN)
+./test/run_tests.sh --full       # 8 bản build (mặc định khi không truyền tham số) + test JS
+./test/run_tests.sh --extras     # chỉ bản PID/PWM + TLS + MQTT (khi phát triển)
+./test/run_tests.sh --coverage   # đo độ phủ dòng + nhánh bằng gcov (bật WEB_TOKEN, FAN_PWM_ENABLED)
 ```
 
 Tùy biến bằng biến môi trường:
@@ -19,28 +20,33 @@ Tùy biến bằng biến môi trường:
 - `FUZZ_ITERS` — số vòng fuzz mỗi seed (mặc định 30000; rút ngắn khi phát triển,
   ví dụ `FUZZ_ITERS=2000 ./test/run_tests.sh --quick`).
 
-6 bản build trong chế độ `--full`:
+8 bản build trong chế độ `--full` (đúng theo `test/run_tests.sh:73-100`):
 
 | Tên | Cờ biên dịch | Mục đích |
 |---|---|---|
 | `core3` | `-DESP_ARDUINO_VERSION_MAJOR=3` | Cấu hình mặc định của kit trên core 3.x |
 | `core2-invert` | `-DESP_ARDUINO_VERSION_MAJOR=2 -DINVERT_LIGHT=1 -DINVERT_SOIL=1 -DINVERT_WATER=1` | Tương thích core 2.x + cảm biến đảo chiều |
-| `passive-lowrelay` | `-DBUZZER_PASSIVE=1 -DBUZZER_TONE_HZ=2000 -DRELAY_ACTIVE_LOW=1` | Còi passive (tone) + relay kích mức thấp |
-| `asan+ubsan` | `-fsanitize=address,undefined -fno-omit-frame-pointer` | Phát hiện tràn bộ nhớ/UB; script tự bỏ `LD_PRELOAD` khi chạy |
-| `webtoken` | `-DWEB_TOKEN='"token-bao-mat-test"'` | Bật `WEB_TOKEN` để chạy D16 (bảo vệ token web) |
-| `tinyjson` | `-DAPI_JSON_BUF_SIZE=64` | Buffer JSON `/api` cố ý nhỏ để chạy D21 (nhánh "JSON bị cắt" → phải trả lỗi 500) |
+| `passive-lowrelay` | `-DESP_ARDUINO_VERSION_MAJOR=3 -DBUZZER_PASSIVE=1 -DRELAY_ACTIVE_LOW=1` | Còi passive (tone) + relay kích mức thấp |
+| `asan+ubsan` | `-g -fsanitize=address,undefined -fno-omit-frame-pointer -DESP_ARDUINO_VERSION_MAJOR=3` | Phát hiện tràn bộ nhớ/UB; script tự bỏ `LD_PRELOAD` khi chạy |
+| `webtoken` | `-DESP_ARDUINO_VERSION_MAJOR=3 -DWEB_TOKEN='"token-bao-mat-test"'` | Bật `WEB_TOKEN` để chạy D16 (bảo vệ token web) |
+| `tinyjson` | `-DESP_ARDUINO_VERSION_MAJOR=3 -DAPI_JSON_BUF_SIZE=64` | Buffer JSON `/api` cố ý nhỏ để chạy D21 (nhánh "JSON bị cắt" → phải trả lỗi 500) |
+| `extras` | `-DESP_ARDUINO_VERSION_MAJOR=3 -DFAN_PWM_ENABLED=1 -DMQTT_USE_TLS=1 -DMQTT_ENABLED=1` | PID/PWM quạt, MQTT + TLS và kiểm tra phần cứng PWM (D30, D32) |
+| `replay` | `-DESP_ARDUINO_VERSION_MAJOR=3 -DANTI_REPLAY=1` | Bật `ANTI_REPLAY` (mặc định 0) để nhánh nonce trong `guardWeb()` được biên dịch và D34 thật sự chạy |
 
 Yêu cầu: `g++` hỗ trợ C++17 và `bash`; `node` (tuỳ chọn) cho bộ test JS.
-Kết quả hiện tại: **772.713 lượt kiểm tra, 0 lỗi** trên 4 bản build thường; bản
-`webtoken` và bản `--coverage` (cũng đặt `WEB_TOKEN`) chạy **772.738 lượt**; bản
-`tinyjson` chạy 772.488 lượt (bỏ các kiểm tra nội dung JSON vì buffer cố ý
-nhỏ). Phần lớn số check đến từ 3 seed × 30.000 vòng fuzz, không phải 772 nghìn
-kịch bản độc lập. Độ phủ dòng lệnh: **94,4%** (các module mở rộng chưa dùng như PID/softstart/MQTT/WebSocket kéo giảm; nhánh JSON bị cắt chỉ chạy ở bản build `tinyjson`), độ phủ nhánh (taken at least once): **77,9%**
-cho toàn bộ code production. Phần nhánh chưa phủ còn lại đều là trường hợp
-không tới được trong một bản build đơn lẻ: biến compile-time (`INVERT_*`,
-`WEB_TOKEN` rỗng), `switch` không có `default` tới được, điều kiện dư thừa,
-và các nhánh phòng vệ một chiều (clamp âm, URL rỗng). Mỗi test in một dòng
-`[PASS]/[FAIL]` kèm tên và số check của riêng nó để khoanh vùng lỗi nhanh.
+Mỗi bản build in dòng cuối `=== N checks, 0 failures ===` với số lượt kiểm tra
+của riêng nó — hàng trăm nghìn lượt, phần lớn đến từ 3 seed × `FUZZ_ITERS` vòng
+fuzz, không phải vài trăm nghìn kịch bản độc lập. Con số thay đổi theo cấu hình
+build và theo code, nên không ghi cố định vào tài liệu; muốn biết chính xác hãy
+chạy `./test/run_tests.sh --full` và xem dòng tổng kết của từng bản build. Độ phủ
+dòng lệnh và độ phủ nhánh (taken at least once) lấy từ `./test/run_tests.sh
+--coverage` (bản coverage bật `WEB_TOKEN` và `FAN_PWM_ENABLED` để phủ
+các nhánh chỉ tồn tại khi bật cờ — D16, D30);
+ngưỡng chặn CI là `COVERAGE_MIN=80` và `BRANCH_MIN=75`. Phần nhánh chưa phủ tập trung ở
+đường mạng/TLS thật (bị biên dịch bỏ khi build host có `SMARTFARM_TEST_HOOKS`),
+các nhánh lỗi khó mô phỏng (driver/HTTP trả sai), và biến thể compile-time không
+bật trong bản coverage. Mỗi test in một
+dòng `[PASS]/[FAIL]` kèm tên và số check của riêng nó để khoanh vùng lỗi nhanh.
 
 ## Cấu trúc
 
@@ -54,13 +60,13 @@ và các nhánh phòng vệ một chiều (clamp âm, URL rỗng). Mỗi test in
   - **D1–D3** biên: so sánh ngưỡng đúng dấu `<`/`>` tại đúng giá trị biên, tính
     bất biến (idempotency) của cơ cấu chấp hành, thời gian chính xác từng mili-giây
     (chống dội 300 ms, cửa cho ăn 2000 ms, nhịp thở 30 ms, quét servo 30 ms).
-  - **I1–I15** tích hợp: boot đăng ký đủ 18 route, `/api`, `/on` `/off`, phân xử
+  - **I1–I15** tích hợp: boot đăng ký đủ 25 route, `/api`, `/on` `/off`, phân xử
     servo, các handler còn lại, trang chủ + favicon, cấu hình WiFi động qua
     `/wifi` (lưu flash + restart), `/calibrate` (guard + validate + lưu NVS),
     `/health` + `/metrics`, callback OTA in trạng thái ra serial, OLED,
     menu serial 1–8, phím `9` chạy demo, WiFi mất–nối lại; I11 boot suy giảm
     (thiếu OLED + hết hạn WiFi, kiểm tra mã lỗi 101/102 và WDT vẫn được cho ăn).
-  - **D5–D16** chuyên sâu: hợp đồng JSON 21 khóa (parser tự viết, 200 trạng thái
+  - **D5–D16** chuyên sâu: hợp đồng JSON 23 khóa (parser tự viết, 200 trạng thái
     ngẫu nhiên), thân phản hồi chính xác + ngưỡng biên, layout OLED từng dòng
     (giới hạn 21 ký tự), biên serial (`\r\n`, byte rác 0xFF, chế độ debug tạm dừng
     tự động hóa rồi khôi phục an toàn), chẩn đoán demo (đúng 15 bước, tổng
@@ -80,18 +86,29 @@ và các nhánh phòng vệ một chiều (clamp âm, URL rỗng). Mỗi test in
     cờ debug in đúng chỗ, clamp ngưỡng khi flash lưu giá trị hỏng, RGB chỉ
     khác 0 ở G hoặc B, PIR/đèn thở giữ quyền điều khiển LED, DHT trả NaN khi
     bộ đệm còn trống.
+  - **D25–D34** tính năng mới: vòng lịch sử 96 mẫu + JSON `/history` (ghi đè
+    vòng, buffer nhỏ), parser Open-Meteo + mô tả WMO + `/weather`, endpoint app
+    ACEBOTT (`/config`, `/all`, `/door`, `/led`) và tạm dừng automation 3 giây,
+    soft-start bơm + hủy khi mất nước, động cơ cối xay gió GPIO16, PID/PWM quạt,
+    Telegram (rate limit + payload qua hook), cờ MQTT/TLS theo cấu hình build,
+    parser lệnh Bluetooth + đệm lệnh theo dòng 64 byte, và D34 cửa sổ chống replay
+    (chỉ chạy ở bản build `replay`; các bản build khác bỏ qua vì `ANTI_REPLAY=0`).
 - `mocks/` — giả lập Arduino/ESP32: `mock.h` + `mock.cpp` (API điều khiển thời gian
   `mockSetMillis`, ADC, chân, log GPIO, OLED theo dòng, WiFi, web server kèm
-  `mockServerSetHeader` giả lập header HTTP, counters)
-  và các header thay thế `Arduino.h`, `WiFi.h`, `WebServer.h`, `Adafruit_SSD1306.h`,
-  `Adafruit_NeoPixel.h`, `ESP32Servo.h`, `DHT.h`, `Preferences.h`, `Wire.h`,
-  `esp_task_wdt.h`, `esp_arduino_version.h`.
+  `mockServerSetHeader` giả lập header HTTP, counters), BluetoothSerial giả lập
+  (bơm lệnh vào `mockFeed`, đếm phản hồi, reset giữa test)
+  và các header thay thế `Arduino.h`, `WiFi.h`, `WebServer.h`, `ArduinoOTA.h`,
+  `Adafruit_SSD1306.h`, `Adafruit_NeoPixel.h`, `ESP32Servo.h`, `DHT.h`,
+  `Preferences.h`, `Wire.h`, `esp_task_wdt.h`, `esp_arduino_version.h`, cùng nhóm
+  header FreeRTOS (`FreeRTOS.h`, `task.h`, `queue.h`, `semphr.h`, `event_groups.h`)
+  — `mock.cpp` cài `xTaskGetTickCount` và họ `xSemaphore*` để các nhánh cần khóa
+  vẫn liên kết và chạy được trên host.
   Bộ đệm OLED giả mô phỏng đúng bố cục 6 cột/ký tự của font 6×8 thật, nên phép
   diff theo dải cột của firmware được kiểm chứng đúng (đổi 1 ký tự → 6 byte
   I2C, không phải 128 byte của cả page).
 - `js/page_test.mjs` — kiểm thử JavaScript của trang web bằng Node: **trích đúng
-  đoạn `<script>` từ `src/webserver.cpp`** nên kiểm thử chính mã đang chạy trên
-  thiết bị, không chép lại. Kiểm tra: poll thích ứng (2 s khi có thay đổi → 5 s
+  đoạn `<script>` từ `src/connectivity/webserver.cpp`** nên kiểm thử chính mã đang
+  chạy trên thiết bị, không chép lại. Kiểm tra: poll thích ứng (2 s khi có thay đổi →
   khi đứng yên), token đọc từ URL → `sessionStorage` → header, tự lấy nonce mới
   khi gặp 403, mọi request có `AbortSignal` để không treo, không gọi chồng request.
   Chạy: `node test/js/page_test.mjs` (tự bỏ qua nếu máy không có `node`).

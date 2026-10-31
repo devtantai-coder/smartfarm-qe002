@@ -41,6 +41,14 @@
 #include "wifi.h"
 #include "logger.h"
 #include "ArduinoOTA.h"
+#include "softstart.h"
+#include "pid.h"
+#include "history.h"
+#include "weather.h"
+#include "notify.h"
+#include "mqtt.h"
+#include "webserver.h"
+#include "metrics.h"
 
 // Các entry point thật của firmware (SmartFarm.ino)
 void setup();
@@ -147,6 +155,13 @@ void testResetSettingsStatics();
 void testResetWifiStatics();
 void testResetLoggerStatics();
 void testResetOledStatics();
+void testResetHistoryStatics();
+void testResetWeatherStatics();
+void testResetNotifyStatics();
+void testResetWebStatics();
+void testResetNetWorker();
+const char* testNotifyLastEvent();
+const char* testNotifyLastMessage();
 // Hook từ src/webserver.cpp: dựng JSON /api vào buffer cho trước để kiểm
 // tra nhánh "JSON bị cắt cụt".
 int testBuildApiJson(char* buf, size_t cap);
@@ -163,6 +178,14 @@ static void resetState() {
   testResetWifiStatics();
   testResetLoggerStatics();
   testResetOledStatics();
+  testResetHistoryStatics();
+  testResetWeatherStatics();
+  testResetNotifyStatics();
+  testResetWebStatics();
+  testResetNetWorker();
+  testResetCalibStatics();
+  softStartInit();
+  pidReset();          // bộ nhớ PID luôn bắt đầu từ 0 để kết quả không phụ thuộc thứ tự test
 #endif
   gMinLogLevel = LOG_INFO;
   // Ngưỡng + cờ auto lấy từ chính firmware (một nguồn sự thật, không chép
@@ -177,7 +200,7 @@ static void resetState() {
   sys.gTemp = 22; sys.gHum = 50; sys.gLight = 300; sys.gSoil = 500; sys.gWater = 800;
   sys.gPir = false; sys.gTouch = false;
   sys.lastWifiCheck = sys.lastSensorRead = sys.lastOledUpdate = 0;
-  sys.lastBuzzer = sys.lastTouch = sys.lastBreatheUpdate = 0;
+  sys.lastTouch = sys.lastBreatheUpdate = 0;
   sys.sensorFailCount = 0;
   sys.sensorHealthy = true;
   sys.calTempOffset = 0.0f; sys.calTempGain = 1.0f;
@@ -191,6 +214,19 @@ static int invoke(const char *path,
                   const char *a2 = nullptr, const char *v2 = nullptr,
                   const char *a3 = nullptr, const char *v3 = nullptr) {
   if (WEB_TOKEN[0] != '\0') mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
+#if ANTI_REPLAY
+  // Mỗi lệnh gửi kèm một nonce tăng dần, mô phỏng đúng cách trình duyệt lấy
+  // nonce từ /api (thiết bị phát hành lastUsed+1). Thiếu dòng này thì ở bản
+  // build ANTI_REPLAY=1 mọi route có guardWeb() đều trả 403 và nhánh chống
+  // replay vĩnh viễn không được test.
+  {
+    static uint32_t sTestNonce = 0;
+    const unsigned long n = ++sTestNonce;
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%lu", n);
+    mockServerSetArg("nonce", buf);
+  }
+#endif
   if (a1) mockServerSetArg(a1, v1);
   if (a2) mockServerSetArg(a2, v2);
   if (a3) mockServerSetArg(a3, v3);
@@ -204,6 +240,14 @@ static void runLoop(unsigned long simMs, unsigned long stepMs = 10) {
   while (mockMillis() - start < simMs) {
     mockAdvance(stepMs);
     loop();
+  }
+}
+
+// Hoàn tất soft-start bơm đang chờ (các test gọi controlPump() trực tiếp).
+static void settleSoftStart() {
+  if (softStartIsActive()) {
+    mockAdvance(SOFTSTART_MS + 1);
+    softStartUpdate();
   }
 }
 
@@ -228,13 +272,22 @@ static void primeSensors(int water) {
 // không còn con số 15 lặp lại rải rác trong các test.
 static const char *ALL_ROUTES[] = {
   "/", "/api", "/toggle", "/auto", "/rgb", "/servo", "/breathe", "/on", "/off",
-  "/windmill", "/feed", "/demo", "/threshold", "/wifi", "/favicon.ico", "/health", "/calibrate", "/metrics"
+  "/windmill", "/feed", "/demo", "/threshold", "/wifi", "/reset", "/favicon.ico", "/health", "/calibrate", "/metrics",
+  "/config", "/all", "/door", "/led", "/history", "/weather"
 };
 static const int ALL_ROUTE_COUNT = (int)(sizeof(ALL_ROUTES) / sizeof(ALL_ROUTES[0]));
 
 static void checkAllRoutes() {
   CHECK_EQ(mockServerRouteCount(), ALL_ROUTE_COUNT);
+  CHECK(!mockServerRouteOverflow());
   for (const char *r : ALL_ROUTES) CHECK(mockServerHasRoute(r));
+  // Mọi route phải là GET tường minh. Đăng ký bằng overload 2 tham số cho ra
+  // HTTP_ANY, tức nhận cả POST, và core đọc POST body ngay trên loopTask với
+  // timeout reset mỗi vòng -> một client gửi nhỏ giọt làm đứng loop (và khóa
+  // an toàn chống bơm chạy khô) cho tới khi watchdog panic.
+  for (int i = 0; i < mockServerRouteCount(); i++) {
+    CHECK_EQ(mockServerRouteMethod(i), (int)HTTP_GET);
+  }
 }
 
 // Số vòng fuzz mỗi seed; có thể rút ngắn khi phát triển bằng FUZZ_ITERS.
@@ -313,6 +366,7 @@ static void testPumpHysteresis() {
   sys.gWater = 900;
   sys.gSoil = 300;
   controlPump();
+  settleSoftStart();
   CHECK(sys.relayState);
   checkRelayPin(true);
   sys.gSoil = 500;                 // giữa các ngưỡng: không đổi
@@ -355,6 +409,9 @@ static void testPumpLowWaterSafety() {
 static void testFanHysteresis() {
   printf("T5  fan: temperature hysteresis\n");
   resetState();
+  // Bản extras bật FAN_PWM_ENABLED: pidUpdate() chỉ tính lại khi đã có mẫu
+  // cảm biến mới (>= SENSOR_INTERVAL), nên phải tua đồng hồ trước lần gọi đầu.
+  mockAdvance(SENSOR_INTERVAL);
   sys.gTemp = 31; controlFan(); CHECK(sys.fanState);
   sys.gTemp = 27; controlFan(); CHECK(sys.fanState);
   sys.gTemp = 24; controlFan(); CHECK(!sys.fanState);
@@ -499,6 +556,19 @@ static void testBuzzerAlarm() {
   sys.gWater = 800;
   controlAlerts();
   checkBuzzer(false);
+
+  // Còi thủ công giữ còi kêu và không chặn xử lý đèn PIR
+  setManualAlarm(true);
+  sys.gPir = true;
+  controlAlerts();
+  checkBuzzer(true);
+  CHECK(sys.blueLedState);
+  setManualAlarm(false);
+  CHECK(!manualAlarm());
+  sys.gPir = false;
+  controlAlerts();
+  checkBuzzer(false);
+  CHECK(!sys.blueLedState);
 }
 
 // T11: servo cối xay gió quét (hoạt động 6)
@@ -602,8 +672,12 @@ static void testSettingsResetAndSkip() {
   resetState();
 
   // Lưu cấu hình khác mặc định
+  const int w0 = mockPrefWrites();
   sys.soilThresholdLow = 321; sys.pumpAuto = false;
   saveSettings();
+  // Bản chụp còn "rỗng" (resetState gọi resetSettings) -> phải ghi đủ 15 khóa,
+  // không hơn: mỗi put là một lượt mòn flash.
+  CHECK_EQ(mockPrefWrites() - w0, 15);
   CHECK_NEAR(mockPrefGet("soilLow", 0), 321, 0.01);
   CHECK_NEAR(mockPrefGet("pumpAuto", 1), 0, 0.01);
 
@@ -619,13 +693,17 @@ static void testSettingsResetAndSkip() {
   // Lưu lần hai khi mọi giá trị không đổi: bỏ qua, không commit flash
   gMinLogLevel = LOG_DEBUG;
   mockSerialClear();
+  const int w1 = mockPrefWrites();
   saveSettings();
+  CHECK_EQ(mockPrefWrites() - w1, 0);
   CHECK(has(mockSerialOutput(), "Settings unchanged"));
   gMinLogLevel = LOG_INFO;
 
   // Đổi một giá trị: khóa đó được ghi lại
+  const int w2 = mockPrefWrites();
   sys.soilThresholdLow = 322;
   saveSettings();
+  CHECK_EQ(mockPrefWrites() - w2, 1);
   CHECK_NEAR(mockPrefGet("soilLow", 0), 322, 0.01);
 
   // loadSettings không đụng tới mã bảo mật trong RAM
@@ -651,8 +729,46 @@ static void testSettingsResetAndSkip() {
   CHECK_NEAR(mockPrefGet("soilLow", -1), -1, 0.01);      // flash đã bị xóa
 
   // Lần lưu sau reset phải ghi lại toàn bộ (bản chụp đã bị vô hiệu)
+  const int w3 = mockPrefWrites();
   saveSettings();
+  CHECK_EQ(mockPrefWrites() - w3, 15);
   CHECK_NEAR(mockPrefGet("soilLow", -1), 400, 0.01);
+
+  resetState();
+}
+
+// T18b: /calibrate — offset phải là số thật, và flash chỉ ghi khi giá trị đổi
+static void testCalibrationFlashAndArgs() {
+  printf("T18b calib: strict offset arg + write-only-if-changed\n");
+  resetState();
+  mockServerReset();
+  setup();                       // calibrationInit() -> nạp mặc định, chụp bản
+
+  const int w0 = mockPrefWrites();
+  CHECK_EQ(invoke("/calibrate", "sensor", "temp", "offset", "1.5"), 200);
+  CHECK_NEAR(sys.calTempOffset, 1.5, 0.001);
+  CHECK_EQ(mockPrefWrites() - w0, 1);          // chỉ khóa tOff đổi
+
+  // Gửi lại y hệt: không được commit thêm lượt nào
+  const int w1 = mockPrefWrites();
+  CHECK_EQ(invoke("/calibrate", "sensor", "temp", "offset", "1.5"), 200);
+  CHECK_EQ(mockPrefWrites() - w1, 0);
+
+  // Chuỗi không phải số: String::toFloat() trả 0, sẽ âm thầm XÓA độ lệch đang
+  // dùng. Phải bị từ chối và trạng thái phải giữ nguyên.
+  const int w2 = mockPrefWrites();
+  CHECK_EQ(invoke("/calibrate", "sensor", "temp", "offset", "abc"), 400);
+  CHECK_EQ(invoke("/calibrate", "sensor", "temp", "offset", "12abc"), 400);
+  CHECK_EQ(invoke("/calibrate", "sensor", "temp", "offset", "nan"), 400);
+  CHECK_EQ(invoke("/calibrate", "sensor", "temp", "offset", ""), 400);
+  CHECK_NEAR(sys.calTempOffset, 1.5, 0.001);
+  CHECK_EQ(mockPrefWrites() - w2, 0);
+
+  // Đổi sensor khác: đúng một khóa nữa
+  const int w3 = mockPrefWrites();
+  CHECK_EQ(invoke("/calibrate", "sensor", "soil", "offset", "-100"), 200);
+  CHECK_NEAR(sys.calSoilOffset, -100, 0.001);
+  CHECK_EQ(mockPrefWrites() - w3, 1);
 
   resetState();
 }
@@ -693,6 +809,7 @@ static void testSettingsNonFiniteFallback() {
   // Điều khiển phải chạy lại bình thường với các giá trị đã sửa
   sys.gWater = 900; sys.gSoil = 100;
   controlPump();
+  settleSoftStart();
   CHECK(sys.relayState);
   setRelay(false);
   resetState();
@@ -748,7 +865,12 @@ static void testDemoFullRun() {
   }
   CHECK(!demoRunning());
   CHECK(!sawRelay);
-  checkBuzzer(false);
+  // Bể vẫn cạn: cảnh báo an toàn không được im lặng khi demo kết thúc (trước
+  // đây demo luôn setBuzzer(false) và nuốt luôn còi báo nước thấp).
+  checkBuzzer(true);
+  runAutomation();                         // về automation thường: vẫn báo động
+  checkBuzzer(true);
+  resetState();
 }
 
 // D1: biên ngưỡng chính xác
@@ -759,14 +881,15 @@ static void testBoundaries() {
   resetState();
   sys.gWater = 900;
   sys.gSoil = 400; controlPump(); CHECK(!sys.relayState);            // == low: không khởi động
-  sys.gSoil = 399; controlPump(); CHECK(sys.relayState);             // < low: khởi động
+  sys.gSoil = 399; controlPump(); settleSoftStart(); CHECK(sys.relayState); // < low: khởi động
   sys.gSoil = 700; controlPump(); CHECK(sys.relayState);             // == high: vẫn bật
   sys.gSoil = 701; controlPump(); CHECK(!sys.relayState);            // > high: dừng
-  sys.gWater = 200; sys.gSoil = 399; controlPump(); CHECK(sys.relayState);  // == waterLow: được phép
+  sys.gWater = 200; sys.gSoil = 399; controlPump(); settleSoftStart(); CHECK(sys.relayState);  // == waterLow: được phép
   sys.gWater = 199; controlPump(); CHECK(!sys.relayState);           // < waterLow: bị chặn
 
   // Quạt: nghiêm ngặt > / <
   resetState();
+  mockAdvance(SENSOR_INTERVAL);                                    // đủ một chu kỳ cảm biến cho PID
   sys.gTemp = 30;    controlFan(); CHECK(!sys.fanState);             // == high: không khởi động
   sys.gTemp = 30.01f; controlFan(); CHECK(sys.fanState);             // > high: khởi động
   sys.gTemp = 25;    controlFan(); CHECK(sys.fanState);              // == low: vẫn bật
@@ -819,6 +942,25 @@ static void testIdempotency() {
   CHECK_EQ(mockDigitalWriteCount, d0 + 2);
   checkRelayPin(false);
 
+#if FAN_PWM_ENABLED
+  int f0 = mockLedcWriteCount;
+  setFan(true);
+  CHECK_EQ(mockLedcWriteCount, f0 + 1);
+  setFan(true);                                  // idempotent: không ghi lại
+  CHECK_EQ(mockLedcWriteCount, f0 + 1);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  CHECK_EQ(mockPwm[FAN_PIN], 255);
+#else
+  CHECK_EQ(mockPwm[FAN_PWM_CHANNEL], 255);
+#endif
+  setFan(false);
+  CHECK_EQ(mockLedcWriteCount, f0 + 2);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  CHECK_EQ(mockPwm[FAN_PIN], 0);
+#else
+  CHECK_EQ(mockPwm[FAN_PWM_CHANNEL], 0);
+#endif
+#else
   int d1 = mockDigitalWriteCount;
   setFan(true);
   CHECK_EQ(mockDigitalWriteCount, d1 + 1);
@@ -828,6 +970,7 @@ static void testIdempotency() {
   setFan(false);
   CHECK_EQ(mockDigitalWriteCount, d1 + 2);
   CHECK_EQ(mockPinLevel[FAN_PIN], LOW);
+#endif
 
 #if BUZZER_PASSIVE
   int t0 = mockToneCalls, n0 = mockNoToneCalls;
@@ -960,6 +1103,7 @@ static void testHttpApi() {
   sys.gPir = true; sys.gTouch = false;
   CHECK_EQ(invoke("/api"), 200);
   CHECK_STR(mockServerLastType(), "application/json");
+  CHECK_EQ(mockServerContentLength(), strlen(mockServerLastBody()));
   const char *b = mockServerLastBody();
   CHECK(has(b, "\"temp\":26.5"));
   CHECK(has(b, "\"hum\":61.2"));
@@ -970,6 +1114,7 @@ static void testHttpApi() {
   CHECK(has(b, "\"pir\":true"));
   CHECK(has(b, "\"touch\":false"));
   CHECK(has(b, "\"relay\":false"));
+  CHECK(has(b, "\"alarm\":false"));
   CHECK(has(b, "\"windmill\":false"));
   CHECK(has(b, "\"feed\":false"));
   CHECK(has(b, "\"demo\":false"));
@@ -1052,6 +1197,17 @@ static void testHttpControlRoutes() {
   CHECK(!sys.breatheLedState);
   CHECK_EQ(invoke("/auto", "id", "bogus", "on", "true"), 400);
 
+  invoke("/toggle", "id", "alarm");
+  CHECK(manualAlarm());
+  checkBuzzer(true);
+#if !API_JSON_IS_TINY
+  invoke("/api");
+  CHECK(has(mockServerLastBody(), "\"alarm\":true"));
+#endif
+  invoke("/toggle", "id", "buzzer");
+  CHECK(!manualAlarm());
+  checkBuzzer(false);
+
   invoke("/threshold", "soilLow", "2000");
   CHECK_NEAR(sys.soilThresholdLow, 2000, 0.01);
   CHECK(sys.soilThresholdHigh > sys.soilThresholdLow);   // tự sửa thứ tự
@@ -1080,6 +1236,24 @@ static void testHttpRootFavicon() {
   CHECK_EQ(invoke("/favicon.ico"), 204);
 }
 
+// I6b: ETag -> lần tải thứ hai nhận 304, không gửi lại 16 KB HTML
+static void testRootEtag() {
+  printf("I6b http: root page ETag / 304\n");
+  resetState();
+  mockServerReset();
+  setup();
+
+  CHECK_EQ(invoke("/"), 200);
+  mockServerSetHeader("If-None-Match", WEB_ROOT_ETAG);
+  CHECK_EQ(invoke("/"), 304);
+  CHECK_EQ(strlen(mockServerLastBody()), (size_t)0);
+  mockServerSetHeader("If-None-Match", "");
+
+  resetState();
+  mockServerReset();
+  setup();
+}
+
 // I12: cấu hình WiFi động qua web (lưu flash rồi yêu cầu khởi động lại)
 static void testHttpWifiConfig() {
   printf("I12 http: /wifi dynamic config\n");
@@ -1097,6 +1271,37 @@ static void testHttpWifiConfig() {
   CHECK_STR(mockPrefGetStr("wifiSsid", ""), "NhaToi");
   CHECK_STR(mockPrefGetStr("wifiPass", ""), "matkhau123");
   CHECK(sys.gNeedRestart);                                   // chờ restart để áp dụng
+
+  // Gửi lại ĐÚNG giá trị đang dùng: "có tham số" không đồng nghĩa "đã đổi".
+  // Trước đây mỗi lần bấm Save là một vòng reboot (mất WiFi 3-4 giây, đang bật
+  // bơm thì cắt giữa chu kỳ) cộng thêm một lần ghi NVS.
+  sys.gNeedRestart = false;
+  CHECK_EQ(invoke("/wifi", "ssid", "NhaToi", "password", "matkhau123"), 200);
+  CHECK_STR(mockServerLastBody(), "unchanged");
+  CHECK(!sys.gNeedRestart);
+
+  // SSID chỉ toàn khoảng trắng, hoặc dài hơn chỗ sys.ssid chịu được -> 400.
+  // Nhận bừa thì strncpy ghi một SSID bị cắt xuống flash; máy restart vào mạng
+  // không tồn tại và mất liên lạc, chỉ cứu được bằng nạp lại firmware.
+  CHECK_EQ(invoke("/wifi", "ssid", "   "), 400);
+  CHECK_STR(mockServerLastBody(), "bad ssid");
+  char longSsid[40];
+  memset(longSsid, 'A', sizeof(longSsid) - 1);
+  longSsid[sizeof(longSsid) - 1] = '\0';
+  CHECK_EQ(invoke("/wifi", "ssid", longSsid), 400);
+  CHECK_STR(mockServerLastBody(), "bad ssid");
+  char longPass[80];
+  memset(longPass, 'p', sizeof(longPass) - 1);
+  longPass[sizeof(longPass) - 1] = '\0';
+  CHECK_EQ(invoke("/wifi", "password", longPass), 400);
+  CHECK_STR(mockServerLastBody(), "password too long");
+  CHECK_STR(sys.ssid, "NhaToi");        // request bị từ chối không được ghi dở
+
+  // /reset: nhà máy về mặc định firmware + xóa NVS, rồi restart để kết nối lại.
+  CHECK_EQ(invoke("/reset"), 200);
+  CHECK_STR(sys.ssid, WIFI_SSID);
+  CHECK_STR(mockPrefGetStr("wifiSsid", ""), "");
+  CHECK(sys.gNeedRestart);
 
   // loop() đi qua nhánh restart (mock ESP.restart là no-op); chạy quá 200 ms
   // để chạm đúng mốc RESTART_DELAY_MS tính từ lần loop() đầu tiên
@@ -1188,6 +1393,13 @@ static void testHealthMetrics() {
   CHECK_STR(mockServerLastType(), "application/json");
   CHECK(has(mockServerLastBody(), "\"healthy\":false"));
   CHECK(has(mockServerLastBody(), "\"uptime_ms\":"));
+  // Thống kê hiệu năng vòng loop + heap đỉnh (đo tác động tối ưu).
+  metricsNoteLoop(7);
+  CHECK_EQ(invoke("/metrics"), 200);
+  CHECK(has(mockServerLastBody(), "\"loops\":"));
+  CHECK(has(mockServerLastBody(), "\"loop_us_avg\":"));
+  CHECK(has(mockServerLastBody(), "\"loop_us_max\":"));
+  CHECK(has(mockServerLastBody(), "\"min_free_heap\":"));
 
   resetState();
   mockServerReset();
@@ -1470,7 +1682,7 @@ struct ApiKey { const char *key; char type; };
 static const ApiKey API_KEYS[] = {
   {"temp", 'n'}, {"hum", 'n'}, {"light", 'n'}, {"soil", 'n'}, {"water", 'n'}, {"weather", 'n'},
   {"pir", 'b'}, {"touch", 'b'}, {"relay", 'b'}, {"fan", 'b'}, {"led", 'b'}, {"breathe", 'b'},
-  {"windmill", 'b'}, {"feed", 'b'}, {"demo", 'b'}, {"demoStep", 's'},
+  {"alarm", 'b'}, {"windmill", 'b'}, {"feed", 'b'}, {"demo", 'b'}, {"demoStep", 's'},
   {"pumpAuto", 'b'}, {"lightAuto", 'b'}, {"rgbAuto", 'b'}, {"fanAuto", 'b'}, {"breatheAuto", 'b'},
   {"nonce", 'n'}
 };
@@ -1527,6 +1739,7 @@ static bool validateApiResponse(std::string &err) {
   if (boolOf(pairs, "fan") != sys.fanState) { err = "fan mismatch"; return false; }
   if (boolOf(pairs, "led") != sys.blueLedState) { err = "led mismatch"; return false; }
   if (boolOf(pairs, "breathe") != sys.breatheLedState) { err = "breathe mismatch"; return false; }
+  if (boolOf(pairs, "alarm") != manualAlarm()) { err = "alarm mismatch"; return false; }
   if (boolOf(pairs, "windmill") != sys.windmillOn) { err = "windmill mismatch"; return false; }
   if (boolOf(pairs, "feed") != feedRunning()) { err = "feed mismatch"; return false; }
   if (boolOf(pairs, "demo") != demoRunning()) { err = "demo mismatch"; return false; }
@@ -1545,7 +1758,7 @@ static bool validateApiResponse(std::string &err) {
 
 // D5: JSON contract nghiêm ngặt của /api
 static void testApiJsonContract() {
-  printf("D5  api: strict JSON contract (21 keys)\n");
+  printf("D5  api: strict JSON contract (22 keys)\n");
 #if API_JSON_IS_TINY
   CHECK_EQ(invoke("/api"), 500);                 // buffer JSON nhỏ -> báo lỗi
   CHECK(has(mockServerLastBody(), "too large"));
@@ -1889,8 +2102,10 @@ static void testSettingsRangeClamp() {
   mockPrefPut("tempLow", -100.0f);
 
   loadSettings();
-  CHECK_NEAR(sys.soilThresholdLow, 4095.0f, 0.01);
-  CHECK_NEAR(sys.soilThresholdHigh, 0.0f, 0.01);
+  // Sau khi kẹp riêng từng giá trị, cặp low=4095/high=0 vẫn ngược: bất biến
+  // high > low được dựng lại thành 4045/4095 (xem loadSettings).
+  CHECK_NEAR(sys.soilThresholdLow, 4045.0f, 0.01);
+  CHECK_NEAR(sys.soilThresholdHigh, 4095.0f, 0.01);
   CHECK_NEAR(sys.waterThresholdLow, 4095.0f, 0.01);
   CHECK_EQ(sys.lightThreshold, 4095);
   CHECK_NEAR(sys.tempThresholdHigh, 60.0f, 0.01);
@@ -1941,6 +2156,7 @@ static void testSerialEdges() {
   resetState();
   sys.gWater = 900; sys.gSoil = 100; sys.pumpAuto = true;
   controlPump();
+  settleSoftStart();
   CHECK(sys.relayState);
   mockSerialClear();
   mockSerialPush("3");
@@ -1950,7 +2166,7 @@ static void testSerialEdges() {
   mockAdc[WATER_PIN] = INVERT_WATER ? 4045 : 50;
   sys.lastSensorRead = mockMillis();
   loop();
-  CHECK(sys.relayState);                          // chế độ debug: automation tạm dừng
+  CHECK(!sys.relayState);   // debug vẫn giữ interlock: nước cạn cắt bơm ngay
   // trong chế độ debug mọi phím khác đều bị từ chối
   mockSerialClear();
   mockSerialPush("x");
@@ -2144,6 +2360,27 @@ static void testWifiStatusPoll() {
   resetState();
 }
 
+// D10b2: bản đọc trực tiếp (cho tác vụ mạng nền) không được đụng cache của loopTask
+static void testWifiFreshReadForWorker() {
+  printf("D10b2 wifi: worker read bypasses the loopTask cache\n");
+  resetState();
+  mockWifiStatus = WL_CONNECTED;
+  CHECK(wifiConnected());                  // nạp cache
+  const int s0 = mockWifiStatusCalls;
+
+  mockWifiStatus = WL_DISCONNECTED;        // rớt mạng ngay sau khi nạp cache
+  CHECK(!wifiConnectedFresh());            // task nền phải thấy trạng thái thật
+  CHECK_EQ(mockWifiStatusCalls, s0 + 1);   // đúng một lần hỏi driver
+  CHECK_EQ(mockWifiStatusCalls, s0 + 1);   // và không bị gọi lại dồn dập
+  CHECK(wifiConnected());                  // cache loopTask không bị task khác ghi đè
+
+  mockAdvance(WIFI_STATUS_POLL_MS);        // hết cửa sổ poll: cache tự theo kịp
+  CHECK(!wifiConnected());
+
+  mockWifiStatus = WL_CONNECTED;
+  resetState();
+}
+
 // D10c: tần số xử lý gói OTA — không đọc UDP ở tần số của loop()
 static void testOtaHandleThrottle() {
   printf("D10c ota: handle() is throttled\n");
@@ -2243,7 +2480,15 @@ static void checkFuzzInvariants(bool demoAtLoopStart) {
   CHECK(!(sys.gWater < (int)sys.waterThresholdLow && sys.relayState));
   // 2. Mức chân luôn khớp với trạng thái logic.
   CHECK((mockPinLevel[RELAY_PIN] != 0) == (sys.relayState != (bool)RELAY_ACTIVE_LOW));
+#if FAN_PWM_ENABLED
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  CHECK((mockPwm[FAN_PIN] != 0) == sys.fanState);
+#else
+  CHECK((mockPwm[FAN_PWM_CHANNEL] != 0) == sys.fanState);
+#endif
+#else
   CHECK((mockPinLevel[FAN_PIN] != 0) == sys.fanState);
+#endif
   // 3. Các cơ cấu servo dùng chung không bao giờ chạy cùng lúc.
   CHECK(!(sys.windmillOn && feedRunning()));
   // 4. Các chế độ LED xanh loại trừ lẫn nhau.
@@ -2303,6 +2548,17 @@ static void fuzzRun(unsigned seed, int iters) {
           mockServerSetArg(argNames[rng() % nNames], argVals[rng() % nVals]);
         }
         if (WEB_TOKEN[0] != '\0') mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
+#if ANTI_REPLAY
+        // Fuzz gọi thẳng mockServerInvoke (không qua invoke()), nên phải tự cấp
+        // nonce tăng dần — nếu không mọi route có guardWeb() trả 403 và nhánh
+        // chống replay không được fuzz.
+        {
+          static uint32_t sFuzzNonce = 0;
+          char nb[12];
+          snprintf(nb, sizeof(nb), "%lu", (unsigned long)(++sFuzzNonce));
+          mockServerSetArg("nonce", nb);
+        }
+#endif
         bool found = mockServerInvoke(routes[rng() % nRoutes]);
         CHECK(found);
         int code = mockServerLastCode();
@@ -2544,19 +2800,28 @@ static void testDemoBreathingRestore() {
 
 // D15: chặn CSRF — trang web khác không được điều khiển thiết bị
 static void testWebSecurity() {
-  printf("D15 http: CSRF guard (Origin/Referer/Sec-Fetch-Site)\n");
+  printf("D15 http: CSRF guard (Origin/Referer/Sec-Fetch-Site/User-Agent)\n");
   mockServerReset();
   setup();
 
   const String me = String("http://") + String(mockWifiIp);
 
-  // Yêu cầu không kèm header (curl, app tự viết) vẫn được phép
+  // Client không phải trình duyệt (curl, app tự viết) không gửi header nguồn: cho phép
   bool before = sys.relayState;
   CHECK_EQ(invoke("/toggle", "id", "pump"), 200);
   CHECK(sys.relayState != before);
 
+  // Nhưng request KHÔNG có header nguồn mà UA là trình duyệt thì chính là tấn
+  // công CSRF có giấu Referer (<img referrerpolicy=no-referrer>) → 403.
+  before = sys.relayState;
+  mockServerSetHeader("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) Firefox/128.0");
+  CHECK_EQ(invoke("/toggle", "id", "pump"), 403);
+  CHECK(sys.relayState == before);
+  CHECK_STR(mockServerLastBody(), "forbidden");
+
   // Origin lạ (trang web khác gọi fetch/XHR) → 403, trạng thái không đổi
   before = sys.relayState;
+  mockServerSetHeader("User-Agent", "Mozilla/5.0");
   mockServerSetHeader("Origin", "http://evil.example");
   CHECK_EQ(invoke("/toggle", "id", "pump"), 403);
   CHECK(sys.relayState == before);
@@ -2572,8 +2837,17 @@ static void testWebSecurity() {
   CHECK_EQ(invoke("/demo"), 403);
   CHECK(!demoRunning());
 
+  // same-site (subdomain khác nguồn) cũng phải bị chặn
+  mockServerSetHeader("Sec-Fetch-Site", "same-site");
+  CHECK_EQ(invoke("/demo"), 403);
+  CHECK(!demoRunning());
+
   // Tên miền giả mạo kiểu "http://<ip>.evil.com" không được lọt qua
   mockServerSetHeader("Origin", (me + ".evil.com").c_str());
+  CHECK_EQ(invoke("/toggle", "id", "fan"), 403);
+
+  // Origin "null" (iframe sandbox) không được lọt qua
+  mockServerSetHeader("Origin", "null");
   CHECK_EQ(invoke("/toggle", "id", "fan"), 403);
 
   // Yêu cầu cùng nguồn (từ chính trang của thiết bị) được phép
@@ -2589,13 +2863,44 @@ static void testWebSecurity() {
   CHECK_EQ(invoke("/windmill", "on", "false"), 200);
   CHECK(!sys.windmillOn);
 
-  // DHCP cấp IP mới → tiền tố origin phải được dựng lại theo IP mới
+  // DHCP cấp IP mới → nguồn phải được dựng lại theo IP mới
   const char *savedIp = mockWifiIp;
   mockWifiIp = "10.0.0.7";
   mockServerSetHeader("Origin", "http://10.0.0.7");
   CHECK_EQ(invoke("/windmill", "on", "true"), 200);
   CHECK(sys.windmillOn);
   mockWifiIp = savedIp;
+
+  // mDNS chỉ chạy khi OTA được bật (ArduinoOTA.begin khởi động MDNS) — khi đó
+  // dashboard mở bằng tên mDNS phải điều khiển được.
+  strncpy(sys.otaPassword, "test-ota", sizeof(sys.otaPassword) - 1);
+  sys.otaPassword[sizeof(sys.otaPassword) - 1] = '\0';
+  mockServerSetHeader("Origin", "http://smartfarm.local");
+  mockServerSetHeader("Referer", "http://smartfarm.local/");
+  mockServerSetHeader("Sec-Fetch-Site", "same-origin");
+  CHECK_EQ(invoke("/windmill", "on", "false"), 200);
+  CHECK(!sys.windmillOn);
+
+  // Origin có ghi cổng vẫn khớp với tên không ghi cổng (cùng một thiết bị).
+  mockServerSetHeader("Origin", "http://smartfarm.local:80");
+  CHECK_EQ(invoke("/windmill", "on", "true"), 200);
+  CHECK(sys.windmillOn);
+
+  // OTA tắt = firmware không quảng bá mDNS: tên "smartfarm.local" không còn là
+  // nguồn hợp lệ, dù request có gắn Host tương ứng.
+  sys.otaPassword[0] = '\0';
+  mockServerSetHost("smartfarm.local");
+  mockServerSetHeader("Origin", "http://smartfarm.local");
+  mockServerSetHeader("Referer", "http://smartfarm.local/");
+  CHECK_EQ(invoke("/windmill", "on", "false"), 403);
+  CHECK(sys.windmillOn);
+  mockServerSetHost("");   // trả Host về mặc định (IP) trước kiểm tra kế tiếp
+
+  // Tên miền KHÁC (không phải IP, không phải tên mDNS) → 403, kể cả khi header
+  // Host của request cũng là tên đó: tin Host sẽ mở lại lỗ hổng DNS-rebinding.
+  mockServerSetHost("nha-khac.local");
+  mockServerSetHeader("Origin", "http://nha-khac.local");
+  CHECK_EQ(invoke("/toggle", "id", "pump"), 403);
 
   resetState();
 }
@@ -2744,6 +3049,7 @@ static void testThresholdNonFinite() {
   sys.soilThresholdLow = 400; sys.soilThresholdHigh = 700;
   sys.gWater = 900; sys.gSoil = 100; sys.pumpAuto = true;
   controlPump();
+  settleSoftStart();
   CHECK(sys.relayState);
   setRelay(false);
   resetState();
@@ -2884,10 +3190,10 @@ static void testEdgeBranches() {
   resetState();
 }
 
-// D21: mọi route có bảo vệ đều phải chặn được nguồn lạ; cờ debug in đúng
-// chỗ; nhánh phòng vệ của cơ cấu chấp hành.
-static void testGuardAndDebugFlags() {
-  printf("D23 http: guarded routes + module debug flags\n");
+// D23: mọi route có bảo vệ đều phải chặn được nguồn lạ; menu debug serial in đủ
+// nhãn; nhánh phòng vệ quyền sở hữu đèn của cơ cấu chấp hành.
+static void testGuardAndDebugLabels() {
+  printf("D23 http: guarded routes + debug menu labels\n");
   resetState();
   mockServerReset();
   mockWifiStatus = WL_CONNECTED;
@@ -2896,7 +3202,8 @@ static void testGuardAndDebugFlags() {
   // ── mọi route có guardWeb() đều phải trả 403 cho yêu cầu từ nguồn lạ ──
   static const char *guarded[] = {
     "/toggle", "/auto", "/rgb", "/breathe", "/on", "/off", "/servo",
-    "/windmill", "/feed", "/demo", "/threshold", "/wifi", "/calibrate"
+    "/windmill", "/feed", "/demo", "/threshold", "/wifi", "/reset", "/calibrate",
+    "/door", "/led"
   };
   for (const char *path : guarded) {
     mockServerSetHeader("Origin", "http://evil.example");
@@ -2907,40 +3214,8 @@ static void testGuardAndDebugFlags() {
   CHECK(!feedRunning());
   CHECK(!sys.relayState);
 
-  // ── cờ debug bật: MOD_DEBUG phải in ra, không im lặng ──
-  dbgSensors = dbgActuators = dbgControl = dbgWebserver = true;
-  dbgWifi = dbgOled = dbgSettings = dbgLogger = dbgRgb = true;
+  // ── các hàm debug in đủ nhãn ──
   gMinLogLevel = LOG_DEBUG;
-
-  mockSerialClear();
-  CHECK_EQ(invoke("/"), 200);
-  CHECK(has(mockSerialOutput(), "GET /"));
-
-  mockSerialClear();
-  CHECK_EQ(invoke("/api"), API_JSON_IS_TINY ? 500 : 200);
-  CHECK(has(mockSerialOutput(), "GET /api"));
-
-  mockSerialClear();
-  CHECK_EQ(invoke("/on"), 200);
-  CHECK(has(mockSerialOutput(), "GET /on"));
-
-  mockSerialClear();
-  CHECK_EQ(invoke("/off"), 200);
-  CHECK(has(mockSerialOutput(), "GET /off"));
-
-  mockSerialClear();
-  CHECK_EQ(invoke("/demo"), 200);
-  CHECK(has(mockSerialOutput(), "GET /demo"));
-
-  // MOD_DEBUG(Rgb) trong actuators.cpp
-  mockSerialClear();
-  setRgb(1, 2, 3);
-  CHECK(has(mockSerialOutput(), "RGB set"));
-  mockSerialClear();
-  setRgbPlant();
-  CHECK(has(mockSerialOutput(), "RGB plant light"));
-
-  // Các hàm debug in đủ nhãn
   mockSerialClear();
   debugSensors();   debugActuators(); debugControl();
   debugWebserver(); debugWifi();      debugOled();
@@ -2968,9 +3243,6 @@ static void testGuardAndDebugFlags() {
   CHECK(sys.blueLedState);
   CHECK(!sys.breatheLedState);
 
-  // dọn cờ debug + mức log
-  dbgSensors = dbgActuators = dbgControl = dbgWebserver = false;
-  dbgWifi = dbgOled = dbgSettings = dbgLogger = dbgRgb = false;
   gMinLogLevel = LOG_INFO;
 
   resetState();
@@ -2995,8 +3267,9 @@ static void testDefensiveBranches() {
   CHECK_NEAR(sys.soilThresholdHigh, 4095.0, 0.01);
   CHECK_NEAR(sys.waterThresholdLow, 0.0, 0.01);
   CHECK_EQ(sys.lightThreshold, 0);
-  CHECK_NEAR(sys.tempThresholdHigh, 0.0, 0.01);
-  CHECK_NEAR(sys.tempThresholdLow, 60.0, 0.01);
+  // tempHigh bị kẹp 0, tempLow bị kẹp 60 → cặp ngược được dựng lại thành 59/60.
+  CHECK_NEAR(sys.tempThresholdHigh, 60.0, 0.01);
+  CHECK_NEAR(sys.tempThresholdLow, 59.0, 0.01);
 
   // Ngưỡng vượt trần cũng phải bị clamp về 4095
   mockPrefPut("lightThr", 99999.0f);
@@ -3061,13 +3334,44 @@ static void testDefensiveBranches() {
   CHECK(!sys.blueLedState);
   sys.breatheLedState = false;
 
-  // ── DHT trả NaN khi bộ đệm còn trống → giá trị thay thế là 0 ──
+  // ── DHT trả NaN khi bộ lọc còn trống: GIỮ giá trị cũ, không bịa số 0 ──
+  // Hành vi cũ nhét 0.0 vào cửa sổ lọc, nên sys.gTemp treo ở 0 °C nhiều giây và
+  // quạt/cảnh báo/OLED tin đó là số đo thật.
   resetState();
   mockDhtTemp = NAN;
   mockDhtHum = NAN;
   readAllSensors();
-  CHECK_NEAR(sys.gTemp, 0.0, 0.01);
-  CHECK_NEAR(sys.gHum, 0.0, 0.01);
+  CHECK_NEAR(sys.gTemp, 22.0, 0.01);       // resetState để lại 22/50, không bị 0 hóa
+  CHECK_NEAR(sys.gHum, 50.0, 0.01);
+
+  // Nhiều mẫu hỏng liên tiếp cũng không làm trung bình dịch đi, và cờ sức khỏe
+  // chuyển sau >5 lần.
+  for (int i = 0; i < 8; i++) readAllSensors();
+  CHECK_NEAR(sys.gTemp, 22.0, 0.01);
+  CHECK(!sys.sensorHealthy);
+
+  // Mẫu tốt tiếp theo vào thẳng cửa sổ (không bị pha loãng bởi các số 0 bịa):
+  // mọi slot đều nhận 30 nên trung bình đúng bằng 30 sau đúng SENSOR_FILTER_SIZE lần.
+  mockDhtTemp = 30.0f;
+  mockDhtHum = 70.0f;
+  for (int i = 0; i < SENSOR_FILTER_SIZE; i++) readAllSensors();
+  CHECK_NEAR(sys.gTemp, 30.0, 0.01);
+  CHECK_NEAR(sys.gHum, 70.0, 0.01);
+  CHECK(sys.sensorHealthy);
+
+  // ── Quạt fail-safe khi DHT hỏng: không được giữ nguyên trạng thái cũ ──
+  resetState();
+  mockDhtTemp = NAN;
+  mockDhtHum = NAN;
+  for (int i = 0; i < 8; i++) readAllSensors();
+  CHECK(!sys.sensorHealthy);
+  sys.fanAuto = true;
+  sys.gWater = 4000;                 // đủ nước, không rơi vào nhánh an toàn nước
+  sys.fanState = false;
+  setFan(false);
+  controlFan();
+  CHECK(sys.fanState);               // quạt bật dù cảm biến nhiệt đã chết
+  resetState();
 
   // ── updateDemo() khi không có demo chạy → thoát ngay, không làm gì ──
   CHECK(!demoRunning());
@@ -3076,6 +3380,477 @@ static void testDefensiveBranches() {
 
   resetState();
 }
+
+
+// D25: ring buffer lịch sử + JSON /history
+static void testHistoryRing() {
+  printf("D25 history: ring buffer + JSON\n");
+  resetState();
+  mockSetMillis(1000);
+  historyLoop(mockMillis());
+  CHECK_EQ(historyCount(), 1);
+  HistorySample s;
+  CHECK(historyAt(0, &s));
+  CHECK_EQ(s.seconds, 1);
+  CHECK_NEAR(s.temp, sys.gTemp, 0.01);
+
+  historyLoop(mockMillis() + HISTORY_INTERVAL_MS - 1);
+  CHECK_EQ(historyCount(), 1);
+  historyLoop(mockMillis() + HISTORY_INTERVAL_MS);
+  CHECK_EQ(historyCount(), 2);
+
+  // Đầy vòng: mẫu cũ nhất bị ghi đè, số mẫu không vượt sức chứa.
+  for (int i = 0; i < HISTORY_CAPACITY + 10; i++) {
+    mockAdvance(HISTORY_INTERVAL_MS);
+    historyLoop(mockMillis());
+  }
+  CHECK_EQ(historyCount(), HISTORY_CAPACITY);
+  CHECK(historyAt(0, &s));
+  CHECK(s.seconds > 1);
+  CHECK(!historyAt(-1, &s));
+  CHECK(!historyAt(HISTORY_CAPACITY, &s));
+
+  char big[HISTORY_JSON_BUF_SIZE];
+  const int n = buildHistoryJson(big, sizeof(big));
+  CHECK(n > 0 && (size_t)n < sizeof(big));
+  CHECK(has(big, "\"count\":96"));
+  CHECK(has(big, "\"samples\":["));
+  CHECK(has(big, "\"temp\":"));
+  char small[24];
+  const int need = buildHistoryJson(small, sizeof(small));
+  CHECK(need >= (int)sizeof(small));
+
+  // Kích thước do historyJsonSize() phải khớp đúng số byte buildHistoryJson ghi ra.
+  CHECK_EQ((int)historyJsonSize(), n);
+
+  // Giá trị phi lý (NaN/Inf/huge) KHÔNG được làm hai đường tính độ dài lệch nhau:
+  // một mẫu in ra 40 ký tự sẽ bị cắt trong scratch, Content-Length dài hơn thân
+  // và trình duyệt treo chờ byte cuối. History kẹp mọi float về ±999.9.
+  sys.gTemp = NAN;
+  sys.gHum = 1e30f;
+  mockAdvance(HISTORY_INTERVAL_MS);
+  historyLoop(mockMillis());
+  const int nanLen = buildHistoryJson(big, sizeof(big));
+  CHECK(nanLen > 0 && (size_t)nanLen < sizeof(big));
+  CHECK_EQ((int)historyJsonSize(), nanLen);
+  CHECK_EQ(strlen(big), (size_t)nanLen);
+  CHECK(has(big, "\"temp\":0.0"));
+  CHECK(has(big, "\"hum\":999.9"));
+  sys.gTemp = 25.0f;
+  sys.gHum = 60.0f;
+
+  // /history trả body thô (setContentLength + sendContent): header
+  // Content-Length phải bằng đúng số byte thân, nếu không trình duyệt sẽ
+  // cắt cụt hoặc treo chờ dữ liệu.
+  mockReset();
+  setup();
+  CHECK_EQ(invoke("/history"), 200);
+  CHECK(has(mockServerLastBody(), "\"samples\":["));
+  CHECK_EQ(mockServerContentLength(), strlen(mockServerLastBody()));
+  // ĐÚNG MỘT lần ghi: mỗi sendContent là một write() chặn tới 10 s trên firmware
+  // thật, nên stream 96 khúc = ~16 phút loopTask bị giữ, gấp 32 lần WDT 30 s.
+  CHECK_EQ(mockServerContentWrites(), 1);
+
+  resetState();
+  CHECK_EQ(historyCount(), 0);
+}
+
+// D26: parser thời tiết Open-Meteo + mô tả mã WMO
+static void testWeatherModule() {
+  printf("D26 weather: Open-Meteo parser + JSON\n");
+  resetState();
+  mockSetMillis(5000);
+  char buf[256];
+  buildWeatherJson(buf, sizeof(buf));
+  CHECK(has(buf, "\"valid\":false"));
+
+  const char* body =
+      "{\"current_units\":{\"temperature_2m\":\"°C\",\"weather_code\":\"wmo code\"},"
+      "\"current\":{\"time\":\"2026-10-27T03:15\",\"interval\":900,"
+      "\"temperature_2m\":29.4,\"relative_humidity_2m\":55,\"weather_code\":3}}";
+  CHECK(testParseWeatherBody(body, 5000));
+  const WeatherData& w = weatherState();
+  CHECK(w.valid);
+  CHECK_NEAR(w.temp, 29.4, 0.01);
+  CHECK_NEAR(w.hum, 55, 0.01);
+  CHECK_EQ(w.code, 3);
+  CHECK_STR(w.description, "Nhiều mây");
+
+  buildWeatherJson(buf, sizeof(buf));
+  CHECK(has(buf, "\"valid\":true"));
+  CHECK(has(buf, "\"temp\":29.4"));
+  CHECK(has(buf, "\"hum\":55"));
+  CHECK(has(buf, "\"desc\":\"Nhiều mây\""));
+
+  CHECK_STR(weatherCodeDescription(0), "Trời quang");
+  CHECK_STR(weatherCodeDescription(63), "Mưa");
+  CHECK_STR(weatherCodeDescription(95), "Giông bão");
+  CHECK_STR(weatherCodeDescription(999), "Không rõ");
+  CHECK(!testParseWeatherBody("{\"current\":{}}", 0));
+  CHECK(!testParseWeatherBody(nullptr, 0));
+  resetState();
+}
+
+// D27: endpoint tương thích app ACEBOTT + tạm dừng automation
+static void testAppEndpoints() {
+  printf("D27 app: ACEBOTT /config /all /door /led\n");
+  resetState();
+  mockServerReset();
+  setup();
+
+  sys.gWater = 900; sys.gHum = 61.5f; sys.gPir = true;
+  sys.gSoil = 650; sys.gTemp = 26.5f; sys.gLight = 800;
+  CHECK_EQ(invoke("/config"), 200);
+  CHECK(has(mockServerLastBody(), "\"appCallInterval\":1000"));
+  CHECK_STR(mockServerLastType(), "text/plain");
+
+  CHECK_EQ(invoke("/all"), 200);
+  const char* b = mockServerLastBody();
+  CHECK(has(b, "\"WaterLevel\":900"));
+  CHECK(has(b, "\"Humidity\":61.5"));
+  CHECK(has(b, "\"Human\":1"));
+  CHECK(has(b, "\"SoilMoisture\":650"));
+  CHECK(has(b, "\"Temperature\":26.5"));
+  CHECK(has(b, "\"Photoresistor\":800"));
+  // /all là route CHỈ ĐỌC mà app gọi mỗi giây: gọi nó không được tạm dừng
+  // automation (trước đây mở app là bơm tưới tự động tắt vĩnh viễn).
+  CHECK(!appControlActive());
+
+  CHECK_EQ(invoke("/door", "level", "1"), 200);
+  CHECK_EQ(sys.servoAngle, FEED_OPEN_ANGLE);
+  CHECK_EQ(mockServoAngle, FEED_OPEN_ANGLE);
+  CHECK_EQ(invoke("/door", "level", "0"), 200);
+  CHECK_EQ(sys.servoAngle, FEED_CLOSE_ANGLE);
+
+  CHECK_EQ(invoke("/led", "level", "1"), 200);
+  CHECK(sys.blueLedState);
+  CHECK(!sys.lightAuto);
+  CHECK_EQ(invoke("/led", "level", "0"), 200);
+  CHECK(!sys.blueLedState);
+
+  CHECK_EQ(invoke("/rgb", "r", "1", "g", "2", "b", "3"), 200);
+  CHECK_EQ(sys.rgbR, 1); CHECK_EQ(sys.rgbG, 2); CHECK_EQ(sys.rgbB, 3);
+
+  // Trong 3 giây app điều khiển, automation không được giành bật bơm.
+  sys.gWater = 900; sys.gSoil = 100; sys.pumpAuto = true;
+  sys.lastSensorRead = mockMillis();
+  invoke("/led", "level", "0");   // route RA LỆNH mới được tạm dừng automation
+  loop();
+  CHECK(appControlActive());
+  CHECK(!sys.relayState);
+
+  // Hết thời gian tạm dừng, automation chạy lại (qua soft-start).
+  mockAdvance(APP_CONTROL_PAUSE_MS + 1);
+  sys.lastSensorRead = mockMillis();   // giữ giá trị cảm biến đã đặt, không đọc ADC mock
+  loop();
+  CHECK(!appControlActive());
+  CHECK(softStartIsActive());
+  settleSoftStart();
+  CHECK(sys.relayState);
+  setRelay(false);
+  resetState();
+}
+
+// D28: soft-start bơm + hủy khi mất an toàn
+static void testSoftStartPump() {
+  printf("D28 pump: soft-start + safety cancel\n");
+  resetState();
+  sys.gWater = 900; sys.gSoil = 300; sys.pumpAuto = true;
+  controlPump();
+  CHECK(!sys.relayState);
+  CHECK(softStartIsActive());
+  mockAdvance(SOFTSTART_MS > 0 ? SOFTSTART_MS - 1 : 0);
+  softStartUpdate();
+  CHECK(!sys.relayState);
+  mockAdvance(1);
+  softStartUpdate();
+  CHECK(sys.relayState);
+  CHECK(!softStartIsActive());
+
+  sys.gSoil = 800;
+  controlPump();
+  CHECK(!sys.relayState);
+
+  resetState();
+  sys.gWater = 900; sys.gSoil = 300; sys.pumpAuto = true;
+  controlPump();
+  CHECK(softStartIsActive());
+  sys.gWater = 100;
+  controlPump();
+  CHECK(!sys.relayState);
+  CHECK(!softStartIsActive());
+  mockAdvance(SOFTSTART_MS + 1);
+  softStartUpdate();
+  CHECK(!sys.relayState);
+
+  resetState();
+  sys.gWater = 900; sys.gSoil = 300; sys.pumpAuto = true;
+  controlPump();
+  setPumpAuto(false);
+  mockAdvance(SOFTSTART_MS + 1);
+  softStartUpdate();
+  CHECK(!sys.relayState);
+  CHECK(!softStartIsActive());
+}
+
+// D29: động cơ cối xay gió thật (HĐ6)
+static void testWindmillMotor() {
+  printf("D29 windmill: real motor output\n");
+  resetState();
+#if WINDMILL_MOTOR_PIN >= 0
+  setWindmill(true);
+  CHECK_EQ(mockPinLevel[WINDMILL_MOTOR_PIN],
+           WINDMILL_MOTOR_ACTIVE_HIGH ? HIGH : LOW);
+  setWindmill(false);
+  CHECK_EQ(mockPinLevel[WINDMILL_MOTOR_PIN],
+           WINDMILL_MOTOR_ACTIVE_HIGH ? LOW : HIGH);
+#else
+  setWindmill(true);
+  CHECK(sys.windmillOn);
+  setWindmill(false);
+  CHECK(!sys.windmillOn);
+#endif
+}
+
+// D30: PID điều tốc quạt (chỉ kiểm tra khi bật FAN_PWM_ENABLED)
+static void testFanPidPwm() {
+  printf("D30 fan: PID PWM mode\n");
+#if FAN_PWM_ENABLED
+  resetState();
+  sys.fanAuto = true;
+  sys.gWater = 900;
+  sys.gTemp = sys.tempThresholdHigh + 10.0f;
+  mockAdvance(SENSOR_INTERVAL);   // PID chỉ cập nhật khi có mẫu cảm biến mới
+  controlFan();
+  CHECK(sys.fanState);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  CHECK(mockPwm[FAN_PIN] > 0);
+#else
+  CHECK(mockPwm[FAN_PWM_CHANNEL] > 0);
+#endif
+  sys.gTemp = sys.tempThresholdLow - 1.0f;
+  controlFan();
+  CHECK(!sys.fanState);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  CHECK_EQ(mockPwm[FAN_PIN], 0);
+#else
+  CHECK_EQ(mockPwm[FAN_PWM_CHANNEL], 0);
+#endif
+#else
+  printf("      (bỏ qua: FAN_PWM_ENABLED=0)\n");
+#endif
+}
+
+// D31: thông báo Telegram (hook test, không gửi mạng)
+static void testNotifyModule() {
+  printf("D31 notify: Telegram rate limit + payload\n");
+  resetState();
+  CHECK(!notifyEnabled());
+  CHECK(!notifyEvent("water", "test"));
+
+  testNotifyForceEnabled(true);
+  mockSetMillis(1000);
+  CHECK(notifyEvent("water", "mực nước thấp"));
+  CHECK_STR(testNotifyLastEvent(), "water");
+  CHECK(has(testNotifyLastMessage(), "mực nước"));
+  CHECK(!notifyEvent("water", "lần hai"));          // trong khoảng chờ
+  CHECK(notifyEvent("motion", "có chuyển động"));   // loại khác được gửi
+  mockAdvance(TELEGRAM_MIN_INTERVAL_MS + 1);
+  CHECK(notifyEvent("water", "lần ba"));
+
+  // Gửi hỏng phải nhả cửa sổ chống spam sớm: sau TELEGRAM_RETRY_MS là thử
+  // lại được, thay vì phải chờ đủ TELEGRAM_MIN_INTERVAL_MS.
+  notifyComplete("water", false);
+  mockAdvance(TELEGRAM_RETRY_MS - 1);
+  CHECK(!notifyEvent("water", "chưa đủ thời gian thử lại"));
+  mockAdvance(1);
+  CHECK(notifyEvent("water", "thử lại sau backoff"));
+
+  // Gửi thành công thì cửa sổ giữ nguyên đủ TELEGRAM_MIN_INTERVAL_MS.
+  notifyComplete("water", true);
+  mockAdvance(TELEGRAM_MIN_INTERVAL_MS - 1);
+  CHECK(!notifyEvent("water", "vẫn trong cửa sổ"));
+  mockAdvance(1);
+  CHECK(notifyEvent("water", "hết cửa sổ"));
+
+  // Kind lạ hoặc nullptr không được làm hỏng trạng thái.
+  notifyComplete("khong-co", false);
+  notifyComplete(nullptr, false);
+
+  testNotifyForceEnabled(false);
+  resetState();
+}
+
+// D32: cờ MQTT theo cấu hình build
+static void testMqttTlsFlags() {
+  printf("D32 mqtt: build flags\n");
+  resetState();
+  mqttInit();
+  mqttLoop();
+#if MQTT_ENABLED
+  CHECK(mqttConnected());
+#else
+  CHECK(!mqttConnected());
+#endif
+  resetState();
+}
+
+
+// D34: chống replay (chỉ chạy ở bản build ANTI_REPLAY=1 — mặc định tắt vì
+// trang web và app ACEBOTT chưa gửi nonce)
+#if ANTI_REPLAY
+static void testAntiReplay() {
+  printf("D34 http: replay window enforced\n");
+  resetState();
+  mockServerReset();
+  setup();
+  sys.gLastNonce = 0;
+
+  // Không có nonce -> 403 và TRẠNG THÁI KHÔNG ĐỔI (lệnh bị chặn trước handler).
+  mockServerSetArg("id", "pump");
+  const bool relayBefore = sys.relayState;
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 403);
+  CHECK(sys.relayState == relayBefore);
+  CHECK_EQ((unsigned long)sys.gLastNonce, 0ul);
+
+  // nonce = 0 luôn bị từ chối: /api không bao giờ phát hành 0.
+  mockServerSetArg("id", "pump");
+  mockServerSetArg("nonce", "0");
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 403);
+
+  // Nonce hợp lệ đầu tiên: chạy lệnh và ghi dấu lại.
+  mockServerSetArg("id", "pump");
+  mockServerSetArg("nonce", "7");
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 200);
+  CHECK(sys.relayState != relayBefore);
+  CHECK_EQ((unsigned long)sys.gLastNonce, 7ul);
+
+  // Phát lại đúng gói tin vừa bắt (tấn công replay): 403, trạng thái giữ nguyên.
+  mockServerSetArg("id", "pump");
+  mockServerSetArg("nonce", "7");
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 403);
+  CHECK(sys.relayState != relayBefore);
+
+  // Cũ hơn cũng bị từ chối (không chỉ "bằng").
+  mockServerSetArg("id", "pump");
+  mockServerSetArg("nonce", "3");
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 403);
+
+  // Nhảy tới tương lai được phép: client lấy nonce từ /api rồi dùng ngay.
+  mockServerSetArg("id", "pump");
+  mockServerSetArg("nonce", "100");
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 200);
+  CHECK_EQ((unsigned long)sys.gLastNonce, 100ul);
+
+  // Quanh mốc tràn 32 bit: phép so sánh phải dùng hiệu có dấu, nếu không một
+  // nonce = 0xFFFFFFFF sẽ khóa thiết bị vĩnh viễn.
+  sys.gLastNonce = 0xFFFFFFF0ul;
+  mockServerSetArg("id", "pump");
+  mockServerSetArg("nonce", "5");
+  CHECK(mockServerInvoke("/toggle"));
+  CHECK_EQ(mockServerLastCode(), 200);
+  CHECK_EQ((unsigned long)sys.gLastNonce, 5ul);
+
+  resetState();
+}
+#else
+static void testAntiReplay() {
+  printf("D34 http: replay guard\n      (bỏ qua: bản build này đặt ANTI_REPLAY=0)\n");
+}
+#endif
+
+// D33: Bluetooth serial — xử lý lệnh không chặn
+#if BLUETOOTH_ENABLED
+void testProcessBluetoothCommand(const char* raw);
+
+static void testBluetoothCommands() {
+  printf("D33 bluetooth: command parser + line buffering\n");
+  resetState();
+  SerialBT.mockReset();
+
+  testProcessBluetoothCommand("on");
+  CHECK(sys.blueLedState);
+  CHECK(!sys.lightAuto);
+  testProcessBluetoothCommand("led off");
+  CHECK(!sys.blueLedState);
+
+  sys.gWater = 900;
+  testProcessBluetoothCommand("pump on");
+  CHECK(sys.relayState);
+  CHECK(!sys.pumpAuto);
+  testProcessBluetoothCommand("pump off");
+  CHECK(!sys.relayState);
+
+  sys.gWater = 100;
+  testProcessBluetoothCommand("pump on");
+  CHECK(!sys.relayState);                 // nước thấp: chặn bơm
+
+  testProcessBluetoothCommand("fan on");
+  CHECK(sys.fanState);
+  CHECK(!sys.fanAuto);
+  testProcessBluetoothCommand("fan off");
+  CHECK(!sys.fanState);
+
+  testProcessBluetoothCommand("windmill on");
+  CHECK(sys.windmillOn);
+  testProcessBluetoothCommand("windmill off");
+  CHECK(!sys.windmillOn);
+
+  testProcessBluetoothCommand("feed");
+  CHECK(feedRunning());
+  testProcessBluetoothCommand("windmill on");   // servo dùng chung: đóng cửa trước
+  CHECK(!feedRunning());
+  CHECK(sys.windmillOn);
+  testProcessBluetoothCommand("windmill off");
+
+  testProcessBluetoothCommand("alarm on");
+  CHECK(manualAlarm());
+  testProcessBluetoothCommand("alarm off");
+  CHECK(!manualAlarm());
+
+  testProcessBluetoothCommand("rgb 10 20 30");
+  CHECK_EQ(sys.rgbR, 10); CHECK_EQ(sys.rgbG, 20); CHECK_EQ(sys.rgbB, 30);
+  testProcessBluetoothCommand("rgb 1 2");       // thiếu thành phần: giữ nguyên
+  CHECK_EQ(sys.rgbR, 10);
+
+  testProcessBluetoothCommand("door 45");
+  CHECK_EQ(sys.servoAngle, 45);
+  CHECK_EQ(mockServoAngle, 45);
+  testProcessBluetoothCommand("servo 999");     // clamp 0..180
+  CHECK_EQ(sys.servoAngle, 180);
+
+  testProcessBluetoothCommand("status");
+  testProcessBluetoothCommand("help");
+  testProcessBluetoothCommand("khong-lenh-nay");
+  testProcessBluetoothCommand("");              // rỗng: im lặng
+  CHECK(SerialBT.mockWriteCount() > 0);
+
+  testProcessBluetoothCommand("demo");
+  CHECK(demoRunning());
+
+  // Byte đến theo dòng: loop() phải tích lũy đến newline rồi xử lý.
+  resetState();
+  SerialBT.mockReset();
+  SerialBT.mockFeed("led on\n");
+  loop();
+  CHECK(sys.blueLedState);
+
+  // Lệnh không newline nhưng đủ 64 byte: xử lý ngay để không kẹt buffer.
+  SerialBT.mockReset();
+  SerialBT.mockFeed(std::string(70, 'x'));
+  loop();
+  CHECK(SerialBT.mockWriteCount() > 0);
+  loop();                                        // buffer đã được xóa
+  SerialBT.mockFeed("\n");                       // xóa 6 byte còn lại, tránh rò sang test sau
+  loop();
+}
+#endif
 
 // ==============================================
 //  Hàm chính
@@ -3101,6 +3876,7 @@ int main() {
   RUN_TEST(testWeather);
   RUN_TEST(testSettingsRoundtrip);
   RUN_TEST(testSettingsResetAndSkip);
+  RUN_TEST(testCalibrationFlashAndArgs);
   RUN_TEST(testLoggerLevelGuard);
   RUN_TEST(testSettingsNonFiniteFallback);
   RUN_TEST(testDemoFullRun);
@@ -3118,6 +3894,7 @@ int main() {
   RUN_TEST(testHttpMechanisms);
   RUN_TEST(testHttpControlRoutes);
   RUN_TEST(testHttpRootFavicon);
+  RUN_TEST(testRootEtag);
   RUN_TEST(testHttpWifiConfig);
   RUN_TEST(testCalibrationEndpoint);
   RUN_TEST(testHealthMetrics);
@@ -3141,6 +3918,7 @@ int main() {
   RUN_TEST(testDemoDiagnostics);
   RUN_TEST(testWifiThrottle);
   RUN_TEST(testWifiStatusPoll);
+  RUN_TEST(testWifiFreshReadForWorker);
   RUN_TEST(testOtaHandleThrottle);
   RUN_TEST(testBootOrder);
   RUN_TEST(testRebootPersistence);
@@ -3153,8 +3931,20 @@ int main() {
   RUN_TEST(testBootFirstSample);
   RUN_TEST(testBootDegraded);
   RUN_TEST(testEdgeBranches);
-  RUN_TEST(testGuardAndDebugFlags);
+  RUN_TEST(testGuardAndDebugLabels);
   RUN_TEST(testDefensiveBranches);
+  RUN_TEST(testHistoryRing);
+  RUN_TEST(testWeatherModule);
+  RUN_TEST(testAppEndpoints);
+  RUN_TEST(testSoftStartPump);
+  RUN_TEST(testWindmillMotor);
+  RUN_TEST(testFanPidPwm);
+  RUN_TEST(testNotifyModule);
+  RUN_TEST(testMqttTlsFlags);
+  RUN_TEST(testAntiReplay);
+#if BLUETOOTH_ENABLED
+  RUN_TEST(testBluetoothCommands);
+#endif
 
   printf("=== %d checks, %d failures ===\n", gChecks, gFails);
   return gFails ? 1 : 0;

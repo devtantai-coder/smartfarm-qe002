@@ -1,3 +1,11 @@
 src/secrets.h
 test/build/
 build/
+
+# File nhớ của trình soạn thảo (Kate/Vim) — có thể chứa secrets.h đang mở dở
+*.swp
+*.swo
+*.kate-swp
+
+# Gói lưu trữ cả tree cũ: chứa src/secrets.h và ảnh build có SSID/PSK WiFi thật
+Archive.tar.gz

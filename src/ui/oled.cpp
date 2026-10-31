@@ -3,6 +3,7 @@
 #include "../sensors.h"
 #include "../control.h"
 #include "../demo.h"
+#include "../wifi.h"
 #include "../oled.h"
 
 // Nhãn chỉ dùng ASCII: font mặc định SSD1306 không có dấu tiếng Việt
@@ -36,6 +37,31 @@ static const uint8_t OLED_FAIL_LIMIT = 3;
 
 // 127 byte dữ liệu + 1 byte điều khiển = 128 = buffer I2C mặc định của Wire.
 static const size_t OLED_CHUNK = 127;
+
+// Ảnh chụp nội dung đang hiển thị. Nếu lần vẽ định kỳ mà mọi thứ không đổi
+// (và không có cờ dirty/force), bỏ qua clear/draw: tiết kiệm CPU mỗi 2 giây.
+struct OledView {
+  float temp, hum;
+  int light, soil, water;
+  int lightThreshold;   // dòng thời tiết (weatherText) phụ thuộc ngưỡng này
+  bool relay, windmill, feed, demo;
+  bool wifi;
+  const char* step;
+  char ip[16];
+};
+
+static OledView sLastView = {};
+static bool sViewValid = false;
+static bool sForceDraw = false;
+
+static bool sameView(const OledView& a, const OledView& b) {
+  return a.temp == b.temp && a.hum == b.hum &&
+         a.light == b.light && a.soil == b.soil && a.water == b.water &&
+         a.lightThreshold == b.lightThreshold &&
+         a.relay == b.relay && a.windmill == b.windmill &&
+         a.feed == b.feed && a.demo == b.demo && a.wifi == b.wifi &&
+         strcmp(a.step, b.step) == 0 && strcmp(a.ip, b.ip) == 0;
+}
 
 static bool oledWriteData(const uint8_t* data, size_t n) {
   bool ok = true;
@@ -119,7 +145,10 @@ bool oledInit() {
 
 bool oledAvailable() { return sOledOk; }
 
-void oledForceRedraw() { sPrevFrameValid = false; }
+void oledForceRedraw() {
+  sPrevFrameValid = false;
+  sForceDraw = true;
+}
 
 // Ghi nhận một lần lỗi I2C:
 // - Khung so sánh không còn đúng (màn hình có thể đã lệch so với buffer) ->
@@ -139,6 +168,32 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   // I2C. Mỗi giao dịch I2C lỗi chặn loop tới hết thời gian chờ, vô ích mà
   // còn làm nghẽn cả web server.
   if (!sOledOk) return;
+
+  // Ảnh chụp những gì sắp hiển thị — dùng để bỏ qua lần vẽ khi không đổi.
+  OledView view = {};
+  view.temp = t;
+  view.hum = h;
+  view.light = light;
+  view.soil = soil;
+  view.water = water;
+  view.lightThreshold = sys.lightThreshold;
+  view.relay = sys.relayState;
+  view.windmill = sys.windmillOn;
+  view.feed = feedRunning();
+  view.demo = demoRunning();
+  view.step = view.demo ? demoStepName() : "";
+  view.wifi = (WiFi.status() == WL_CONNECTED);
+  view.ip[0] = '\0';
+  if (view.wifi) {
+    strncpy(view.ip, wifiIpString(), sizeof(view.ip) - 1);
+    view.ip[sizeof(view.ip) - 1] = '\0';
+  }
+
+  // Không đổi gì và không bị yêu cầu vẽ lại -> khỏi đụng framebuffer/I2C.
+  if (!sys.oledDirty && !sForceDraw && sPrevFrameValid && sViewValid &&
+      sameView(view, sLastView)) {
+    return;
+  }
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -178,31 +233,23 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   display.print(F(" P:"));
   display.print(sys.relayState ? F("ON") : F("OFF"));
 
-  // Dòng 6: IP WiFi — cache chuỗi IP để không cấp phát String mỗi lần vẽ.
+  // Dòng 6: IP WiFi — lấy qua cache chung (wifiIpString): không hỏi driver
+  // WiFi và không cấp phát String mỗi lần vẽ.
   display.setCursor(0, 48);
-  if (WiFi.status() == WL_CONNECTED) {
-    static IPAddress sCachedIp;
-    static char sIpStr[16] = {0};
-    IPAddress ip = WiFi.localIP();
-    if (sIpStr[0] == '\0' || ip != sCachedIp) {
-      sCachedIp = ip;
-      String ts = ip.toString();
-      strncpy(sIpStr, ts.c_str(), sizeof(sIpStr) - 1);
-      sIpStr[sizeof(sIpStr) - 1] = '\0';
-    }
+  if (view.wifi && view.ip[0] != '\0') {
     display.print(F("IP:"));
-    display.print(reinterpret_cast<const char*>(sIpStr));
+    display.print(static_cast<const char*>(view.ip));
   } else {
     display.print(F("WiFi: ---"));
   }
 
   // Dòng 7: trạng thái demo / cơ cấu
   display.setCursor(0, 56);
-  if (demoRunning()) {
-    display.print(demoStepName());
-  } else if (sys.windmillOn) {
+  if (view.demo) {
+    display.print(view.step);
+  } else if (view.windmill) {
     display.print(F("Coi xay: ON"));
-  } else if (feedRunning()) {
+  } else if (view.feed) {
     display.print(F("Cho an..."));
   } else {
     display.print(F("San sang"));
@@ -216,6 +263,9 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   if (!sPrevFrameValid) {
     memcpy(sPrevFrame, frame, sizeof(sPrevFrame));
     sPrevFrameValid = true;
+    sLastView = view;
+    sViewValid = true;
+    sForceDraw = false;
     if (!oledWritePages(frame, 0, pages - 1)) oledNoteFailure();
     return;
   }
@@ -246,9 +296,17 @@ void updateOLED(float t, float h, int light, int soil, int water) {
   }
 
   // Không có gì đổi: giữ nguyên khung trước, không ghi lại (không tốn I2C).
-  if (!wroteAny) return;
+  if (!wroteAny) {
+    sLastView = view;
+    sViewValid = true;
+    sForceDraw = false;
+    return;
+  }
 
   memcpy(sPrevFrame, frame, sizeof(sPrevFrame));
+  sLastView = view;
+  sViewValid = true;
+  sForceDraw = false;
 
   // I2C hỏng giữa chừng (màn hình bị rút, bus lỗi): sau vài lần lỗi liên
   // tiếp thì tự tắt màn hình thay vì cứ thử mãi và liên tục chặn loop.
@@ -261,5 +319,9 @@ void updateOLED(float t, float h, int light, int soil, int water) {
 
 #ifdef SMARTFARM_TEST_HOOKS
 // Chỉ dùng cho bộ test: coi như màn hình vừa bật (khung trước không hợp lệ).
-void testResetOledStatics() { sPrevFrameValid = false; }
+void testResetOledStatics() {
+  sPrevFrameValid = false;
+  sViewValid = false;
+  sForceDraw = false;
+}
 #endif
