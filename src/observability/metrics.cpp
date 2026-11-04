@@ -1,6 +1,6 @@
-#include "../metrics.h"
-#include "../globals.h"
-#include "../logger.h"
+#include "metrics.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
 #include <cstdio>
 
 static unsigned long sStart = 0;

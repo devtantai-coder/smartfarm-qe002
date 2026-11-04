@@ -1,7 +1,7 @@
-#include "../websocket.h"
-#include "../globals.h"
-#include "../logger.h"
-#include "../config.h"
+#include "websocket.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
+#include "../core/config.h"
 
 static char sLastMsg[128] = "";
 static unsigned long sBroadcasts = 0;
@@ -41,3 +41,12 @@ void websocketBroadcast(const char* msg) {
 }
 
 unsigned long websocketBroadcastCount() { return sBroadcasts; }
+
+unsigned websocketClientCount() {
+#ifndef SMARTFARM_TEST_HOOKS
+#if WEBSOCKET_ENABLED
+  return sWs.connectedClients();
+#endif
+#endif
+  return 0;
+}

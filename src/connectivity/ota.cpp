@@ -1,20 +1,17 @@
-#include "../ota.h"
-#include "../globals.h"
-#include "../logger.h"
-#include "../config.h"
+#include "ota.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
+#include "../core/config.h"
 
 void otaInit() { LOG_INFO("OTA init"); }
 
 void otaLoop() {}
 
+// Fail-closed: chưa có public key / cơ chế verify thật nên từ chối mọi
+// OTA có ký. Trả true ở đây là backdoor (ai cũng nạp firmware giả được).
+// Khi có public key thật, thay bằng mbedtls_pk_verify với RSA/ECDSA check
+// tương ứng; cho tới lúc đó return false an toàn hơn là true.
 bool otaVerifySignature(const unsigned char* data, size_t len, const unsigned char* sig, size_t sigLen) {
-  if (!data || !sig || len == 0 || sigLen == 0) return false;
-#ifndef SMARTFARM_TEST_HOOKS
-  // Real verification would use mbedtls_pk_verify with the firmware public key.
-  // Stubbed to true for development; replace with actual RSA/ECDSA check.
   (void)data; (void)len; (void)sig; (void)sigLen;
-  return true;
-#else
-  return true;
-#endif
+  return false;
 }

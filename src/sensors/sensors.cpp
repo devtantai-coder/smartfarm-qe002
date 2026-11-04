@@ -1,9 +1,9 @@
-#include "../globals.h"
-#include "../logger.h"
-#include "../sensors.h"
-#include "../hal.h"
-#include "../rtos.h"
-#include "../calibration.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
+#include "sensors.h"
+#include "../hal/hal.h"
+#include "../core/rtos.h"
+#include "../control/calibration.h"
 
 // ── Bộ đệm trung bình động ──
 static float sTempBuf[SENSOR_FILTER_SIZE] = {0};
@@ -43,21 +43,63 @@ void readAllSensors() {
   bool hIsNan = isnan(h);
 
   // Xử lý NaN từ DHT: thay bằng giá trị tốt cuối cùng đã biết
-  if (tIsNan) {
-    t = sBufFilled ? sTempBuf[(sBufIdx + SENSOR_FILTER_SIZE - 1) % SENSOR_FILTER_SIZE] : 0;
-    if (++sys.sensorFailCount > 5 && sys.sensorHealthy) {
-      sys.sensorHealthy = false;
-      LOG_ERROR_CODE(501, "DHT11 sensor failing repeatedly");
+  // và đánh dấu kênh temp/hum unhealthy tới khi có lần đọc tốt liên tiếp.
+  if (tIsNan || hIsNan) {
+    if (tIsNan) {
+      t = sBufFilled ? sTempBuf[(sBufIdx + SENSOR_FILTER_SIZE - 1) % SENSOR_FILTER_SIZE] : 0.0f;
     }
-  }
-  if (hIsNan) {
-    h = sBufFilled ? sHumBuf[(sBufIdx + SENSOR_FILTER_SIZE - 1) % SENSOR_FILTER_SIZE] : 0;
+    if (hIsNan) {
+      h = sBufFilled ? sHumBuf[(sBufIdx + SENSOR_FILTER_SIZE - 1) % SENSOR_FILTER_SIZE] : 0.0f;
+    }
+    if (++sys.sensorFailCount > 3) {
+      if (tIsNan && sys.sensorHealthyTemp) {
+        sys.sensorHealthyTemp = false;
+        LOG_ERROR_CODE(501, "DHT11 temperature failing repeatedly");
+      }
+      if (hIsNan && sys.sensorHealthyHum) {
+        sys.sensorHealthyHum = false;
+        LOG_ERROR_CODE(501, "DHT11 humidity failing repeatedly");
+      }
+    }
+  } else {
+    // Chỉ reset khi CẢ HAI kênh đều đọc tốt — tránh một kênh NaN
+    // bị "che" bởi kênh còn lại và làm mất đánh dấu lỗi.
+    sys.sensorFailCount = 0;
+    sys.sensorHealthyTemp = true;
+    sys.sensorHealthyHum = true;
   }
 
-  // Reset số lần lỗi khi thành công (dùng kiểm tra NaN gốc, không dùng giá trị thay thế)
-  if (!tIsNan && !hIsNan) {
-    sys.sensorFailCount = 0;
-    sys.sensorHealthy = true;
+  int rawL = halAnalogRead(LDR_PIN);
+  int rawS = halAnalogRead(SOIL_PIN);
+  int rawW = halAnalogRead(WATER_PIN);
+  auto adcValid = [](int raw) { return raw >= 0 && raw <= 4095; };
+  // Light
+  if (!adcValid(rawL)) {
+    if (++sys.lightFailCount > 3 && sys.lightHealthy) {
+      sys.lightHealthy = false;
+      LOG_ERROR_CODE(502, "LDR sensor failing repeatedly");
+    }
+  } else {
+    sys.lightFailCount = 0;
+    sys.lightHealthy = true;
+  }
+  if (!adcValid(rawS)) {
+    if (++sys.soilFailCount > 3 && sys.soilHealthy) {
+      sys.soilHealthy = false;
+      LOG_ERROR_CODE(503, "Soil sensor failing repeatedly");
+    }
+  } else {
+    sys.soilFailCount = 0;
+    sys.soilHealthy = true;
+  }
+  if (!adcValid(rawW)) {
+    if (++sys.waterFailCount > 3 && sys.waterHealthy) {
+      sys.waterHealthy = false;
+      LOG_ERROR_CODE(504, "Water sensor failing repeatedly");
+    }
+  } else {
+    sys.waterFailCount = 0;
+    sys.waterHealthy = true;
   }
 
   int l = readLight();
@@ -97,6 +139,10 @@ void readAllSensors() {
   sys.gWater = (int)(sWaterSum / n);
   sys.gPir   = readPIR();
   sys.gTouch = readTouch();
+  // Health tổng là AND của mọi kênh: 1 kênh lỗi -> degraded, nhưng
+  // control vẫn có thể chạy kênh khác tốt (xem control.cpp dùng per-channel).
+  sys.sensorHealthy = sys.sensorHealthyTemp && sys.sensorHealthyHum &&
+                      sys.lightHealthy && sys.soilHealthy && sys.waterHealthy;
   rtosUnlock();
 }
 

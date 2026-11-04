@@ -1,6 +1,6 @@
-#include "../anomaly.h"
-#include "../globals.h"
-#include "../logger.h"
+#include "anomaly.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
 #include <cmath>
 
 static const uint8_t N = 10;
@@ -41,9 +41,13 @@ void anomalyUpdate() {
   sys.anomalyTemp = (sys.gTemp - tMean) / tSd;
   sys.anomalyHum = (sys.gHum - hMean) / hSd;
 
-  sys.sensorHealthyTemp = isfinite(sys.gTemp) && sys.gTemp >= -10.0f && sys.gTemp <= 80.0f && fabsf(sys.anomalyTemp) < 4.0f;
-  sys.sensorHealthyHum = isfinite(sys.gHum) && sys.gHum >= 0.0f && sys.gHum <= 100.0f && fabsf(sys.anomalyHum) < 4.0f;
-  sys.sensorHealthy = sys.sensorHealthyTemp && sys.sensorHealthyHum;
+  // Tổng hợp: range + z-score + failure count từ readAllSensors.
+  // Không ghi đè health do NaN ngay khi vừa thay bằng giá trị cũ.
+  bool dhtOk = (sys.sensorFailCount == 0);
+  sys.sensorHealthyTemp = dhtOk && isfinite(sys.gTemp) && sys.gTemp >= -10.0f && sys.gTemp <= 80.0f && fabsf(sys.anomalyTemp) < 4.0f;
+  sys.sensorHealthyHum  = dhtOk && isfinite(sys.gHum) && sys.gHum >= 0.0f && sys.gHum <= 100.0f && fabsf(sys.anomalyHum) < 4.0f;
+  sys.sensorHealthy = sys.sensorHealthyTemp && sys.sensorHealthyHum &&
+                      sys.lightHealthy && sys.soilHealthy && sys.waterHealthy;
 }
 
 float anomalyZScore(float value, float mean, float stdDev) {
@@ -64,3 +68,13 @@ float anomalyScore(const char* sensor) {
   if (strcmp(sensor, "hum") == 0) return sys.anomalyHum;
   return 0.0f;
 }
+
+#ifdef SMARTFARM_TEST_HOOKS
+void testResetAnomalyStatics() {
+  // Reset bộ đệm anomaly về trạng thái ban đầu để test độc lập.
+  for (uint8_t i = 0; i < 10; i++) { sTemp[i] = 0.0f; sHum[i] = 0.0f; }
+  sIdx = 0;
+  sFilled = false;
+  anomalyInit();
+}
+#endif

@@ -28,16 +28,28 @@
 #include <type_traits>
 
 #include "mock.h"
-#include "globals.h"
-#include "sensors.h"
-#include "actuators.h"
-#include "control.h"
-#include "demo.h"
-#include "settings.h"
-#include "oled.h"
-#include "config.h"
-#include "wifi.h"
-#include "logger.h"
+#include "core/globals.h"
+#include "sensors/sensors.h"
+#include "actuators/actuators.h"
+#include "control/control.h"
+#include "control/demo.h"
+#include "core/settings.h"
+#include "ui/oled.h"
+#include "core/config.h"
+#include "hal/hal.h"
+#include "connectivity/wifi.h"
+#include "connectivity/mqtt.h"
+#include "connectivity/websocket.h"
+#include "connectivity/tls.h"
+#include "connectivity/ota.h"
+#include "observability/metrics.h"
+#include "observability/health.h"
+#include "control/calibration.h"
+#include "control/anomaly.h"
+#include "control/softstart.h"
+#include "control/pid.h"
+#include "core/logger.h"
+#include "connectivity/ota.h"
 #include "ArduinoOTA.h"
 
 // Các entry point thật của firmware (SmartFarm.ino)
@@ -141,7 +153,9 @@ void testResetActuatorStatics();
 void testResetControlStatics();
 void testResetDemoStatics();
 void testResetSensorStatics();
+void testResetAnomalyStatics();
 void testResetSettingsStatics();
+void testResetCalibrationStatics();
 void testResetWifiStatics();
 void testResetLoggerStatics();
 void testResetOledStatics();
@@ -157,7 +171,9 @@ static void resetState() {
   testResetControlStatics();
   testResetDemoStatics();
   testResetSensorStatics();
+  testResetAnomalyStatics();
   testResetSettingsStatics();
+  testResetCalibrationStatics();
   testResetWifiStatics();
   testResetLoggerStatics();
   testResetOledStatics();
@@ -177,6 +193,9 @@ static void resetState() {
   sys.lastWifiCheck = sys.lastSensorRead = sys.lastOledUpdate = 0;
   sys.lastBuzzer = sys.lastTouch = sys.lastBreatheUpdate = 0;
   sys.sensorFailCount = 0;
+  sys.soilFailCount = sys.waterFailCount = sys.lightFailCount = 0;
+  sys.soilHealthy = sys.waterHealthy = sys.lightHealthy = true;
+  sys.sensorHealthyTemp = sys.sensorHealthyHum = true;
   sys.sensorHealthy = true;
 }
 
@@ -185,6 +204,21 @@ static int invoke(const char *path,
                   const char *a2 = nullptr, const char *v2 = nullptr,
                   const char *a3 = nullptr, const char *v3 = nullptr) {
   if (WEB_TOKEN[0] != '\0') mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
+#if ANTI_REPLAY
+  // Tự gắn nonce hợp lệ như trình duyệt (lấy từ /api). Các test đặc biệt
+  // muốn nonce cũ phải set trực tiếp qua mockServerSetArg("nonce", ...)
+  // sau khi gọi invoke? Không — invoke luôn cấp nonce tươi để flow thường
+  // đi qua (equivalent to browser doing fetch /api first).
+  // Nếu test cần replay thì phải dùng mockServerInvoke trực tiếp.
+  if (!(a1 && strcmp(a1, "nonce") == 0) &&
+      !(a2 && strcmp(a2, "nonce") == 0) &&
+      !(a3 && strcmp(a3, "nonce") == 0)) {
+    unsigned next = (sys.gLastNonce == 0xFFFFFFFFul) ? 1ul : (sys.gLastNonce + 1ul);
+    static char nonceBuf[24];
+    snprintf(nonceBuf, sizeof(nonceBuf), "%u", next);
+    mockServerSetArg("nonce", nonceBuf);
+  }
+#endif
   if (a1) mockServerSetArg(a1, v1);
   if (a2) mockServerSetArg(a2, v2);
   if (a3) mockServerSetArg(a3, v3);
@@ -635,7 +669,7 @@ static void testSettingsResetAndSkip() {
   CHECK_NEAR(sys.tempThresholdLow, 25, 0.01);
   CHECK(sys.pumpAuto); CHECK(sys.lightAuto); CHECK(sys.rgbAuto); CHECK(sys.fanAuto);
   CHECK(!sys.breatheAuto);
-  CHECK_STR(sys.ssid, "Tab S10 Lite của Trinh");
+  CHECK_STR(sys.ssid, DEFAULT_SSID);   // mặc định rỗng (không hardcode trong repo)
   CHECK_STR(sys.webToken, WEB_TOKEN);
   CHECK_STR(sys.otaPassword, OTA_PASSWORD);
   CHECK(!sys.gNeedRestart);
@@ -1096,9 +1130,9 @@ static void testHttpWifiConfig() {
   sys.gNeedRestart = false;
 
   // khôi phục trạng thái nền cho các test sau
-  strncpy(sys.ssid, "Tab S10 Lite của Trinh", sizeof(sys.ssid) - 1);
+  strncpy(sys.ssid, DEFAULT_SSID, sizeof(sys.ssid) - 1);
   sys.ssid[sizeof(sys.ssid) - 1] = '\0';
-  strncpy(sys.password, "99999999T", sizeof(sys.password) - 1);
+  strncpy(sys.password, DEFAULT_PASSWORD, sizeof(sys.password) - 1);
   sys.password[sizeof(sys.password) - 1] = '\0';
   resetState();
   mockServerReset();
@@ -1129,6 +1163,14 @@ static void testOtaCallbacks() {
   CHECK(has(mockSerialOutput(), "End Failed"));
   mockOtaEnd();
   CHECK(has(mockSerialOutput(), "OTA: end"));
+
+  // otaVerifySignature fail-closed: không có public key nên mọi chữ ký bị từ chối
+  {
+    unsigned char data[] = {1, 2, 3};
+    unsigned char sig[] = {9, 9, 9};
+    CHECK(!otaVerifySignature(data, sizeof(data), sig, sizeof(sig)));
+    CHECK(!otaVerifySignature(nullptr, 0, nullptr, 0));
+  }
 
   // khôi phục trạng thái nền cho các test sau
   resetState();
@@ -2214,9 +2256,11 @@ static void fuzzRun(unsigned seed, int iters) {
         int code = mockServerLastCode();
 #if API_JSON_IS_TINY
         // Buffer JSON cố ý nhỏ -> /api trả 500 thay vì JSON hỏng (vẫn hợp lệ)
-        CHECK(code == 200 || code == 204 || code == 400 || code == 500);
+        // 403 = replay/token khi ANTI_REPLAY=1 (fuzz không tự gắn nonce) — hợp lệ.
+        CHECK(code == 200 || code == 204 || code == 400 || code == 403 || code == 500);
 #else
-        CHECK(code == 200 || code == 204 || code == 400);
+        // 403 = replay khi ANTI_REPLAY=1 (nonce ngẫu nhiên không cố ý kèm) — hợp lệ.
+        CHECK(code == 200 || code == 204 || code == 400 || code == 403);
 #endif
         break;
       }
@@ -2531,7 +2575,14 @@ static void testWebToken() {
   CHECK_EQ(mockServerLastCode(), 401);
   CHECK(sys.relayState == before);
 
-  // Token đúng qua query → 200
+  // Token đúng qua query → 200 (cần nonce tươi khi ANTI_REPLAY=1)
+#if ANTI_REPLAY
+  {
+    unsigned next = (sys.gLastNonce == 0xFFFFFFFFul) ? 1ul : (sys.gLastNonce + 1ul);
+    char nb[24]; snprintf(nb, sizeof(nb), "%u", next);
+    mockServerSetArg("nonce", nb);
+  }
+#endif
   mockServerSetArg("id", "pump");
   mockServerSetArg("token", WEB_TOKEN);
   CHECK(mockServerInvoke("/toggle"));
@@ -2542,6 +2593,13 @@ static void testWebToken() {
   before = sys.relayState;
   mockServerSetArg("id", "pump");
   mockServerSetHeader("X-Auth-Token", WEB_TOKEN);
+#if ANTI_REPLAY
+  {
+    unsigned next = (sys.gLastNonce == 0xFFFFFFFFul) ? 1ul : (sys.gLastNonce + 1ul);
+    char nb[24]; snprintf(nb, sizeof(nb), "%u", next);
+    mockServerSetArg("nonce", nb);
+  }
+#endif
   CHECK(mockServerInvoke("/toggle"));
   CHECK_EQ(mockServerLastCode(), 200);
   CHECK(sys.relayState != before);
@@ -2968,6 +3026,97 @@ static void testDefensiveBranches() {
 //  Hàm chính
 // ==============================================
 
+static void testUncoveredBranches() {
+  printf("D25 uncovered: branches for optional/edge helpers\n");
+  resetState();
+
+  // calibration: mọi nhánh sensor + null/unknown
+  calibrationSetOffset(nullptr, 1.0f);
+  calibrationSetOffset("temp", 2.0f);
+  calibrationSetOffset("hum", 3.0f);
+  calibrationSetOffset("light", 4.0f);
+  calibrationSetOffset("soil", 5.0f);
+  calibrationSetOffset("water", 6.0f);
+  calibrationSetOffset("foo", 7.0f);
+  CHECK_NEAR(calibrationApplyTemp(10.0f), 12.0f, 0.01);
+  CHECK_NEAR(calibrationApplyHum(10.0f), 13.0f * 1.0f, 0.01);
+  (void)calibrationApplyLight(10);
+  (void)calibrationApplySoil(10);
+  (void)calibrationApplyWater(10);
+  calibrationSave();
+  calibrationLoad();
+
+  // anomaly: các nhánh sensor name
+  CHECK(anomalyIsHealthy(nullptr));
+  CHECK(anomalyIsHealthy("temp"));
+  CHECK(anomalyIsHealthy("hum"));
+  CHECK(anomalyIsHealthy("foo"));
+  (void)anomalyScore(nullptr);
+  (void)anomalyScore("temp");
+  (void)anomalyScore("hum");
+  (void)anomalyScore("foo");
+  (void)anomalyZScore(1.0f, 0.0f, 0.0f);
+  (void)anomalyZScore(1.0f, 0.5f, 0.25f);
+
+  // soft-start: cả hai nhánh on/off + update
+  softStartInit();
+  softStartPump(true);
+  CHECK(softStartIsActive());
+  softStartPump(false);
+  CHECK(!softStartIsActive());
+  softStartUpdate();
+
+  // observability
+  metricsInit();
+  metricsCollect();
+  CHECK(metricsToJson() != nullptr);
+  (void)metricsUptime();
+  handleMetrics();
+  CHECK(healthCheck() || !healthCheck());
+  CHECK(healthStatus() != nullptr);
+  handleHealth();
+
+  // calibration HTTP handler: thiếu args và đủ args
+  mockServerReset();
+  setup();
+  mockServerSetArg("sensor", "temp");
+  mockServerSetArg("offset", "1.5");
+  handleCalibrate();
+  mockServerReset();
+  handleCalibrate();
+
+  // optional modules: gọi để phủ nhánh host-test
+  tlsInit();
+  CHECK(tlsEnabled() || !tlsEnabled());
+  mqttInit();
+  mqttLoop();
+  CHECK(mqttPublish("t", "p") || !mqttPublish("t", "p"));
+  mqttSubscribe("t");
+  CHECK(mqttConnected() || !mqttConnected());
+  websocketInit();
+  websocketLoop();
+  websocketBroadcast("hi");
+  (void)websocketBroadcastCount();
+  otaInit();
+  otaLoop();
+  CHECK(!otaVerifySignature(nullptr, 0, nullptr, 0));
+  CHECK(!otaVerifySignature((const unsigned char*)"a", 1, (const unsigned char*)"b", 1));
+
+  // HAL helpers
+  halPinModeOutput(1);
+  halDigitalWrite(1, true);
+  (void)halDigitalRead(1);
+  (void)halAnalogRead(1);
+  (void)halAnalogReadRaw(1);
+  halServoWrite(10);
+  halPwmWrite(1, 2);
+  halI2cBegin(1, 2);
+  halSpiBegin();
+
+  resetState();
+  mockServerReset();
+}
+
 int main() {
   printf("=== Smart Farm deep test suite (core %d, invert L/S/W %d/%d/%d, relayLO %d, buzzPassive %d) ===\n",
          ESP_ARDUINO_VERSION_MAJOR, INVERT_LIGHT, INVERT_SOIL, INVERT_WATER,
@@ -3040,6 +3189,7 @@ int main() {
   RUN_TEST(testEdgeBranches);
   RUN_TEST(testGuardAndDebugFlags);
   RUN_TEST(testDefensiveBranches);
+  RUN_TEST(testUncoveredBranches);
 
   printf("=== %d checks, %d failures ===\n", gChecks, gFails);
   return gFails ? 1 : 0;

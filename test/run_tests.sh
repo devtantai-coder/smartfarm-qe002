@@ -33,6 +33,7 @@ SRC=(
   "$ROOT/src/core/globals.cpp"
   "$ROOT/src/hal/hal.cpp"
   "$ROOT/src/core/rtos.cpp"
+  "$ROOT/src/core/tasks.cpp"
   "$ROOT/src/control/calibration.cpp"
   "$ROOT/src/control/anomaly.cpp"
   "$ROOT/src/control/pid.cpp"

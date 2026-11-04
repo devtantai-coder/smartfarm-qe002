@@ -78,15 +78,14 @@ duan123/
 ├── SmartFarm.ino          # File chính (setup và loop - điểm bắt đầu)
 ├── README.md              # File hướng dẫn này
 ├── src/
-│   ├── *.h                          # Header công khai (config, globals, logger, ...)
-│   ├── core/                        # config.cpp, globals.cpp, logger.cpp, settings.cpp, rtos.cpp
-│   ├── hal/                         # hal.cpp
-│   ├── sensors/                     # sensors.cpp
-│   ├── actuators/                   # actuators.cpp
-│   ├── control/                     # control.cpp, demo.cpp, pid.cpp, softstart.cpp, calibration.cpp, anomaly.cpp
-│   ├── connectivity/                # wifi.cpp, webserver.cpp, mqtt.cpp, websocket.cpp, tls.cpp, ota.cpp
-│   ├── ui/                          # oled.cpp
-│   └── observability/               # metrics.cpp, health.cpp
+│   ├── core/                       # config.h/cpp, globals.h/cpp, logger.h/cpp, settings.h/cpp, rtos.h/cpp
+│   ├── hal/                        # hal.h/cpp
+│   ├── sensors/                    # sensors.h/cpp
+│   ├── actuators/                  # actuators.h/cpp
+│   ├── control/                    # control.h/cpp, demo.h/cpp, pid.h/cpp, softstart.h/cpp, calibration.h/cpp, anomaly.h/cpp
+│   ├── connectivity/               # wifi.h/cpp, webserver.h/cpp, mqtt.h/cpp, websocket.h/cpp, tls.h/cpp, ota.h/cpp
+│   ├── ui/                         # oled.h/cpp
+│   └── observability/              # metrics.h/cpp, health.h/cpp
 ├── test/                            # Bộ test host (mock + fuzz)
 ├── docs/                            # Tài liệu kiến trúc
 ├── .github/workflows/tests.yml      # CI
@@ -191,7 +190,7 @@ Vào **Sketch → Include Library → Manage Libraries**, cài đặt:
 Mở Arduino IDE, chọn **File → Open**, mở file `SmartFarm.ino` trong thư mục `duan123`.
 ### Bước 2: Cấu hình WiFi
 
-Mở file `src/globals.h`, sửa 2 dòng mặc định trong `struct SystemState`:
+Mở file `src/core/globals.h`, sửa 2 dòng mặc định trong `struct SystemState`:
 
 ```cpp
 char ssid[32] = "TEN_WIFI_CUA_BAN";
@@ -202,9 +201,9 @@ char password[64] = "MAT_KHAU_WIFI_CUA_BAN";
 > sau khi nạp: `http://<IP>/wifi?ssid=TEN_WIFI_CUA_BAN&password=MAT_KHAU_WIFI_CUA_BAN`
 > (thiết bị lưu vào flash rồi tự khởi động lại).
 
-### Bước 3: Hiệu chuẩn phần cứng (tùy chọn — file `src/config.h`)
+### Bước 3: Hiệu chuẩn phần cứng (tùy chọn — file `src/core/config.h`)
 
-Các module cảm biến/relay/còi bán kèm kit có thể hoạt động ngược chiều so với tài liệu. Thay vì sửa logic, chỉ cần đổi cờ trong `src/config.h` (đặt `1` nếu cần):
+Các module cảm biến/relay/còi bán kèm kit có thể hoạt động ngược chiều so với tài liệu. Thay vì sửa logic, chỉ cần đổi cờ trong `src/core/config.h` (đặt `1` nếu cần):
 
 | Cờ | Mặc định | Khi nào đặt `1` |
 |----|----------|-----------------|
@@ -226,7 +225,7 @@ Góc servo cũng chỉnh được để khớp cơ khí (tránh kẹt bánh răn
 
 **Cách kiểm tra nhanh chiều cảm biến:** mở Serial Monitor (115200), gõ `1` (menu debug cảm biến), che sáng / đổ nước / chạm đất và xem giá trị trên dòng `Light/Soil/Water` tăng hay giảm, rồi đặt cờ tương ứng và nạp lại.
 
-**Bảo mật web (tùy chọn):** Đặt `WEB_TOKEN` trong `src/config.h` để bật mật khẩu cho mọi lệnh đổi trạng thái **và cả `/api`** (API trả dữ liệu cảm biến + nonce chống replay, nên không để hở). Sau khi nạp, mở `http://<IP>/?token=mat-khau-cua-ban` một lần để trang tự nhớ token (lưu `sessionStorage` và xóa token khỏi thanh địa chỉ), sau đó trang gửi token qua header `X-Auth-Token` thay vì để lộ trên URL; client tự viết vẫn có thể dùng `?token=`. Token được so sánh kiểu constant-time. Code cũng tự chặn CSRF: yêu cầu có Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` bị trả 403 (nhờ `server.collectHeaders()` trong `setup()` — đã có sẵn); trang chủ gửi `X-Frame-Options: DENY` và meta `no-referrer` để tránh lộ token qua URL. Token truyền bằng HTTP thường nên chỉ chống lẫn nhau trong LAN, không thay thế HTTPS.
+**Bảo mật web (tùy chọn):** Đặt `WEB_TOKEN` trong `src/core/config.h` để bật mật khẩu cho mọi lệnh đổi trạng thái **và cả `/api`** (API trả dữ liệu cảm biến + nonce chống replay, nên không để hở). Sau khi nạp, mở `http://<IP>/?token=mat-khau-cua-ban` một lần để trang tự nhớ token (lưu `sessionStorage` và xóa token khỏi thanh địa chỉ), sau đó trang gửi token qua header `X-Auth-Token` thay vì để lộ trên URL; client tự viết vẫn có thể dùng `?token=`. Token được so sánh kiểu constant-time. Code cũng tự chặn CSRF: yêu cầu có Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` bị trả 403 (nhờ `server.collectHeaders()` trong `setup()` — đã có sẵn); trang chủ gửi `X-Frame-Options: DENY` và meta `no-referrer` để tránh lộ token qua URL. Token truyền bằng HTTP thường nên chỉ chống lẫn nhau trong LAN, không thay thế HTTPS.
 
 ### Bước 4: Chọn board và cổng
 - **Tools → Board:** ESP32 Dev Module
@@ -288,13 +287,13 @@ Màn hình OLED hiển thị 8 dòng: tên hệ thống, trạng thái thời ti
 | Tự kết nối lại WiFi | Thử lại ở mọi trạng thái mất mạng, không lặp log gây nhiễu | `wifi.cpp: manageWiFi()` |
 | Lưu cài đặt vào flash | Không mất cài đặt khi mất điện | `settings.cpp` |
 | State tập trung | Mọi biến mutable gom vào một `SystemState` (`sys.*`) duy nhất: rõ chủ sở hữu, dễ reset, không còn biến rời rạc | `globals.h`, `globals.cpp` |
-| Không lưu plaintext secret | `webToken`/`otaPassword` chỉ nằm ở firmware (compile-time), không ghi vào NVS/flash | `settings.cpp`, `src/config.h` |
+| Không lưu plaintext secret | `webToken`/`otaPassword` chỉ nằm ở firmware (compile-time), không ghi vào NVS/flash | `settings.cpp`, `src/core/config.h` |
 | Kiểm tra lỗi DHT11 | Giữ giá trị cũ khi đọc lỗi, đếm số lần lỗi để báo mã 501 | `sensors.cpp: readAllSensors()` |
 | Giới hạn giá trị từ web | Chặn servo 0–180°, màu RGB 0–255, ngưỡng trong khoảng hợp lệ | `webserver.cpp` |
 | Watchdog an toàn | Nạp watchdog trong lúc chờ WiFi, tự khởi động lại nếu chương trình treo | `SmartFarm.ino` |
 | Servo dùng chung an toàn | Cối xay gió, cho ăn và điều khiển servo thủ công tự loại trừ nhau, không tranh chấp servo | `control.cpp: setWindmill(), startFeed()`, `webserver.cpp: handleServo()` |
 | Demo không xung đột | Khi chạy trình diễn, toàn bộ điều khiển tự động tạm dừng; kết thúc demo tự tắt mọi thiết bị | `SmartFarm.ino`, `demo.cpp` |
-| Mật khẩu web tùy chọn | Đặt `WEB_TOKEN` trong `src/config.h` để mọi lệnh đổi trạng thái và `/api` phải kèm token đúng (header `X-Auth-Token` hoặc `?token=`); so sánh constant-time; để trống = tắt (mặc định) | `src/config.h`, `webserver.cpp: checkToken(), guardWeb()` |
+| Mật khẩu web tùy chọn | Đặt `WEB_TOKEN` trong `src/core/config.h` để mọi lệnh đổi trạng thái và `/api` phải kèm token đúng (header `X-Auth-Token` hoặc `?token=`); so sánh constant-time; để trống = tắt (mặc định) | `src/core/config.h`, `webserver.cpp: checkToken(), guardWeb()` |
 | Ghi flash tiết kiệm | `saveSettings()` chỉ ghi các khóa NVS thực sự đổi — bấm nút liên tục không mài mòn flash vô ích | `settings.cpp: saveSettings()` |
 | Chống CSRF | Origin/Referer khác nguồn hoặc `Sec-Fetch-Site: cross-site` bị trả 403; yêu cầu cùng nguồn được phép | `webserver.cpp: guardWeb()`, `SmartFarm.ino: collectHeaders()` |
 | Chống clickjacking/lộ token | Trang chủ gửi `X-Frame-Options: DENY` và meta `no-referrer` nên token không lộ qua URL khi mở tài nguyên ngoài | `webserver.cpp: handleRoot()` |
@@ -317,7 +316,7 @@ Màn hình OLED hiển thị 8 dòng: tên hệ thống, trạng thái thời ti
 
 ## 12. Hệ thống Logger và Mã Lỗi
 
-Dự án sử dụng hệ thống logger riêng (`src/logger.h`, `src/logger.cpp`) để ghi nhật ký hoạt động ra Serial Monitor. Điều này giúp bạn dễ dàng xác định lỗi khi hệ thống không hoạt động như mong đợi.
+Dự án sử dụng hệ thống logger riêng (`src/core/logger.h`, `src/core/logger.cpp`) để ghi nhật ký hoạt động ra Serial Monitor. Điều này giúp bạn dễ dàng xác định lỗi khi hệ thống không hoạt động như mong đợi.
 
 ### Cấp độ log
 

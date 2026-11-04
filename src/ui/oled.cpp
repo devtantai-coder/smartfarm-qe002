@@ -1,9 +1,9 @@
-#include "../globals.h"
-#include "../logger.h"
-#include "../sensors.h"
-#include "../control.h"
-#include "../demo.h"
-#include "../oled.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
+#include "../sensors/sensors.h"
+#include "../control/control.h"
+#include "../control/demo.h"
+#include "oled.h"
 
 // Nhãn chỉ dùng ASCII: font mặc định SSD1306 không có dấu tiếng Việt
 static const char* weatherText() {

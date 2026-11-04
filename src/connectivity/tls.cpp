@@ -1,7 +1,7 @@
-#include "../tls.h"
-#include "../globals.h"
-#include "../logger.h"
-#include "../config.h"
+#include "tls.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
+#include "../core/config.h"
 
 static bool sEnabled = false;
 
@@ -16,6 +16,11 @@ void tlsInit() {
 #else
   sEnabled = false;
 #endif
+}
+
+void tlsSetEnabled(bool enabled) {
+  sEnabled = enabled;
+  LOG_INFO(enabled ? "TLS enabled" : "TLS disabled");
 }
 
 bool tlsEnabled() { return sEnabled; }

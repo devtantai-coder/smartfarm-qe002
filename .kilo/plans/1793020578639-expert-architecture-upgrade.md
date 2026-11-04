@@ -74,37 +74,37 @@ Chuyển dự án từ kiến trúc Arduino bare-metal `loop()` đơn luồng sa
 
 | File | Mô tả |
 |------|-------|
-| `src/rtos.h` / `src/rtos.cpp` | Wrapper FreeRTOS: task create, mutex, queue, event group, watchdog per-task |
+| `src/core/rtos.h` / `src/rtos.cpp` | Wrapper FreeRTOS: task create, mutex, queue, event group, watchdog per-task |
 | `src/rtos_config.h` | Stack size, priority, watchdog timeout cho từng task |
 
 ### 4.2. Kết nối & bảo mật
 
 | File | Mô tả |
 |------|-------|
-| `src/mqtt.h` / `src/mqtt.cpp` | MQTT client (PubSubClient), publish sensor data, subscribe commands, TLS |
-| `src/websocket.h` / `src/websocket.cpp` | WebSocket server (WebSocketsServer), broadcast real-time, receive commands |
-| `src/tls.h` / `src/tls.cpp` | TLS certificate management, WiFiClientSecure wrapper |
-| `src/ota.h` / `src/ota.cpp` | OTA với signature verification (mbedtls) |
+| `src/connectivity/mqtt.h` / `src/mqtt.cpp` | MQTT client (PubSubClient), publish sensor data, subscribe commands, TLS |
+| `src/connectivity/websocket.h` / `src/websocket.cpp` | WebSocket server (WebSocketsServer), broadcast real-time, receive commands |
+| `src/connectivity/tls.h` / `src/tls.cpp` | TLS certificate management, WiFiClientSecure wrapper |
+| `src/connectivity/ota.h` / `src/ota.cpp` | OTA với signature verification (mbedtls) |
 
 ### 4.3. Điều khiển thông minh
 
 | File | Mô tả |
 |------|-------|
-| `src/calibration.h` / `src/calibration.cpp` | Calibrate cảm biến: raw → physical, lưu hệ số offset/gain vào NVS |
-| `src/anomaly.h` / `src/anomaly.cpp` | Phát hiện bất thường: z-score, rate-of-change, sensor health scoring |
-| `src/pid.h` / `src/pid.cpp` | PID controller cho quạt (PWM output) |
-| `src/softstart.h` / `src/softstart.cpp` | Soft-start pump: PWM ramp-up |
+| `src/control/calibration.h` / `src/calibration.cpp` | Calibrate cảm biến: raw → physical, lưu hệ số offset/gain vào NVS |
+| `src/control/anomaly.h` / `src/anomaly.cpp` | Phát hiện bất thường: z-score, rate-of-change, sensor health scoring |
+| `src/control/pid.h` / `src/pid.cpp` | PID controller cho quạt (PWM output) |
+| `src/control/softstart.h` / `src/softstart.cpp` | Soft-start pump: PWM ramp-up |
 
 ### 4.4. Observability
 
 | File | Mô tả |
 |------|-------|
-| `src/metrics.h` / `src/metrics.cpp` | Structured metrics: task stack usage, queue depth, sensor health, uptime |
-| `src/health.h` / `src/health.cpp` | Health check endpoint `/health`, task liveness |
+| `src/observability/metrics.h` / `src/metrics.cpp` | Structured metrics: task stack usage, queue depth, sensor health, uptime |
+| `src/observability/health.h` / `src/health.cpp` | Health check endpoint `/health`, task liveness |
 
 ## 5. Module cần sửa
 
-### 5.1. `src/globals.h` / `src/globals.cpp`
+### 5.1. `src/core/globals.h` / `src/globals.cpp`
 
 - Thêm `SensorData`, `Command`, `DisplaySnapshot` struct
 - Thêm mutex handle `sysMutex`
@@ -118,20 +118,20 @@ Chuyển dự án từ kiến trúc Arduino bare-metal `loop()` đơn luồng sa
 - Thay `loop()` bằng FreeRTOS task setup: `setup()` tạo tasks, `loop()` chỉ feed WDT và monitor tasks
 - `runAutomation()` tách thành ControlTask body
 
-### 5.3. `src/sensors.h` / `src/sensors.cpp`
+### 5.3. `src/sensors/sensors.h` / `src/sensors.cpp`
 
 - Thêm calibration coefficients vào mỗi hàm đọc cảm biến
 - Thêm anomaly detection trước khi ghi vào `SystemState`
 - Thêm `readRaw*()` hàm để calibration
 
-### 5.4. `src/control.h` / `src/control.cpp`
+### 5.4. `src/control/control.h` / `src/control.cpp`
 
 - Thêm `controlFanPid()` thay thế on/off fan
 - Thêm `controlPumpSoftStart()`
 - Thêm adaptive threshold logic
 - Thêm anomaly-aware control (skip nếu sensor unhealthy)
 
-### 5.5. `src/webserver.h` / `src/webserver.cpp`
+### 5.5. `src/connectivity/webserver.h` / `src/webserver.cpp`
 
 - Thêm WebSocket endpoint
 - Thêm `/health` endpoint
@@ -139,23 +139,23 @@ Chuyển dự án từ kiến trúc Arduino bare-metal `loop()` đơn luồng sa
 - Thêm MQTT config endpoint
 - Thêm TLS cert upload endpoint
 
-### 5.6. `src/settings.h` / `src/settings.cpp`
+### 5.6. `src/core/settings.h` / `src/settings.cpp`
 
 - Thêm calibration coefficients lưu flash
 - Thêm MQTT broker config lưu flash
 - Thêm TLS cert storage (Secure Element hoặc NVS encrypted)
 
-### 5.7. `src/wifi.h` / `src/wifi.cpp`
+### 5.7. `src/connectivity/wifi.h` / `src/wifi.cpp`
 
 - Thêm WiFiClientSecure wrapper
 - Thêm TLS certificate loading
 
-### 5.8. `src/actuators.h` / `src/actuators.cpp`
+### 5.8. `src/actuators/actuators.h` / `src/actuators.cpp`
 
 - Thêm PWM fan control (PID output)
 - Thêm pump soft-start ramp
 
-### 5.9. `src/hal.h` / `src/hal.cpp`
+### 5.9. `src/hal/hal.h` / `src/hal.cpp`
 
 - Thêm interface cho PWM fan, ADC raw, I2C, SPI
 - Thêm mock-friendly abstraction (virtual functions hoặc function pointers)
@@ -218,7 +218,7 @@ jobs:
 ## 8. Rollout / Migration path
 
 ### Phase 1: Foundation (FreeRTOS migration)
-1. Tạo `src/rtos.h/cpp` wrapper
+1. Tạo `src/core/rtos.h/cpp` wrapper
 2. Tạo mock FreeRTOS cho host test
 3. Chuyển `SmartFarm.ino` từ `loop()` sang task creation
 4. Chuyển từng module: sensors → SensorTask, control → ControlTask, webserver → CommTask, oled → DisplayTask

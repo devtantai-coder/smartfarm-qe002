@@ -1,0 +1,17 @@
+# Firmware artifact — build lại từ source, không commit binary
+/firmware.bin
+
+# Local secrets — KHÔNG commit credential/token thật
+src/core/config.local.h
+src/config.local.h
+config.local.h
+.env
+*.local
+
+# Host test build artifacts
+test/build/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

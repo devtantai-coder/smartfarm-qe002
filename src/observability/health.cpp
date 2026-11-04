@@ -1,7 +1,7 @@
-#include "../health.h"
-#include "../calibration.h"
-#include "../globals.h"
-#include "../logger.h"
+#include "health.h"
+#include "../control/calibration.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
 #include <cstdio>
 
 bool healthCheck() {

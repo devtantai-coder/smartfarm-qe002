@@ -80,7 +80,7 @@ loop()  ── chạy LẶP MÃI (hàng nghìn lần mỗi giây) ────�
 (lặp lại từ đầu, khoảng vài nghìn lần mỗi giây)
 ```
 
-### 0.4. Bảng chân GPIO (lấy từ `src/config.h`)
+### 0.4. Bảng chân GPIO (lấy từ `src/core/config.h`)
 
 | Chân GPIO | Nối với | Kiểu | Ghi chú |
 |---|---|---|---|
@@ -146,17 +146,17 @@ loop()  ── chạy LẶP MÃI (hàng nghìn lần mỗi giây) ────�
 - Dòng 12: `esp_task_wdt.h` để dùng watchdog của ESP32.
 
 ```cpp
-#include "src/config.h"
-#include "src/globals.h"
-#include "src/logger.h"
-#include "src/sensors.h"
-#include "src/actuators.h"
-#include "src/control.h"
-#include "src/settings.h"
-#include "src/oled.h"
-#include "src/wifi.h"
-#include "src/webserver.h"
-#include "src/demo.h"
+#include "src/core/config.h"
+#include "src/core/globals.h"
+#include "src/core/logger.h"
+#include "src/sensors/sensors.h"
+#include "src/actuators/actuators.h"
+#include "src/control/control.h"
+#include "src/core/settings.h"
+#include "src/ui/oled.h"
+#include "src/connectivity/wifi.h"
+#include "src/connectivity/webserver.h"
+#include "src/control/demo.h"
 ```
 
 - Dòng 14–24: nạp toàn bộ mô-đun của dự án. Mỗi file `.h` chứa "lời hứa" (khai báo hàm), file `.cpp` chứa "thân hàm" (code thật).
@@ -526,7 +526,7 @@ void loop() {
 
 ---
 
-## PHẦN 2 — src/config.h và src/config.cpp (bảng cấu hình)
+## PHẦN 2 — src/core/config.h và src/config.cpp (bảng cấu hình)
 
 ### 2.1. config.h — khai báo chân, thời gian, cờ hiệu chuẩn
 
@@ -715,7 +715,7 @@ const unsigned long FEED_DURATION       = 2000;  // feed gate open time (activit
 
 ---
 
-## PHẦN 3 — src/globals.h và src/globals.cpp (biến dùng chung)
+## PHẦN 3 — src/core/globals.h và src/globals.cpp (biến dùng chung)
 
 ### 3.1. globals.h — lời hứa cho mọi mô-đun
 
@@ -865,7 +865,7 @@ bool sensorHealthy = true;
 
 ---
 
-## PHẦN 4 — src/logger.h và src/logger.cpp (ghi log + debug)
+## PHẦN 4 — src/core/logger.h và src/logger.cpp (ghi log + debug)
 
 ### 4.1. logger.h — hợp đồng của hệ thống log
 
@@ -1160,7 +1160,7 @@ void debugLogger() {
 
 ---
 
-## PHẦN 5 — src/sensors.h và src/sensors.cpp (đọc + lọc cảm biến)
+## PHẦN 5 — src/sensors/sensors.h và src/sensors.cpp (đọc + lọc cảm biến)
 
 ### 5.1. sensors.h
 
@@ -1353,7 +1353,7 @@ void testResetSensorStatics() {
 
 ---
 
-## PHẦN 6 — src/actuators.h và src/actuators.cpp (điều khiển thiết bị)
+## PHẦN 6 — src/actuators/actuators.h và src/actuators.cpp (điều khiển thiết bị)
 
 ### 6.1. actuators.h
 
@@ -1549,7 +1549,7 @@ void testResetActuatorStatics() { sBuzzerOn = false; }
 
 ---
 
-## PHẦN 7 — src/control.h và src/control.cpp (bộ luật tự động)
+## PHẦN 7 — src/control/control.h và src/control.cpp (bộ luật tự động)
 
 ### 7.1. control.h
 
@@ -1869,7 +1869,7 @@ void testResetControlStatics() {
 
 ---
 
-## PHẦN 8 — src/demo.h và src/demo.cpp (trình diễn 15 bước)
+## PHẦN 8 — src/control/demo.h và src/demo.cpp (trình diễn 15 bước)
 
 ### 8.1. demo.h
 
@@ -2087,7 +2087,7 @@ void testResetDemoStatics() {
 
 ---
 
-## PHẦN 9 — src/oled.h và src/oled.cpp (màn hình 128×64)
+## PHẦN 9 — src/ui/oled.h và src/oled.cpp (màn hình 128×64)
 
 ### 9.1. oled.h
 
@@ -2295,7 +2295,7 @@ if (sys.oledDirty || (now - sys.lastOledUpdate >= OLED_INTERVAL)) {
 
 ---
 
-## PHẦN 10 — src/settings.h và src/settings.cpp (lưu cài đặt)
+## PHẦN 10 — src/core/settings.h và src/settings.cpp (lưu cài đặt)
 
 ### 10.1. settings.h
 
@@ -2358,7 +2358,7 @@ void loadSettings() {
 
 ---
 
-## PHẦN 11 — src/wifi.h và src/wifi.cpp (giữ WiFi sống)
+## PHẦN 11 — src/connectivity/wifi.h và src/wifi.cpp (giữ WiFi sống)
 
 ### 11.1. wifi.h
 
@@ -2440,7 +2440,7 @@ void testResetWifiStatics() { sWarned = false; }
 
 ---
 
-## PHẦN 12 — src/webserver.h và src/webserver.cpp (web điều khiển)
+## PHẦN 12 — src/connectivity/webserver.h và src/webserver.cpp (web điều khiển)
 
 ### 12.1. webserver.h
 
@@ -2565,7 +2565,7 @@ static bool guardWeb() {
 - Dòng 243–266: `guardWeb()` là "người gác cổng" cho mọi lệnh đổi trạng thái:
   - Dòng 245–252: Origin hoặc Referer khác nguồn → **403 `forbidden`**.
   - Dòng 253–256: header `Sec-Fetch-Site: cross-site` → 403 (trình duyệt hiện đại gắn nhãn này khi trang khác gọi vào).
-  - Dòng 257–264: nếu `WEB_TOKEN` (trong `src/config.h`) khác rỗng thì bắt buộc kèm token qua header `X-Auth-Token` hoặc tham số `?token=`; thiếu/sai → **401 `unauthorized`**.
+  - Dòng 257–264: nếu `WEB_TOKEN` (trong `src/core/config.h`) khác rỗng thì bắt buộc kèm token qua header `X-Auth-Token` hoặc tham số `?token=`; thiếu/sai → **401 `unauthorized`**.
 - 11 handler đổi trạng thái (`handleToggle`, `handleAuto`, `handleRgb`, `handleBreatheLed`, `handleLedOn`, `handleLedOff`, `handleServo`, `handleWindmill`, `handleFeed`, `handleDemo`, `handleThreshold`) đều gọi `guardWeb()` ngay dòng đầu. Các route `/` (trang chủ), `/api` (chỉ đọc) và favicon **không** guard — chỉ lệnh điều khiển mới bị chặn.
 - Phụ thuộc phần cứng (thư viện WebServer): `server.collectHeaders()` trong `setup()` của `SmartFarm.ino` (dòng 154–157, xem PHẦN 1) mới đăng ký các header `Origin`, `Referer`, `Sec-Fetch-Site`, `X-Auth-Token`. Thư viện chỉ giữ header đã đăng ký; thiếu dòng đó thì mọi check header ở trên vô hiệu (luôn coi như "không có header").
 
@@ -7571,9 +7571,9 @@ esac
   `src/settings.cpp` (giá trị mặc định khi đọc flash) — sửa cả hai cho khớp. Ngưỡng người dùng
   đã lưu trên flash sẽ **không** bị ảnh hưởng; muốn về mặc định hãy chỉnh lại từ web.
 - **"Kit nhà tôi đọc cảm biến ngược thì sao?"** — Đặt cờ `INVERT_LIGHT/SOIL/WATER` = 1 trong
-  `src/config.h`, không phải sửa bất kỳ dòng logic nào.
+  `src/core/config.h`, không phải sửa bất kỳ dòng logic nào.
 - **"Relay/còi của tôi khác loại?"** — Đặt `RELAY_ACTIVE_LOW` hoặc `BUZZER_PASSIVE` trong
-  `src/config.h` cho đúng module bạn có.
+  `src/core/config.h` cho đúng module bạn có.
 
 ---
 

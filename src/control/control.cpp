@@ -1,10 +1,10 @@
-#include "../globals.h"
-#include "../logger.h"
-#include "../config.h"
-#include "../actuators.h"
-#include "../settings.h"
-#include "../control.h"
-#include "../hal.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
+#include "../core/config.h"
+#include "../actuators/actuators.h"
+#include "../core/settings.h"
+#include "control.h"
+#include "../hal/hal.h"
 
 // ── Hằng số điều khiển (đặt tên rõ ràng thay vì "số ma thuật") ──
 static constexpr int LIGHT_HYSTERESIS = 50;   // biên dead-band quanh ngưỡng ánh sáng
@@ -23,6 +23,14 @@ void controlPump() {
   // An toàn là trên hết, kể cả chế độ thủ công (bài 8): chạy bơm khô
   // sẽ làm hỏng bơm, nên nước thấp luôn buộc tắt bơm.
   const int waterLow = (int)sys.waterThresholdLow;
+  if (!sys.waterHealthy) {
+    // ADC nước hỏng: không biết mực nước — failsafe tắt bơm
+    if (sys.relayState) {
+      setRelay(false);
+      LOG_ERROR_CODE(201, "Water sensor unhealthy, pump OFF");
+    }
+    return;
+  }
   if (sys.gWater < waterLow) {
     if (sys.relayState) {
       setRelay(false);
@@ -31,7 +39,7 @@ void controlPump() {
     return;
   }
 
-  if (!sys.sensorHealthy) return;
+  if (!sys.soilHealthy) return;   // kênh đất hỏng thì không quyết được khô/ướt
   if (!sys.pumpAuto) return;
 
   const float soilLow = sys.soilThresholdLow;
@@ -51,11 +59,9 @@ void controlPump() {
 
 // ── Quạt: hysteresis theo nhiệt độ ──
 void controlFan() {
-  if (!sys.fanAuto) return;
-
   const int waterLow = (int)sys.waterThresholdLow;
-  // An toàn nước: nếu nước cạn, tắt quạt (nếu quạt liên quan đến nước)
-  if (sys.gWater < waterLow) {
+  // An toàn nước: nếu nước cạn, tắt quạt kể cả ở chế độ thủ công
+  if (!sys.waterHealthy || sys.gWater < waterLow) {
     if (sys.fanState) {
       setFan(false);
       LOG_WARN("Low water, fan OFF");
@@ -63,7 +69,8 @@ void controlFan() {
     return;
   }
 
-  if (!sys.sensorHealthy) return;
+  if (!sys.fanAuto) return;
+  if (!sys.sensorHealthyTemp) return;   // quạt chỉ cần kênh nhiệt, không chặn bởi đất/nước
 
   const float tempHigh = sys.tempThresholdHigh;
   const float tempLow = sys.tempThresholdLow;
@@ -81,12 +88,12 @@ void controlFan() {
 // Blue LED dùng chung với hiệu ứng thở, PIR và điều khiển thủ công:
 // bỏ qua điều khiển tự động khi một trong số đó đang giữ LED, để tránh tranh nhau.
 void controlLight() {
-  if (!sys.sensorHealthy) return;
+  if (!sys.lightHealthy) return;
   if (!sys.lightAuto || sys.breatheLedState || sys.gPir) return;
   const int thr = sys.lightThreshold;
-if (sys.gLight < (thr - LIGHT_HYSTERESIS) && !sys.blueLedState) {
-     setBlueLed(true);
-   } else if (sys.gLight > (thr + LIGHT_HYSTERESIS) && sys.blueLedState) {
+  if (sys.gLight < (thr - LIGHT_HYSTERESIS) && !sys.blueLedState) {
+    setBlueLed(true);
+  } else if (sys.gLight > (thr + LIGHT_HYSTERESIS) && sys.blueLedState) {
     setBlueLed(false);
   }
 }
@@ -99,7 +106,7 @@ if (sys.gLight < (thr - LIGHT_HYSTERESIS) && !sys.blueLedState) {
 // (255,0,255) thì màu đó trùng giá trị RGB của hoa văn — suy đoán kiểu cũ sẽ
 // tưởng hoa văn đang bật và không bật đèn tăng trưởng khi trời tối.
 void controlRgb() {
-  if (!sys.sensorHealthy) return;
+  if (!sys.lightHealthy) return;
   if (!sys.rgbAuto) return;
   const int thr = sys.lightThreshold;
   bool isDark = sys.gLight < (thr - LIGHT_HYSTERESIS);

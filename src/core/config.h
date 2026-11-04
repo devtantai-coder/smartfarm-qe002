@@ -3,8 +3,27 @@
 
 #include <Arduino.h>
 
+// Tùy chọn: file cấu hình cục bộ (không commit) — tạo src/core/config.local.h
+// từ src/core/config.local.example.h để đặt credential/token riêng.
+// File này nằm trong .gitignore, không được push lên git.
+#if __has_include("config.local.h")
+#include "config.local.h"
+#endif
+
 // WiFi, ngưỡng điều khiển và mã bảo mật là các trường của SystemState
-// (xem src/globals.h) — không khai báo biến rời ở đây nữa.
+// (xem src/core/globals.h) — không khai báo biến rời ở đây nữa.
+
+// ── Credential mặc định (KHÔNG hardcode trong repo) ──
+// Để rỗng mặc định. Cung cấp qua build flag:
+//   -DDEFAULT_SSID="TenWiFi" -DDEFAULT_PASSWORD="MatKhau"
+// hoặc qua endpoint /wifi ở lần khởi động đầu (lưu vào NVS, flash encryption
+// khuyến nghị ở bản production nhưng không bắt buộc cho kit học tập).
+#ifndef DEFAULT_SSID
+#define DEFAULT_SSID ""
+#endif
+#ifndef DEFAULT_PASSWORD
+#define DEFAULT_PASSWORD ""
+#endif
 
 // ── Sơ đồ chân GPIO ──
 #define DHT_PIN          23
@@ -113,25 +132,33 @@ constexpr uint8_t SENSOR_FILTER_SIZE = 5;  // Cửa sổ trung bình động
 
 // ── Bảo vệ web ──
 // Token tùy chọn cho các lệnh đổi trạng thái và /api (bật/tắt, chỉnh ngưỡng...).
-// Để trống "" = không yêu cầu token (chỉ nên dùng trong mạng gia đình tin cậy).
-// Token chỉ nằm ở firmware (compile-time), KHÔNG ghi plaintext vào NVS/flash.
-// Đặt token rồi nạp lại firmware; mở web kèm token một lần để trang tự nhớ:
+// Để trống "" = firmware tự sinh token ngẫu nhiên mỗi lần khởi động ở bản
+// production (không phải TEST_HOOKS) và in ra Serial một lần — không còn
+// trạng thái "mở hoàn toàn không có token" khi đưa ra ngoài LAN.
+// Token chỉ nằm ở firmware/RAM, KHÔNG ghi plaintext vào NVS/flash.
+// Đặt token cố định rồi nạp lại firmware; mở web kèm token một lần để trang tự nhớ:
 //   http://<ip-thiết-bị>/?token=MAT-KHAU-CUA-BAN
+// Trong bản build host (SMARTFARM_TEST_HOOKS) token rỗng giữ hành vi cũ
+// để test chạy không cần Serial.
 #ifndef WEB_TOKEN
 #define WEB_TOKEN ""
 #endif
 
 // ── Mật khẩu OTA (cập nhật firmware từ xa) ──
 // Chỉ nằm ở firmware (compile-time), không ghi vào NVS.
-// Để trống "" = không yêu cầu password (chỉ nên dùng trong mạng gia đình tin cậy).
+// Để trống "" = TẮT OTA (không gọi ArduinoOTA.begin()). Bật OTA bắt buộc
+// đặt password qua build flag -DOTA_PASSWORD="...". Không có chế độ OTA
+// không password.
 #ifndef OTA_PASSWORD
 #define OTA_PASSWORD ""
 #endif
 
 // ── Chống replay (1 = yêu cầu nonce cho mọi lệnh đổi trạng thái) ──
-// Khi bật, client phải lấy nonce từ /api rồi gửi kèm mỗi lệnh. Lệnh cũ sẽ bị chặn.
+// Mặc định BẬT (1). Client lấy nonce từ /api rồi gửi kèm mỗi lệnh.
+// Lệnh cũ (nonce không tăng) sẽ bị chặn 403. Build host tự gắn nonce
+// trong test helper nên không phá test.
 #ifndef ANTI_REPLAY
-#define ANTI_REPLAY 0
+#define ANTI_REPLAY 1
 #endif
 
 

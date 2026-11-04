@@ -58,6 +58,7 @@ struct Command {
 struct DisplaySnapshot {
   float temp, hum;
   int light, soil, water;
+  bool relayState, fanState, windmillOn;
 };
 
 void rtosInit();

@@ -60,10 +60,16 @@ struct SystemState {
   // Sức khỏe cảm biến
   uint8_t sensorFailCount = 0;
   bool sensorHealthy = true;
+  // Health theo từng kênh (độc lập, không gộp chung): DHT lỗi không
+  // phải chặn bơm đất, ADC hỏng không phải chặn đèn... Xem sensors.cpp
+  // (readAllSensors) và control/* dùng cờ cụ thể thay vì sensorHealthy chung.
+  bool soilHealthy = true, waterHealthy = true, lightHealthy = true;
+  // Đếm lỗi liên tiếp theo kênh ADC (để failsafe sau N lần liên tiếp)
+  uint8_t soilFailCount = 0, waterFailCount = 0, lightFailCount = 0;
 
   // Calibration coefficients
   float calTempOffset = 0.0f, calTempGain = 1.0f;
-  float calHumGain = 1.0f;
+  float calHumOffset = 0.0f, calHumGain = 1.0f;
   int calLightOffset = 0, calSoilOffset = 0, calWaterOffset = 0;
 
   // PID state for fan
@@ -81,8 +87,11 @@ struct SystemState {
   bool oledDirty = false;
 
   // Cấu hình kết nối + mã bảo mật (compile-time, KHÔNG ghi flash dạng plaintext)
-  char ssid[32] = "Tab S10 Lite của Trinh";
-  char password[64] = "99999999T";
+  // Mặc định RONG: không hardcode credential trong repo. Người dùng cung cấp
+  // qua build flag -DDEFAULT_SSID="..." -DDEFAULT_PASSWORD="..." hoặc qua
+  // endpoint /wifi (lưu vào NVS trong lần chạy đầu). Xem src/core/config.h.
+  char ssid[32] = DEFAULT_SSID;
+  char password[64] = DEFAULT_PASSWORD;
   char webToken[64] = WEB_TOKEN;
   char otaPassword[64] = OTA_PASSWORD;
 

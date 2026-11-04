@@ -1,9 +1,9 @@
-#include "../globals.h"
-#include "../logger.h"
-#include "../actuators.h"
-#include "../control.h"
-#include "../demo.h"
-#include "../hal.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
+#include "../actuators/actuators.h"
+#include "control.h"
+#include "demo.h"
+#include "../hal/hal.h"
 
 // Trình diễn không chặn các bài của kit (2-12). Khi demo chạy,
 // loop() chính tạm dừng tự động hóa thường để không tranh chấp chân.

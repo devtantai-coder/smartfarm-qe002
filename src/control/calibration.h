@@ -10,4 +10,8 @@ float calibrationApplyWater(int raw);
 void calibrationSetOffset(const char* sensor, float offset);
 void calibrationSave();
 void calibrationLoad();
+#ifdef SMARTFARM_TEST_HOOKS
+// Chỉ dùng cho bộ test: quên snapshot đã ghi để test ghi tiếp theo ghi lại.
+void testResetCalibrationStatics();
+#endif
 #endif

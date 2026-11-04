@@ -1,5 +1,5 @@
-#include "../rtos.h"
-#include "../globals.h"
+#include "rtos.h"
+#include "globals.h"
 
 SemaphoreHandle_t sysMutex = NULL;
 EventGroupHandle_t evtGroup = NULL;

@@ -1,5 +1,5 @@
-#include "../pid.h"
-#include "../globals.h"
+#include "pid.h"
+#include "../core/globals.h"
 
 void pidInit(float kp, float ki, float kd) {
   sys.pidKp = kp; sys.pidKi = ki; sys.pidKd = kd;

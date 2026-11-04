@@ -521,6 +521,17 @@ extern "C" UBaseType_t uxQueueMessagesWaiting(QueueHandle_t xQueue) {
   MockQueue *q = (MockQueue*)xQueue;
   return q ? (UBaseType_t)q->count : 0;
 }
+extern "C" BaseType_t xQueueOverwrite(QueueHandle_t xQueue, const void *pvItemToQueue) {
+  MockQueue *q = (MockQueue*)xQueue;
+  if (!q) return pdFAIL;
+  // Latest-wins: xóa hết rồi ghi 1 phần tử mới nhất
+  q->head = q->tail = 0;
+  q->count = 0;
+  memcpy(q->buf.data(), pvItemToQueue, q->itemSize);
+  q->tail = 1 % q->len;
+  q->count = 1;
+  return pdPASS;
+}
 
 extern "C" SemaphoreHandle_t xSemaphoreCreateMutex(void) { return (SemaphoreHandle_t)new int(1); }
 extern "C" SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) { return (SemaphoreHandle_t)new int(1); }

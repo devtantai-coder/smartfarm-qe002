@@ -1,7 +1,7 @@
-#include "../globals.h"
-#include "../logger.h"
-#include "../config.h"
-#include "../wifi.h"
+#include "../core/globals.h"
+#include "../core/logger.h"
+#include "../core/config.h"
+#include "wifi.h"
 
 // Kết nối lại cho MỌI trạng thái mất kết nối (disconnected, idle, scan, failed, không có SSID...)
 // và chỉ ghi log một lần mỗi lần mất kết nối để tránh spam serial.
@@ -54,6 +54,19 @@ void manageWiFi() {
   }
 
   if (now - sys.lastWifiCheck < WIFI_CHECK_INTERVAL) return;
+
+#ifndef SMARTFARM_TEST_HOOKS
+  if (sys.ssid[0] == '\0') {
+    // Chưa cấu hình WiFi (DEFAULT_SSID rỗng, chưa từng qua /wifi). Không gọi
+    // WiFi.begin("") để tránh driver spam lỗi; chỉ log 1 lần theo sWarned.
+    // Bản host test bỏ qua để vẫn kiểm tra được reconnect logic với SSID rỗng.
+    if (!sWarned) {
+      LOG_ERROR_CODE(104, "WiFi not configured");
+      sWarned = true;
+    }
+    return;
+  }
+#endif
 
   if (!sWarned) {
     LOG_ERROR_CODE(401, "WiFi lost, reconnecting...");

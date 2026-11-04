@@ -1,4 +1,4 @@
-#include "src/rtos.h"
+#include "src/core/rtos.h"
 /*
  * SmartFarm.ino - QE002 ACEBOTT IoT Smart Farm
  * Điểm bắt đầu: setup() + loop()
@@ -13,31 +13,50 @@
 #include <esp_task_wdt.h>
 #include <ArduinoOTA.h>
 
-#include "src/config.h"
-#include "src/globals.h"
-#include "src/logger.h"
-#include "src/sensors.h"
-#include "src/actuators.h"
-#include "src/control.h"
-#include "src/settings.h"
-#include "src/oled.h"
-#include "src/wifi.h"
-#include "src/webserver.h"
-#include "src/demo.h"
-#include "src/hal.h"
-#include "src/rtos.h"
-#include "src/calibration.h"
-#include "src/anomaly.h"
-#include "src/pid.h"
-#include "src/softstart.h"
-#include "src/mqtt.h"
-#include "src/websocket.h"
-#include "src/tls.h"
-#include "src/ota.h"
-#include "src/metrics.h"
-#include "src/health.h"
+#include "src/core/config.h"
+#include "src/core/globals.h"
+#include "src/core/logger.h"
+#include "src/sensors/sensors.h"
+#include "src/actuators/actuators.h"
+#include "src/control/control.h"
+#include "src/core/settings.h"
+#include "src/ui/oled.h"
+#include "src/connectivity/wifi.h"
+#include "src/connectivity/webserver.h"
+#include "src/control/demo.h"
+#include "src/hal/hal.h"
+#include "src/core/rtos.h"
+#include "src/control/calibration.h"
+#include "src/control/anomaly.h"
+#include "src/control/pid.h"
+#include "src/control/softstart.h"
+#include "src/connectivity/mqtt.h"
+#include "src/connectivity/websocket.h"
+#include "src/connectivity/tls.h"
+#include "src/connectivity/ota.h"
+#include "src/observability/metrics.h"
+#include "src/observability/health.h"
+#include "src/core/tasks.h"
 #ifndef SMARTFARM_TEST_HOOKS
 #include <esp_sleep.h>
+#include <esp_system.h>
+#endif
+
+// ── Token web tự sinh (production) ──
+// Nếu WEB_TOKEN để trống, production sinh token ngẫu nhiên mỗi lần boot,
+// không ghi flash, in 1 lần ra Serial. Không còn chế độ mở hoàn toàn.
+#ifndef SMARTFARM_TEST_HOOKS
+static void ensureWebToken() {
+  if (sys.webToken[0] != '\0') return;
+  static const char hex[] = "0123456789abcdef";
+  for (size_t i = 0; i < 16; i++) {
+    uint8_t b = (uint8_t)(esp_random() & 0xFF);
+    sys.webToken[2 * i] = hex[(b >> 4) & 0xF];
+    sys.webToken[2 * i + 1] = hex[b & 0xF];
+  }
+  sys.webToken[32] = '\0';  // 16 byte -> 32 ký tự hex (128-bit)
+  Serial.printf("WEB_TOKEN auto-generated (one-time, not stored): %s\n", sys.webToken);
+}
 #endif
 
 // ── Trạng thái debug ──
@@ -49,7 +68,7 @@ static constexpr uint32_t WDT_TIMEOUT_MS = 30000;
 
 // ── Khởi động lại không chặn ──
 // Sau khi lưu cài đặt WiFi cần chờ phản hồi HTTP gửi xong mới restart;
-// thời gian chờ (RESTART_DELAY_MS, trong src/config.h) được đếm trong loop()
+// thời gian chờ (RESTART_DELAY_MS, trong src/core/config.h) được đếm trong loop()
 // thay vì delay().
 static bool sRestartArmed = false;
 static unsigned long sRestartMs = 0;
@@ -114,8 +133,8 @@ static void processBluetoothCommand(const String& raw) {
     setRelay(false); sys.pumpAuto = false;
     SerialBT.println("Pump OFF");
   } else if (cmd == "fan on") {
-    setFan(true); sys.fanAuto = false;
-    SerialBT.println("Fan ON");
+    if (sys.gWater >= (int)sys.waterThresholdLow) { setFan(true); sys.fanAuto = false; SerialBT.println("Fan ON"); }
+    else SerialBT.println("Low water - fan blocked");
   } else if (cmd == "fan off") {
     setFan(false); sys.fanAuto = false;
     SerialBT.println("Fan OFF");
@@ -208,6 +227,12 @@ void setup() {
 
   // Nạp cài đặt từ flash
   loadSettings();
+#ifndef SMARTFARM_TEST_HOOKS
+  ensureWebToken();
+  if (sys.ssid[0] == '\0') {
+    LOG_ERROR_CODE(104, "WiFi not configured: set DEFAULT_SSID build flag or use /wifi");
+  }
+#endif
   // Ép vòng loop đầu đọc cảm biến TRƯỚC khi automation chạy. Nếu WiFi kết nối
   // nhanh (< 1 s), nếu không ép thì controlAlerts/controlLight/controlRgb sẽ
   // hành động theo giá trị 0 khởi tạo: hú còi "hết nước" và chớp đèn/RGB oan.
@@ -223,12 +248,25 @@ void setup() {
   // ghi thêm một lần vào NVS — hao chu kỳ ghi flash vô ích.
   WiFi.persistent(false);
   WiFi.setSleep(sys.powerSave);  // modem sleep khi tiết kiệm điện
-  WiFi.begin(sys.ssid, sys.password);
+#ifndef SMARTFARM_TEST_HOOKS
+  if (sys.ssid[0] != '\0') {
+#endif
+    WiFi.begin(sys.ssid, sys.password);
+#ifndef SMARTFARM_TEST_HOOKS
+  }
+#endif
   sys.lastWifiCheck = millis();
   LOG_INFO("Connecting WiFi...");
 
-  // OTA: cập nhật firmware qua mạng (Arduino IDE / web upload)
-  ArduinoOTA.setHostname("smartfarm");
+  // OTA chỉ bật khi có password rõ ràng. Không có chế độ "OTA không password":
+  // để trống OTA_PASSWORD = tắt OTA (ghi chú trong src/core/config.h).
+#ifdef SMARTFARM_TEST_HOOKS
+  const bool otaEnabled = true;  // host test luôn đăng ký callback để kiểm tra
+#else
+  const bool otaEnabled = (sys.otaPassword[0] != '\0');
+#endif
+  if (otaEnabled) {
+    ArduinoOTA.setHostname("smartfarm");
   ArduinoOTA.setPassword(sys.otaPassword);
   ArduinoOTA.onStart([]() {
     Serial.println(F("OTA: start"));
@@ -250,7 +288,10 @@ void setup() {
     else if (error == OTA_RECEIVE_ERROR) Serial.println(F("Receive Failed"));
     else if (error == OTA_END_ERROR) Serial.println(F("End Failed"));
   });
-  ArduinoOTA.begin();
+    ArduinoOTA.begin();
+  } else {
+    LOG_ERROR_CODE(103, "OTA disabled: OTA_PASSWORD empty");
+  }
 
   // Các route của web server
   server.on("/", handleRoot);
@@ -278,7 +319,7 @@ void setup() {
   server.begin();
 
 #ifndef SMARTFARM_TEST_HOOKS
-  rtosInit();
+  // rtosInit() đã gọi một lần ở đầu setup() (dòng ~166). Không gọi lại.
   xTaskCreate(sensorTaskFn, "Sensor", RTOS_SENSOR_STACK, NULL, RTOS_SENSOR_PRIO, NULL);
   xTaskCreate(controlTaskFn, "Control", RTOS_CONTROL_STACK, NULL, RTOS_CONTROL_PRIO, NULL);
   xTaskCreate(commTaskFn, "Comm", RTOS_COMM_STACK, NULL, RTOS_COMM_PRIO, NULL);
@@ -299,95 +340,6 @@ void setup() {
 // host gọi ĐÚNG hàm này thay vì sao chép lại logic (một nguồn sự thật duy
 // nhất). loop() gọi hàm này sau khi xử lý serial/khởi động lại.
 
-#ifndef SMARTFARM_TEST_HOOKS
-void runAutomation();
-static void sensorTaskFn(void*) {
-  for (;;) {
-    readAllSensors();
-    if (sysMutex) xSemaphoreTake(sysMutex, pdMS_TO_TICKS(100));
-    // copy not needed
-    if (sysMutex) xSemaphoreGive(sysMutex);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
-}
-static void controlTaskFn(void*) {
-  for (;;) {
-    runAutomation();
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
-}
-static void commTaskFn(void*) {
-  for (;;) {
-    server.handleClient();
-    manageWiFi();
-    mqttLoop();
-    websocketLoop();
-    otaLoop();
-    ArduinoOTA.handle();
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
-}
-static void displayTaskFn(void*) {
-  for (;;) {
-    unsigned long now = millis();
-    if (sys.oledDirty || (now - sys.lastOledUpdate >= OLED_INTERVAL)) {
-      updateOLED(sys.gTemp, sys.gHum, sys.gLight, sys.gSoil, sys.gWater);
-      sys.lastOledUpdate = now;
-      sys.oledDirty = false;
-    }
-    vTaskDelay(pdMS_TO_TICKS(100));
-  }
-}
-static void powerTaskFn(void*) {
-  for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
-}
-#endif
-
-
-static void runExtras() {
-  rtosLock();
-  rtosUnlock();
-  (void)rtosLockTimeout(1);
-  anomalyUpdate();
-  (void)anomalyScore("temp");
-  (void)anomalyIsHealthy("temp");
-  (void)anomalyZScore(sys.gTemp, sys.tempThresholdHigh, 1.0f);
-  (void)calibrationApplyTemp(sys.gTemp);
-  (void)calibrationApplyHum(sys.gHum);
-  (void)calibrationApplyLight(sys.gLight);
-  (void)calibrationApplySoil(sys.gSoil);
-  (void)calibrationApplyWater(sys.gWater);
-  calibrationSetOffset("temp", 0.0f);
-  calibrationSave();
-  calibrationLoad();
-  (void)pidUpdate(sys.tempThresholdHigh, sys.gTemp);
-  pidReset();
-  softStartUpdate();
-  (void)softStartIsActive();
-  (void)halAnalogRead(LDR_PIN);
-  (void)halDigitalRead(TOUCH_PIN);
-  halPwmWrite(FAN_PIN, 0);
-  halI2cBegin(OLED_SDA, OLED_SCL);
-  halSpiBegin();
-  mqttLoop();
-  (void)mqttConnected();
-  (void)mqttPublish("t", "p");
-  mqttSubscribe("t");
-  websocketLoop();
-  websocketBroadcast("m");
-  tlsInit();
-  (void)tlsEnabled();
-  otaLoop();
-  (void)otaVerifySignature(0, 0, 0, 0);
-  metricsCollect();
-  (void)metricsToJson();
-  (void)metricsUptime();
-  (void)healthCheck();
-  (void)healthStatus();
-  handleHealth();
-}
 
 void runAutomation() {
   unsigned long now = gLoopNow ? gLoopNow : millis();
@@ -405,7 +357,10 @@ void runAutomation() {
   }
 
   // An toàn: bơm tuyệt đối không được chạy khô, ở MỌI chế độ (thủ công hay demo)
-  if (sys.gWater < (int)sys.waterThresholdLow && sys.relayState) setRelay(false);
+  // hoặc khi ADC nước hỏng sau >3 lần lỗi (không biết mực nước -> failsafe tắt)
+  if ((!sys.waterHealthy || sys.gWater < (int)sys.waterThresholdLow) && sys.relayState) setRelay(false);
+  // An toàn: quạt tắt khi hết nước / nước hỏng, ở MỌI chế độ
+  if ((!sys.waterHealthy || sys.gWater < (int)sys.waterThresholdLow) && sys.fanState) setFan(false);
 
   // Logic tự động (tạm dừng khi demo của bài học đang chạy)
   if (demoRunning()) {
@@ -423,7 +378,26 @@ void runAutomation() {
     controlFeed();
   }
 
+#ifdef SMARTFARM_TEST_HOOKS
+  // runExtras() chỉ để bao phủ code trong bản build host (calibrationSave,
+  // mqttPublish...). Không gọi trên ESP32 thật: ghi NVS mỗi vòng loop là
+  // hao flash + tốn tài nguyên vô ích.
   runExtras();
+#else
+  // Production: maintenance nhẹ theo chu kỳ cảm biến, không ghi flash.
+  // Các module PID/anomaly/soft-start được cập nhật tại đây thay vì trong
+  // runExtras (vốn là helper test-only).
+  {
+    static unsigned long sLastMaintenance = 0;
+    if (now - sLastMaintenance >= SENSOR_INTERVAL) {
+      sLastMaintenance = now;
+      anomalyUpdate();
+      (void)pidUpdate(sys.tempThresholdHigh, sys.gTemp);
+      softStartUpdate();
+      metricsCollect();
+    }
+  }
+#endif
 
   rtosUnlock();
 }
@@ -528,17 +502,8 @@ void loop() {
   }
 #endif
 
-  // Tiết kiệm điện: sau cửa sổ thức (30 s) cho phép truy cập web, vào deep sleep
-  // theo sleepSeconds rồi tự tỉnh dậy bằng timer / chân cảm ứng / PIR.
-#ifndef SMARTFARM_TEST_HOOKS
-  if (sys.powerSave && !demoRunning() && !sDebugMode && gLoopNow >= 30000UL) {
-    esp_sleep_enable_timer_wakeup((uint64_t)sys.sleepSeconds * 1000000ULL);
-    // ext1 bao phủ cả chân chạm (39) và PIR (33); không dùng ext0 cùng lúc
-    // vì hai nguồn external-wakeup xung đột trên ESP32.
-    esp_sleep_enable_ext1_wakeup((1ULL << TOUCH_PIN) | (1ULL << PIR_PIN), ESP_EXT1_WAKEUP_ANY_HIGH);
-    LOG_INFO("Power save: entering deep sleep");
-    Serial.flush();
-    esp_deep_sleep_start();
-  }
-#endif
+  // Tiết kiệm điện (deep sleep) xử lý ở powerTaskFn (non-TEST_HOOKS):
+  // sau 30s cửa sổ thức, task ngủ theo sleepSeconds, tỉnh bằng
+  // timer / chân cảm ứng / PIR. Không lặp lại ở đây nữa để tránh hai nơi
+  // cùng đua vào deep sleep.
 }

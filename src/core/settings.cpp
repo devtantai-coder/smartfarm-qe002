@@ -1,7 +1,7 @@
-#include "../globals.h"
-#include "../logger.h"
-#include "../config.h"
-#include "../settings.h"
+#include "globals.h"
+#include "logger.h"
+#include "config.h"
+#include "settings.h"
 
 // ── Bản chụp giá trị đã ghi flash ──
 // NVS chỉ chịu được số lần ghi hữu hạn; UI có thể bấm nút liên tục nên
@@ -108,7 +108,11 @@ void loadSettings() {
   sys.powerSave         = preferences.getBool("powerSave", false);
   sys.sleepSeconds      = constrain(preferences.getInt("sleepSec", DEFAULT_SLEEP_SECONDS), 1, 86400);
 
-  // WiFi credentials: ưu tiên giá trị đã lưu, fallback về giá trị compile-time
+  // WiFi credentials: ưu tiên giá trị đã lưu, fallback về giá trị compile-time.
+  // Lưu ý bảo mật: NVS trên ESP32 mặc định không mã hóa. Ở bản production
+  // khuyến nghị bật Flash Encryption (CONFIG_SECURE_FLASH_CRYPT) để wifiPass
+  // không nằm plaintext trong dump flash. Kit học tập không bắt buộc nhưng
+  // không hardcode credential trong git nữa.
   String savedSsid = preferences.getString("wifiSsid", "");
   String savedPass = preferences.getString("wifiPass", "");
   if (savedSsid.length() > 0) {
